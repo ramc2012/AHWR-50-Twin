@@ -1,7 +1,7 @@
 {
     "ignore": [
         "dashboard_layout.json",
-        "modbus_db.json",
+        "plc_config.json",
         "drilling_state.json",
         "users.json",
         "telegraf_config/*",

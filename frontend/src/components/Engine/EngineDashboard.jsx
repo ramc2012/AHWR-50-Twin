@@ -34,6 +34,16 @@ export default function EngineDashboard() {
     });
 
     useEffect(() => {
+        // Fetch latest data on mount
+        fetch('/api/rig/latest')
+            .then(res => res.json())
+            .then(data => {
+                if (data.engine) {
+                    setEngineData(data.engine);
+                }
+            })
+            .catch(err => console.error("Failed to fetch latest engine data:", err));
+
         socket.on('rig_data', (data) => {
             if (data.engine) {
                 setEngineData(data.engine);

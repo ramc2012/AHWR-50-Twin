@@ -114,25 +114,22 @@ const AnalogGauge = ({
             </svg>
 
             {/* Value & Unit - Centered Lower */}
-            <Box sx={{ position: 'absolute', top: '65%', left: '50%', transform: 'translate(-50%, -50%)', textAlign: 'center' }}>
-                <Typography variant="h4" sx={{ color: 'white', fontWeight: 'bold', lineHeight: 1, textShadow: '0 2px 4px rgba(0,0,0,0.5)', fontSize: `${size * 0.22}px` }}>
+            <Box sx={{ position: 'absolute', top: '60%', left: '50%', transform: 'translate(-50%, -50%)', textAlign: 'center' }}>
+                <Typography variant="h4" sx={{ color: 'white', fontWeight: 'bold', lineHeight: 1, textShadow: '0 2px 4px rgba(0,0,0,0.5)', fontSize: `${size * 0.18}px` }}>
                     {typeof value === 'number' ? value.toFixed(0) : value}
                 </Typography>
-                <Typography variant="caption" sx={{ color: '#94a3b8', fontSize: `${size * 0.08}px`, display: 'block' }}>
+                <Typography variant="caption" sx={{ color: '#94a3b8', fontSize: `${size * 0.07}px`, display: 'block' }}>
                     {unit}
                 </Typography>
 
                 {(subValue !== undefined && subValue !== null) && (
-                    <Box sx={{ mt: 1.5, borderTop: '1px solid #334155', pt: 0.5 }}>
-                        <Typography variant="body2" sx={{ color: '#bef264', fontWeight: 'bold', fontSize: `${size * 0.14}px`, lineHeight: 1 }}>
+                    <Box sx={{ mt: 0.5, borderTop: '1px solid #334155', pt: 0.3 }}>
+                        <Typography variant="body2" sx={{ color: '#bef264', fontWeight: 'bold', fontSize: `${size * 0.12}px`, lineHeight: 1 }}>
                             {subValue}
                         </Typography>
-                        {label === 'HOOK LOAD' && (
-                            <Typography variant="caption" sx={{ color: '#94a3b8', fontSize: `${size * 0.04}px`, whiteSpace: 'nowrap' }}>
-                                {subLabel || 'BIT WEIGHT'}
-                            </Typography>
-                        )}
-                        {label !== 'HOOK LOAD' && <Typography variant="caption" sx={{ color: '#94a3b8', fontSize: `${size * 0.06}px` }}>{subLabel}</Typography>}
+                        <Typography variant="caption" sx={{ color: '#94a3b8', fontSize: `${size * 0.04}px`, whiteSpace: 'nowrap' }}>
+                            {subLabel || ''}
+                        </Typography>
                     </Box>
                 )}
             </Box>

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Box, Typography, Paper, Grid, Checkbox, FormControlLabel, FormGroup, Accordion, AccordionSummary, AccordionDetails, Button } from '@mui/material';
+import { Box, Typography, Paper, Grid, Checkbox, FormControlLabel, FormGroup, Accordion, AccordionSummary, AccordionDetails, Button, ClickAwayListener } from '@mui/material';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
 import * as XLSX from 'xlsx';
 import { saveAs } from 'file-saver';
@@ -10,10 +10,15 @@ import axios from 'axios';
 const socket = io('/');
 
 const AVAILABLE_METRICS = {
-    drawworks: ['hook_load', 'block_position'],
-    engine: ['rpm', 'oil_pressure', 'oil_temp', 'coolant_temp', 'exhaust_temp', 'battery_voltage', 'fuel_level'],
-    mudpump: ['spm', 'pressure', 'flow_in', 'flow_out', 'total_spm'],
-    wellcontrol: ['tubing_pressure', 'casing_pressure', 'bop_pressure', 'choke_pressure', 'choke_position']
+    drilling: ['hook_load', 'wob', 'bit_depth', 'hole_depth', 'rop', 'rpm', 'torque', 'delta_torque'],
+    mudpump: ['spm', 'pressure', 'total_spm', 'flow_in', 'flow_out_percentage'],
+    fluid: ['total_tank_volume', 'tank_gain_loss', 'trip_tank'],
+    cat_engine: ['rpm', 'load', 'coolant_temp', 'fuel_pressure', 'oil_pressure', 'battery_voltage', 'fuel_rate'],
+    htd: ['rpm', 'torque', 'inclination', 'vertical_speed'],
+    hpu: ['aux_pressure', 'discharge_pressure', 'oil_temp', 'oil_level'],
+    pct: ['makeup_torque', 'last_makeup_torque', 'clamp_up_pressure', 'clamp_low_pressure', 'clamp_up_force', 'clamp_low_force'],
+    cwk: ['clamp_pressure', 'clamp_force'],
+    acs: ['block_position', 'crownsaver', 'floorsaver', 'bottomsaver', 'upper_tag', 'lower_tag']
 };
 
 const COLORS = [
@@ -22,7 +27,22 @@ const COLORS = [
 
 export default function TrendsDashboard() {
     const [data, setData] = useState([]);
-    const [selectedMetrics, setSelectedMetrics] = useState(['engine.rpm', 'engine.oil_pressure', 'engine.coolant_temp']);
+    const [selectedMetrics, setSelectedMetrics] = useState(() => {
+        const saved = localStorage.getItem('liveTrendsSelectedMetrics');
+        if (saved) {
+            try {
+                const parsed = JSON.parse(saved);
+                // Filter out any metrics that are no longer in AVAILABLE_METRICS
+                return parsed.filter(metric => {
+                    const [meas, field] = metric.split('.');
+                    return AVAILABLE_METRICS[meas]?.includes(field);
+                });
+            } catch (e) {
+                console.error('Error parsing saved metrics', e);
+            }
+        }
+        return [];
+    });
     const [showParams, setShowParams] = useState(false);
     const [showCustomDate, setShowCustomDate] = useState(false);
 
@@ -54,7 +74,26 @@ export default function TrendsDashboard() {
 
             const res = await axios.get(url);
             if (res.data && res.data.length > 0) {
-                setData(res.data);
+                setData(prev => {
+                    // Combine fetched history with any live data points that arrived while we were fetching
+                    const merged = [...res.data, ...prev];
+
+                    // Deduplicate by timestamp (live and history may have overlapping seconds)
+                    const uniqueMap = new Map();
+                    merged.forEach(item => {
+                        if (!uniqueMap.has(item.timestamp)) {
+                            uniqueMap.set(item.timestamp, item);
+                        } else {
+                            // If a point exists in both history and live stream, merge the object fields
+                            // This ensures we get all fields (e.g. if one had missing parameters)
+                            uniqueMap.set(item.timestamp, { ...uniqueMap.get(item.timestamp), ...item });
+                        }
+                    });
+
+                    // Sort by timestamp
+                    const uniqueArr = Array.from(uniqueMap.values());
+                    return uniqueArr.sort((a, b) => a.timestamp - b.timestamp);
+                });
             } else {
                 if (isCustom || (customRange.start && customRange.end)) {
                     // Only clear data if we explicitly asked for a custom range and got nothing
@@ -68,6 +107,11 @@ export default function TrendsDashboard() {
             }
         }
     };
+
+    useEffect(() => {
+        // Save selected metrics to localStorage whenever they change
+        localStorage.setItem('liveTrendsSelectedMetrics', JSON.stringify(selectedMetrics));
+    }, [selectedMetrics]);
 
     useEffect(() => {
         // Fetch historical data from API
@@ -182,48 +226,52 @@ export default function TrendsDashboard() {
 
                 <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
                     {/* Parameters Dropdown Button */}
-                    <Box sx={{ position: 'relative' }}>
-                        <Button
-                            variant="outlined"
-                            onClick={() => setShowParams(!showParams)}
-                            endIcon={<ChevronDown />}
-                            sx={{ color: 'white', borderColor: '#334155', height: '100%', bgcolor: '#1e293b' }}
-                        >
-                            PARAMETERS
-                        </Button>
-                        {showParams && (
-                            <Paper sx={{ position: 'absolute', top: '100%', left: 0, mt: 1, p: 2, bgcolor: '#0f172a', border: '1px solid #334155', zIndex: 50, width: 'max-content', maxWidth: '80vw', maxHeight: '400px', overflowY: 'auto' }}>
-                                <FormGroup row sx={{ gap: 2 }}>
-                                    {Object.entries(AVAILABLE_METRICS).map(([measurement, fields]) =>
-                                        fields.map(field => {
-                                            const key = `${measurement}.${field}`;
-                                            return (
-                                                <FormControlLabel
-                                                    key={key}
-                                                    sx={{ minWidth: '200px' }}
-                                                    control={
-                                                        <Checkbox
-                                                            checked={selectedMetrics.includes(key)}
-                                                            onChange={() => handleToggle(measurement, field)}
-                                                            sx={{ color: '#94a3b8', '&.Mui-checked': { color: '#38bdf8' } }}
+                    <ClickAwayListener onClickAway={() => setShowParams(false)}>
+                        <Box sx={{ position: 'relative' }}>
+                            <Button
+                                variant="outlined"
+                                onClick={() => setShowParams(!showParams)}
+                                endIcon={<ChevronDown />}
+                                sx={{ color: 'white', borderColor: '#334155', height: '100%', bgcolor: '#1e293b' }}
+                            >
+                                PARAMETERS
+                            </Button>
+                            {showParams && (
+                                <Paper sx={{ position: 'absolute', top: '100%', left: 0, mt: 1, p: 2, bgcolor: '#0f172a', border: '1px solid #334155', zIndex: 50, width: 'max-content', maxWidth: '80vw', maxHeight: '400px', overflowY: 'auto' }}>
+                                    <FormGroup sx={{ gap: 0.5, flexDirection: 'column' }}>
+                                        {Object.entries(AVAILABLE_METRICS).map(([measurement, fields]) => (
+                                            <Box key={measurement} sx={{ mt: measurement === 'drilling' ? 0 : 2 }}>
+                                                <Typography variant="caption" sx={{ color: '#38bdf8', fontWeight: 'bold', display: 'block', mb: 1, borderBottom: '1px solid #334155', pb: 0.5 }}>
+                                                    {measurement.toUpperCase().replace(/_/g, ' ')}
+                                                </Typography>
+                                                {fields.map(field => {
+                                                    const key = `${measurement}.${field}`;
+                                                    return (
+                                                        <FormControlLabel
+                                                            key={key}
+                                                            sx={{ minWidth: '200px', ml: 0 }}
+                                                            control={
+                                                                <Checkbox
+                                                                    checked={selectedMetrics.includes(key)}
+                                                                    onChange={() => handleToggle(measurement, field)}
+                                                                    sx={{ color: '#94a3b8', '&.Mui-checked': { color: '#38bdf8' }, py: 0.5 }}
+                                                                />
+                                                            }
+                                                            label={
+                                                                <Typography variant="body2" sx={{ color: '#cbd5e1' }}>
+                                                                    {field.replace(/_/g, ' ')}
+                                                                </Typography>
+                                                            }
                                                         />
-                                                    }
-                                                    label={
-                                                        <Typography variant="body2" sx={{ color: '#cbd5e1' }}>
-                                                            <span style={{ color: '#94a3b8', fontSize: '0.8em', textTransform: 'uppercase', marginRight: '4px' }}>
-                                                                {measurement}
-                                                            </span>
-                                                            {field.replace(/_/g, ' ')}
-                                                        </Typography>
-                                                    }
-                                                />
-                                            );
-                                        })
-                                    )}
-                                </FormGroup>
-                            </Paper>
-                        )}
-                    </Box>
+                                                    );
+                                                })}
+                                            </Box>
+                                        ))}
+                                    </FormGroup>
+                                </Paper>
+                            )}
+                        </Box>
+                    </ClickAwayListener>
 
                     {/* Watch Symbol for Custom Range Dropdown */}
                     <Box sx={{ position: 'relative' }}>
@@ -292,29 +340,61 @@ export default function TrendsDashboard() {
                 </Box>
             </Box>
 
-            <Grid container spacing={2} sx={{ flexGrow: 1 }}>
-                {/* Main Chart */}
-                <Grid item xs={12} md={12} sx={{ height: '600px' }}>
-                    <Paper sx={{ p: 2, bgcolor: '#1e293b', height: '100%', position: 'relative' }}>
+            <Grid container spacing={2} sx={{ flexGrow: 1, minHeight: 0 }}>
+                {/* Vertical Parameter List (Left Sidebar) */}
+                <Grid item xs={12} md={3} sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+                    <Paper sx={{ p: 2, bgcolor: '#1e293b', height: '100%', overflowY: 'auto', border: '1px solid #334155' }}>
+                        <Typography variant="subtitle2" sx={{ color: '#94a3b8', mb: 2, fontWeight: 'bold' }}>SELECTED PARAMETERS</Typography>
+                        {selectedMetrics.length === 0 ? (
+                            <Typography variant="caption" sx={{ color: '#475569', fontStyle: 'italic' }}>No parameters selected. Use the dropdown above.</Typography>
+                        ) : (
+                            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                                {selectedMetrics.map((key, index) => {
+                                    const [meas, field] = key.split('.');
+                                    const latestVal = data.length > 0 ? (data[data.length - 1][key] ?? '---') : '---';
+                                    const color = COLORS[index % COLORS.length];
+
+                                    return (
+                                        <Box key={key} sx={{ p: 1.5, bgcolor: '#0f172a', borderRadius: 2, borderLeft: `4px solid ${color}`, display: 'flex', flexDirection: 'column' }}>
+                                            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 0.5 }}>
+                                                <Typography variant="caption" sx={{ color: '#94a3b8', fontWeight: 'bold', fontSize: '0.65rem' }}>
+                                                    {meas.toUpperCase().replace('_', ' ')}
+                                                </Typography>
+                                                <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: color, boxShadow: `0 0 8px ${color}` }} />
+                                            </Box>
+                                            <Typography variant="body2" sx={{ color: 'white', fontWeight: 'bold', mb: 0.5 }}>
+                                                {field.replace(/_/g, ' ').toUpperCase()}
+                                            </Typography>
+                                            <Typography variant="h5" sx={{ color: color, fontWeight: 'bold', textAlign: 'right', fontFamily: '"Orbitron", sans-serif' }}>
+                                                {typeof latestVal === 'number' ? latestVal.toFixed(1) : latestVal}
+                                            </Typography>
+                                        </Box>
+                                    );
+                                })}
+                            </Box>
+                        )}
+                    </Paper>
+                </Grid>
+
+                {/* Main Chart (Right Side) */}
+                <Grid item xs={12} md={9} sx={{ height: '100%' }}>
+                    <Paper sx={{ p: 2, bgcolor: '#1e293b', height: '100%', position: 'relative', border: '1px solid #334155' }}>
                         {data.length === 0 && (
-                            <Box sx={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', textAlign: 'center', zIndex: 1 }}>
+                            <Box sx={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', textAlign: 'center', zIndex: 1, width: '80%' }}>
                                 <Typography variant="h6" sx={{ color: '#64748b', mb: 1 }}>No Data Available {isCustom ? 'For This Custom Range' : ''}</Typography>
                                 <Typography variant="body2" sx={{ color: '#475569' }}>
                                     {isCustom
                                         ? "There is no historical data recorded corresponding to the selected time range. Try a different range."
-                                        : "Waiting for live data... Data will appear as it streams in."}
+                                        : "Waiting for live data... Select parameters to begin tracking."}
                                 </Typography>
-                                {!isCustom && (
-                                    <Typography variant="caption" sx={{ color: '#475569', display: 'block', mt: 1 }}>
-                                        If PLC is connected, data should appear within seconds.
-                                    </Typography>
-                                )}
                             </Box>
                         )}
                         {data.length > 0 && (
-                            <Typography variant="caption" sx={{ color: '#64748b', position: 'absolute', top: 8, right: 16, zIndex: 1 }}>
-                                {data.length} data points
-                            </Typography>
+                            <Box sx={{ position: 'absolute', top: 8, right: 16, zIndex: 1, display: 'flex', gap: 2 }}>
+                                <Typography variant="caption" sx={{ color: '#64748b' }}>
+                                    {data.length} points
+                                </Typography>
+                            </Box>
                         )}
                         {data.length > 0 && (
                             <ResponsiveContainer width="100%" height="100%">
@@ -324,7 +404,10 @@ export default function TrendsDashboard() {
                                         dataKey="timestamp"
                                         type="number"
                                         scale="time"
-                                        domain={isCustom ? ['dataMin', 'dataMax'] : [Date.now() - getRangeMs(timeRange), Date.now()]}
+                                        domain={isCustom ? ['dataMin', 'dataMax'] : [
+                                            data.length > 0 ? Math.max(data[0].timestamp, Date.now() - getRangeMs(timeRange)) : Date.now() - getRangeMs(timeRange),
+                                            Date.now()
+                                        ]}
                                         stroke="#94a3b8"
                                         tickFormatter={(unixTime) => {
                                             if (!unixTime || isNaN(unixTime)) return '';
@@ -346,13 +429,13 @@ export default function TrendsDashboard() {
                                         contentStyle={{ backgroundColor: '#0f172a', border: '1px solid #334155', borderRadius: 8 }}
                                         itemStyle={{ color: '#e2e8f0' }}
                                     />
-                                    <Legend />
+                                    <Legend verticalAlign="top" height={36} />
                                     {selectedMetrics.map((key, index) => (
                                         <Line
                                             key={key}
                                             type="monotone"
                                             dataKey={key}
-                                            name={key.split('.')[1].replace(/_/g, ' ').toUpperCase()}
+                                            name={`${key.split('.')[0].toUpperCase().replace('_', ' ')} - ${key.split('.')[1].replace(/_/g, ' ').toUpperCase()}`}
                                             stroke={COLORS[index % COLORS.length]}
                                             dot={false}
                                             strokeWidth={2}

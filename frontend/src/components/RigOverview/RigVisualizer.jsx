@@ -1,7 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Box, Typography, Paper } from '@mui/material';
+import { Box, Typography, Paper, Tooltip } from '@mui/material';
+import { Move } from 'lucide-react';
 
-const RigVisualizer = ({ crownomatic, flooromatic, travellingUp, travellingDown }) => {
+const RigVisualizer = ({ crownsaverOn, floorsaverOn, travellingUp, travellingDown, height = 500 }) => {
+    const containerRef = useRef(null);
+
     // We completely abandon React state for this value to avoid React 18 re-render desyncs 
     // against the 1-second interval Websocket props coming from the parent Dashboard.
     const posRef = useRef(0);
@@ -59,7 +62,7 @@ const RigVisualizer = ({ crownomatic, flooromatic, travellingUp, travellingDown 
                 p: 2,
                 bgcolor: '#0f172a',
                 color: 'white',
-                height: 500,
+                height: height,
                 display: 'flex',
                 flexDirection: 'column',
                 alignItems: 'center',
@@ -69,9 +72,8 @@ const RigVisualizer = ({ crownomatic, flooromatic, travellingUp, travellingDown 
                 position: 'relative',
                 overflow: 'hidden'
             }}
+            ref={containerRef}
         >
-
-
             <Box sx={{ position: 'relative', width: 220, height: 440 }}>
                 {/* SVG Schematic Layer */}
                 <svg width="100%" height="100%" viewBox="0 0 220 440" style={{ filter: 'drop-shadow(0 0 5px rgba(0,0,0,0.5))' }}>
@@ -159,7 +161,7 @@ const RigVisualizer = ({ crownomatic, flooromatic, travellingUp, travellingDown 
 
                 {/* --- INDICATORS (Overlaid on SVG) --- */}
                 {/* Crownomatic Popup */}
-                {crownomatic && (
+                {crownsaverOn && (
                     <Box sx={{
                         position: 'absolute', top: 5, left: '50%', transform: 'translateX(-50%)',
                         bgcolor: 'rgba(239, 68, 68, 0.95)',
@@ -174,14 +176,14 @@ const RigVisualizer = ({ crownomatic, flooromatic, travellingUp, travellingDown 
                         }
                     }}>
                         <Typography variant="caption" sx={{ color: 'white', fontWeight: 'bold', fontSize: 11, letterSpacing: 1, display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                            ⚠️ CROWNOMATIC ON
+                            ⚠️ CROWNSAVER ON
                         </Typography>
                     </Box>
                 )}
 
 
                 {/* Flooromatic Popup */}
-                {flooromatic && (
+                {floorsaverOn && (
                     <Box sx={{
                         position: 'absolute', bottom: 20, left: '50%', transform: 'translateX(-50%)',
                         bgcolor: 'rgba(245, 158, 11, 0.95)',
@@ -196,7 +198,7 @@ const RigVisualizer = ({ crownomatic, flooromatic, travellingUp, travellingDown 
                         }
                     }}>
                         <Typography variant="caption" sx={{ color: 'white', fontWeight: 'bold', fontSize: 11, letterSpacing: 1, display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                            ⚠️ FLOOROMATIC ON
+                            ⚠️ FLOORSAVER ON
                         </Typography>
                     </Box>
                 )}

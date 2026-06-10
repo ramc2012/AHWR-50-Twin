@@ -1,7 +1,7 @@
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import { ThemeProvider, createTheme } from '@mui/material/styles';
 import Layout from './components/Layout/Layout';
-import Dashboard from './components/Dashboard/Dashboard';
+import RigOverview from './components/RigOverview/RigOverview';
 import EngineDashboard from './components/Engine/EngineDashboard';
 import MudPumpDashboard from './components/MudPump/MudPumpDashboard';
 import WellControlDashboard from './components/WellControl/WellControlDashboard';
@@ -9,6 +9,9 @@ import TrendsDashboard from './components/Trends/TrendsDashboard';
 import EdrDashboard from './components/EDR/EdrDashboard';
 import AdminPanel from './components/Admin/AdminPanel';
 import FishingDashboard from './components/Fishing/FishingDashboard';
+import CatEngineDashboard from './components/Dashboards/CatEngineDashboard';
+import EquipmentHub from './components/Dashboards/EquipmentHub';
+
 
 const darkTheme = createTheme({
     palette: {
@@ -42,9 +45,8 @@ function App() {
 
                         <Route element={<ProtectedRoute />}>
                             <Route path="/" element={<Layout />}>
-                                <Route index element={<Dashboard />} />
+                                <Route index element={<RigOverview />} />
                                 <Route path="engine" element={<EngineDashboard />} />
-                                <Route path="mudpump" element={<MudPumpDashboard />} />
                                 <Route path="wellcontrol" element={<WellControlDashboard />} />
                                 <Route path="fishing" element={<FishingDashboard />} />
                                 <Route path="edr" element={
@@ -57,8 +59,9 @@ function App() {
                                         <TrendsDashboard />
                                     </ErrorBoundary>
                                 } />
+                                <Route path="equipment" element={<EquipmentHub />} />
                                 <Route path="admin" element={<AdminPanel />} />
-                                <Route path="*" element={<Dashboard />} />
+                                <Route path="*" element={<RigOverview />} />
                             </Route>
                         </Route>
                     </Routes>

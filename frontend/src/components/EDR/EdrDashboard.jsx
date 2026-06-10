@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Box, Typography, Paper, Grid, MenuItem, Select, FormControl, Button, FormGroup } from '@mui/material';
+import { Box, Typography, Paper, Grid, MenuItem, Select, FormControl, Button, FormGroup, ListSubheader } from '@mui/material';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import io from 'socket.io-client';
 import axios from 'axios';
@@ -8,10 +8,15 @@ import { Clock } from 'lucide-react';
 const socket = io('/');
 
 const AVAILABLE_METRICS = {
-    drawworks: ['hook_load', 'block_position'],
-    engine: ['rpm', 'oil_pressure', 'oil_temp', 'coolant_temp', 'exhaust_temp', 'battery_voltage', 'fuel_level'],
-    mudpump: ['spm', 'pressure', 'flow_in', 'flow_out', 'total_spm'],
-    wellcontrol: ['tubing_pressure', 'casing_pressure', 'bop_pressure', 'choke_pressure', 'choke_position']
+    drilling: ['hook_load', 'wob', 'bit_depth', 'hole_depth', 'rop', 'rpm', 'torque', 'delta_torque'],
+    mudpump: ['spm', 'pressure', 'total_spm', 'flow_in', 'flow_out_percentage'],
+    fluid: ['total_tank_volume', 'tank_gain_loss', 'trip_tank'],
+    cat_engine: ['rpm', 'load', 'coolant_temp', 'fuel_pressure', 'oil_pressure', 'battery_voltage', 'fuel_rate'],
+    htd: ['rpm', 'torque', 'inclination', 'vertical_speed'],
+    hpu: ['aux_pressure', 'discharge_pressure', 'oil_temp', 'oil_level'],
+    pct: ['makeup_torque', 'last_makeup_torque', 'clamp_up_pressure', 'clamp_low_pressure'],
+    cwk: ['clamp_pressure', 'clamp_force'],
+    acs: ['block_position', 'crownsaver', 'floorsaver', 'bottomsaver', 'upper_tag', 'lower_tag']
 };
 
 const ALL_METRICS = Object.entries(AVAILABLE_METRICS).flatMap(([category, fields]) =>
@@ -24,16 +29,16 @@ const ALL_METRICS = Object.entries(AVAILABLE_METRICS).flatMap(([category, fields
 
 const DEFAULT_TRACKS = [
     {
-        left: { metric: 'engine.rpm', min: 0, max: 2000 },
-        right: { metric: 'drawworks.hook_load', min: 0, max: 500 }
+        left: { metric: 'cat_engine.rpm', min: 0, max: 2000 },
+        right: { metric: 'drilling.hook_load', min: 0, max: 500 }
     },
     {
-        left: { metric: 'mudpump.pressure', min: 0, max: 5000 },
+        left: { metric: 'mudpump.pressure', min: 0, max: 500 },
         right: { metric: 'mudpump.spm', min: 0, max: 200 }
     },
     {
-        left: { metric: 'engine.coolant_temp', min: 0, max: 250 },
-        right: { metric: 'engine.oil_pressure', min: 0, max: 100 }
+        left: { metric: 'cat_engine.coolant_temp', min: 0, max: 120 },
+        right: { metric: 'cat_engine.oil_pressure', min: 0, max: 10 }
     }
 ];
 
@@ -84,46 +89,72 @@ export default function EdrDashboard() {
     };
 
     useEffect(() => {
-        if (!isCustom) fetchHistory();
+        if (!isCustom) {
+            fetchHistory();
+
+            // Also fetch the single latest point for immediate readout update
+            fetch('/api/rig/latest')
+                .then(res => res.json())
+                .then(latestPoint => {
+                    if (latestPoint && Object.keys(latestPoint).length > 0) {
+                        processLivePoint(latestPoint);
+                    }
+                })
+                .catch(err => console.error("Failed to fetch latest EDR point:", err));
+        }
 
         if (!isCustom) {
             const handleSocketData = (newData) => {
-                setData(prev => {
-                    const now = new Date();
-                    const newPoint = {
-                        name: now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }),
-                        timestamp: now.getTime()
-                    };
-
-                    Object.keys(newData).forEach(measurement => {
-                        if (typeof newData[measurement] === 'object' && newData[measurement] !== null) {
-                            Object.keys(newData[measurement]).forEach(field => {
-                                newPoint[`${measurement}.${field}`] = newData[measurement][field];
-                            });
-                        }
-                    });
-
-                    // Ensure all track metrics have at least a 0 value if missing
-                    tracks.forEach(track => {
-                        if (newPoint[track.left.metric] === undefined) newPoint[track.left.metric] = 0;
-                        if (newPoint[track.right.metric] === undefined) newPoint[track.right.metric] = 0;
-                    });
-
-                    const updated = [...prev, newPoint];
-                    const sorted = updated.sort((a, b) => a.timestamp - b.timestamp);
-
-                    // Trim data older than selected range
-                    const cutoff = now.getTime() - getRangeMs(timeRange);
-                    const trimmed = sorted.filter(pt => (pt.timestamp || 0) >= cutoff);
-
-                    return trimmed;
-                });
+                processLivePoint(newData);
             };
 
             socket.on('rig_data', handleSocketData);
             return () => socket.off('rig_data', handleSocketData);
         }
     }, [tracks, timeRange, isCustom]);
+
+    const processLivePoint = (newData) => {
+        setData(prev => {
+            const now = new Date();
+            const newPoint = {
+                name: now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }),
+                timestamp: now.getTime()
+            };
+
+            Object.keys(newData).forEach(measurement => {
+                if (typeof newData[measurement] === 'object' && newData[measurement] !== null) {
+                    Object.keys(newData[measurement]).forEach(field => {
+                        newPoint[`${measurement}.${field}`] = newData[measurement][field];
+                    });
+                }
+            });
+
+            // Ensure all track metrics have at least a 0 value if missing
+            tracks.forEach(track => {
+                if (newPoint[track.left.metric] === undefined) newPoint[track.left.metric] = 0;
+                if (newPoint[track.right.metric] === undefined) newPoint[track.right.metric] = 0;
+            });
+
+            // Merge and deduplicate
+            const merged = [...prev, newPoint];
+            const uniqueMap = new Map();
+            merged.forEach(item => {
+                // If timestamp is within 1s, consider it same for EDR chart smoothing
+                const key = Math.floor(item.timestamp / 1000);
+                if (!uniqueMap.has(key)) {
+                    uniqueMap.set(key, item);
+                }
+            });
+
+            const sorted = Array.from(uniqueMap.values()).sort((a, b) => a.timestamp - b.timestamp);
+
+            // Trim data older than selected range
+            const cutoff = now.getTime() - getRangeMs(timeRange);
+            const trimmed = sorted.filter(pt => (pt.timestamp || 0) >= cutoff);
+
+            return trimmed;
+        });
+    };
 
     const applyCustomRange = () => {
         if (customRange.start && customRange.end) {
@@ -285,7 +316,17 @@ export default function EdrDashboard() {
                                             '& .MuiSelect-select': { py: 0.5 }
                                         }}
                                     >
-                                        {ALL_METRICS.map(m => <MenuItem key={m.value} value={m.value}>{m.shortLabel}</MenuItem>)}
+                                        {Object.entries(AVAILABLE_METRICS).map(([category, fields]) => [
+                                            <ListSubheader key={`${category}-header`} sx={{ bgcolor: '#f1f5f9', fontWeight: 'bold', color: '#475569', lineHeight: '32px' }}>
+                                                {category.toUpperCase()}
+                                            </ListSubheader>,
+                                            ...fields.map(field => (
+                                                <MenuItem key={`${category}.${field}`} value={`${category}.${field}`} sx={{ pl: 3 }}>
+                                                    <Box component="span" sx={{ color: '#64748b', fontSize: '0.7rem', fontWeight: 'bold', textTransform: 'uppercase', mr: 1 }}>{category.replace('_', ' ')}</Box>
+                                                    {field.replace(/_/g, ' ')}
+                                                </MenuItem>
+                                            ))
+                                        ])}
                                     </Select>
                                 </FormControl>
                                 <Box sx={{ width: '100%', bgcolor: 'black', py: 0.5, textAlign: 'center', border: '3px solid #78716c', borderRadius: '4px', boxShadow: 'inset 0 0 10px rgba(0,0,0,1)' }}>
@@ -320,7 +361,16 @@ export default function EdrDashboard() {
                                             '& .MuiSelect-select': { py: 0.5 }
                                         }}
                                     >
-                                        {ALL_METRICS.map(m => <MenuItem key={m.value} value={m.value}>{m.shortLabel}</MenuItem>)}
+                                        {Object.entries(AVAILABLE_METRICS).map(([category, fields]) => [
+                                            <ListSubheader key={`${category}-header-right`} sx={{ bgcolor: '#f1f5f9', fontWeight: 'bold', color: '#475569', lineHeight: '32px' }}>
+                                                {category.toUpperCase()}
+                                            </ListSubheader>,
+                                            ...fields.map(field => (
+                                                <MenuItem key={`${category}.${field}`} value={`${category}.${field}`} sx={{ pl: 3 }}>
+                                                    {field.replace(/_/g, ' ')}
+                                                </MenuItem>
+                                            ))
+                                        ])}
                                     </Select>
                                 </FormControl>
                                 <Box sx={{ width: '100%', bgcolor: 'black', py: 0.5, textAlign: 'center', border: '3px solid #78716c', borderRadius: '4px', boxShadow: 'inset 0 0 10px rgba(0,0,0,1)' }}>

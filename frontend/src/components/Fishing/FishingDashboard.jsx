@@ -218,7 +218,7 @@ const FishingDashboard = () => {
                     </Typography>
 
                     <Paper sx={{ p: 2, bgcolor: '#1e293b', mb: 2, height: 300 }}>
-                        <Typography variant="caption" sx={{ color: '#94a3b8' }}>HOOK LOAD vs DEPTH (Trend)</Typography>
+                        <Typography variant="caption" sx={{ color: '#94a3b8' }}>WOH vs DEPTH (Trend)</Typography>
                         <ResponsiveContainer width="100%" height="100%">
                             <LineChart data={graphData}>
                                 <CartesianGrid strokeDasharray="3 3" stroke="#334155" />

@@ -23,23 +23,35 @@ const WellControlDashboard = () => {
     });
 
     useEffect(() => {
+        // Fetch latest data on mount
+        fetch('/api/rig/latest')
+            .then(res => res.json())
+            .then(data => {
+                if (data.well_control) {
+                    processWellControlData(data.well_control);
+                }
+            })
+            .catch(err => console.error("Failed to fetch latest well control data:", err));
+
         socket.on('rig_data', (newData) => {
             if (newData.well_control) {
-                setWcData({
-                    annular_pressure: Number(newData.well_control.annular_pressure) || 0,
-                    manifold_pressure: Number(newData.well_control.manifold_pressure) || 0,
-                    accumulator_pressure: Number(newData.well_control.accumulator_pressure) || 0,
-                    // User Request: "when ram... is highlighted all are digital inputs"
-                    // Convention: true = Activated/Closed (Standard PLC Logic: 1 = Alarm/Triggered)
-                    annular: { open: Number(newData.well_control.annular_open) > 0, close: Number(newData.well_control.annular_close) > 0 },
-                    pipe: { open: Number(newData.well_control.pipe_ram_open) > 0, close: Number(newData.well_control.pipe_ram_close) > 0 },
-                    blind: { open: Number(newData.well_control.blind_ram_open) > 0, close: Number(newData.well_control.blind_ram_close) > 0 },
-                    shear: Number(newData.well_control.shear_ram_open) > 0
-                });
+                processWellControlData(newData.well_control);
             }
         });
         return () => socket.off('rig_data');
     }, []);
+
+    const processWellControlData = (wellControlData) => {
+        setWcData({
+            annular_pressure: Number(wellControlData.annular_pressure) || 0,
+            manifold_pressure: Number(wellControlData.manifold_pressure) || 0,
+            accumulator_pressure: Number(wellControlData.accumulator_pressure) || 0,
+            annular: { open: Number(wellControlData.annular_open) > 0, close: Number(wellControlData.annular_close) > 0 },
+            pipe: { open: Number(wellControlData.pipe_ram_open) > 0, close: Number(wellControlData.pipe_ram_close) > 0 },
+            blind: { open: Number(wellControlData.blind_ram_open) > 0, close: Number(wellControlData.blind_ram_close) > 0 },
+            shear: Number(wellControlData.shear_ram_open) > 0
+        });
+    };
 
     return (
         <Box sx={{ p: 3 }}>

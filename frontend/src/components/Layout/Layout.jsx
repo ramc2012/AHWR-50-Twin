@@ -11,7 +11,8 @@ import {
     Edit2,
     Anchor,
     LogOut,
-    ChevronDown
+    ChevronDown,
+    Database
 } from 'lucide-react';
 import {
     Box,
@@ -37,10 +38,9 @@ import { useAuth } from '../../context/AuthContext';
 import { useNavigate } from 'react-router-dom';
 
 const menuItems = [
-    { text: 'Dashboard', icon: <LayoutDashboard size={20} />, path: '/' },
+    { text: 'Rig Overview', icon: <LayoutDashboard size={20} />, path: '/' },
     { text: 'EDR', icon: <Activity size={20} />, path: '/edr' },
-    { text: 'Engine & Power', icon: <Gauge size={20} />, path: '/engine' },
-    { text: 'Mud Pump', icon: <Droplets size={20} />, path: '/mudpump' },
+    { text: 'EQUIPMENT', icon: <Database size={20} />, path: '/equipment' },
     { text: 'Well Control', icon: <ShieldAlert size={20} />, path: '/wellcontrol' },
     { text: 'Fishing Ops', icon: <Anchor size={20} />, path: '/fishing' },
     { text: 'Live Trends', icon: <ChartIcon size={20} />, path: '/trends' },
@@ -160,7 +160,7 @@ export default function Layout() {
                     >
                         {currentPage?.icon}
                         <Typography variant="body1" sx={{ fontWeight: 'bold' }}>
-                            {currentPage?.text || 'Dashboard'}
+                            {currentPage?.text || 'Rig Overview'}
                         </Typography>
                         <ChevronDown size={16} style={{ transform: menuAnchor ? 'rotate(180deg)' : 'rotate(0deg)', transition: '0.2s' }} />
                     </Button>

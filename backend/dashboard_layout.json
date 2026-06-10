@@ -1,19 +1,19 @@
 {
   "gauges": [
     {
-      "id": "d6",
-      "label": "RIG AIR PRESSURE",
-      "dataKey": "rig_air_pressure",
+      "id": "d2",
+      "label": "HTD RPM",
+      "dataKey": "htd_rpm",
       "min": 0,
-      "max": "200",
-      "unit": "psi",
-      "color": "#22d3ee",
+      "max": "100",
+      "unit": "rpm",
+      "color": "#fb7185",
       "gridWidth": 3,
-      "size": 160
+      "size": 300
     },
     {
       "id": "d1",
-      "label": "HOOK LOAD",
+      "label": "WOH",
       "dataKey": "hook_load",
       "min": 0,
       "max": 100,
@@ -26,14 +26,14 @@
     },
     {
       "id": "d3",
-      "label": "ENGINE RPM",
-      "dataKey": "engine_rpm",
+      "label": "PCT TORQUE",
+      "dataKey": "pct_torque",
       "min": 0,
-      "max": 2000,
-      "unit": "RPM",
+      "max": "3000",
+      "unit": "Nm",
       "color": "#34d399",
       "gridWidth": 3,
-      "size": 160
+      "size": 300
     }
   ],
   "sideStats": [
@@ -58,6 +58,152 @@
   },
   "wellInfo": {
     "well": "ABCD",
-    "rig": "ROM-II"
-  }
+    "rig": "AHWR-50-III"
+  },
+  "bottomStats": [
+    {
+      "id": "p3",
+      "title": "EQUIPMENT STATUS",
+      "params": [
+        {
+          "id": "p3_1",
+          "label": "HPU",
+          "dataKey": "hpu_status",
+          "unit": ""
+        },
+        {
+          "id": "p3_2",
+          "label": "HTD",
+          "dataKey": "htd_status",
+          "unit": ""
+        },
+        {
+          "id": "p3_3",
+          "label": "PCT",
+          "dataKey": "pct_status",
+          "unit": ""
+        },
+        {
+          "id": "p3_4",
+          "label": "CAT ENGINE",
+          "dataKey": "engine_status",
+          "unit": ""
+        },
+        {
+          "id": "p3_5",
+          "label": "CWK",
+          "dataKey": "cwk_status",
+          "unit": ""
+        }
+      ]
+    },
+    {
+      "id": "p2",
+      "title": "HTD STATUS",
+      "params": [
+        {
+          "id": "p2_1",
+          "label": "IBOP",
+          "dataKey": "ibop_status",
+          "unit": ""
+        },
+        {
+          "id": "p2_2",
+          "label": "ELEVATOR",
+          "dataKey": "elevator_status",
+          "unit": ""
+        },
+        {
+          "id": "p2_3",
+          "label": "BREAK",
+          "dataKey": "brake_status",
+          "unit": ""
+        },
+        {
+          "id": "p2_4",
+          "label": "SPEED",
+          "dataKey": "vertical_speed",
+          "unit": "m/s"
+        },
+        {
+          "id": "p2_5",
+          "label": "LINK TILT",
+          "dataKey": "tilt_status",
+          "unit": ""
+        }
+      ]
+    },
+    {
+      "id": "p4",
+      "title": "PCT & CWK",
+      "params": [
+        {
+          "id": "p4_1",
+          "label": "SEQUENCE",
+          "dataKey": "pct_sequence",
+          "unit": ""
+        },
+        {
+          "id": "p4_2",
+          "label": "SPINNER",
+          "dataKey": "spinner_floating",
+          "unit": ""
+        },
+        {
+          "id": "p4_3",
+          "label": "CLAMP FORCE",
+          "dataKey": "cwk_clamp_pressure",
+          "unit": "Bar"
+        },
+        {
+          "id": "p4_4",
+          "label": "CLAMP",
+          "dataKey": "cwk_clamp_status",
+          "unit": ""
+        },
+        {
+          "id": "p4_5",
+          "label": "SPINNER TORQUE",
+          "dataKey": "spinner_makeup_torque",
+          "unit": "daN*m"
+        }
+      ]
+    },
+    {
+      "id": "p1",
+      "title": "DRILLING PARAMETERS",
+      "params": [
+        {
+          "id": "p1_1",
+          "label": "FLOW IN",
+          "dataKey": "flow_in",
+          "unit": "Lt/min"
+        },
+        {
+          "id": "p1_2",
+          "label": "FLOW OUT",
+          "dataKey": "flow_out",
+          "unit": "%"
+        },
+        {
+          "id": "p1_3",
+          "label": "ROP",
+          "dataKey": "rop",
+          "unit": "m/h"
+        },
+        {
+          "id": "p1_4",
+          "label": "SPP",
+          "dataKey": "pump_pressure",
+          "unit": "Bar"
+        },
+        {
+          "id": "p1_5",
+          "label": "SPM",
+          "dataKey": "spm",
+          "unit": "SPM"
+        }
+      ]
+    }
+  ]
 }

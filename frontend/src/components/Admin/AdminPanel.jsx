@@ -35,11 +35,103 @@ export default function AdminPanel() {
     const [currentUser, setCurrentUser] = useState({ username: '', password: '', role: 'operator', status: 'active' });
     const [isEditingUser, setIsEditingUser] = useState(false);
 
+    // --- S7-1500 Default Template ---
+    const loadS7Defaults = (slaveIndex) => {
+        const s7Defaults = {
+            protocol: 's7comm',
+            ip: '192.168.0.13',
+            port: 102,
+            rack: 0,
+            slot: 0,
+            metrics: [
+                {
+                    name: "AHWR",
+                    tags: { equipment: "DAS" },
+                    fields: [
+                        { name: "Total Active Tank Volume-m^3", address: "DB5380.R40" },
+                        { name: "Active Tank Volume Gain/Loss -m^3", address: "DB5380.R50" },
+                        { name: "Trip Tank Active Mud Volume -m^3", address: "DB5380.R56" },
+                        { name: "Active TripTank Volume Gain/Loss -%", address: "DB5380.R78" },
+                        { name: "Mud Tank 1 Volume -m^3", address: "DB5380.R378" },
+                        { name: "Mud Tank 2 Volume -m^3", address: "DB5380.R388" },
+                        { name: "Mud Tank 3 Volume -m^3", address: "DB5380.R398" },
+                        { name: "Mud Tank 4 Volume -m^3", address: "DB5380.R408" },
+                        { name: "Mud Return Flow -%", address: "DB5380.R666" },
+                        { name: "Mud Pump Inlet Flow-Lt/min", address: "DB259.R6" },
+                        { name: "Mud Pumps Total SPM-SPM", address: "DB166.R0" },
+                        { name: "Mud Pumps Totals Strokes-Count", address: "DB166.DI56" }
+                    ]
+                },
+                {
+                    name: "AHWR",
+                    tags: { equipment: "Drilling" },
+                    fields: [
+                        { name: "Weight on Hook -Ton", address: "DB3191.R0" },
+                        { name: "WOB -Ton", address: "DB3191.R10" },
+                        { name: "Bit Depth-m", address: "DB3191.R20" },
+                        { name: "TOTAL BIT Depth-m", address: "DB3191.R26" },
+                        { name: "Operation-1=DRILLING, 2=TRIP IN, 3=TRIP OUT, 4=CASING", address: "DB3191.B52" },
+                        { name: "SPP-Bar", address: "DB3191.R72" },
+                        { name: "Delta SPP-Bar", address: "DB3191.R84" },
+                        { name: "ROP-m/h", address: "DB3191.R96" },
+                        { name: "Ropes Wear-ton/km", address: "DB3191.R106" },
+                        { name: "Delta Torque-daN*m", address: "DB3191.R116" },
+                        { name: "Drill String Speed-RPM", address: "DB3191.R128" },
+                        { name: "Drill String Torque-daN*m", address: "DB3191.R134" }
+                    ]
+                },
+                {
+                    name: "AHWR",
+                    tags: { equipment: "CAT" },
+                    fields: [
+                        { name: "CAT Engine speed RPM", address: "DB119.R100" },
+                        { name: "CAT Engine OilPressure", address: "DB119.R128" },
+                        { name: "CAT Engine CoolantTemperature", address: "DB119.R116" },
+                        { name: "CAT Engine ElectricalPotential", address: "DB119.R140" },
+                        { name: "CAT Engine FuelRate", address: "DB119.R136" }
+                    ]
+                },
+                {
+                    name: "AHWR",
+                    tags: { equipment: "ACS" },
+                    fields: [
+                        { name: "ACS status-0=UNKNONE, 1=ON, 2=OFF, 3=DISABLE ", address: "DB3591.B0" },
+                        { name: "ACS Actual Block Position", address: "DB174.R150" },
+                        { name: "ACS Crownsaver in mm", address: "DB65.R6" },
+                        { name: "ACS Floorsaver in mm", address: "DB65.R12" },
+                        { name: "ACS Bottomsaver in mm", address: "DB65.R18" },
+                        { name: "CWK Clamp close pressure", address: "DB2780.R54" },
+                        { name: "CWK Clamp-0=NONE, 1=OPENING, 2=CLOSING, 3=IS OPEN, 4=IS CLOSE, 5=FAULT", address: "DB2780.B52" }
+                    ]
+                },
+                {
+                    name: "AHWR",
+                    tags: { equipment: "HTD" },
+                    fields: [
+                        { name: "HTD IBOP Status-0= Uncknown, 1 = Opening, 2 = Closing, 3 = Open, 4 = Close, 5 = Fault", address: "DB436.B150" },
+                        { name: "HTD Elevator Status-0= Uncknown, 1 = Opening, 2 = Closing, 3 = Open, 4 = Close, 5 = Fault", address: "DB436.B140" },
+                        { name: "HTD Brake Status-0=Unknown, 1 = Closing, 2 = Closed, 3 = Opening, 4 = Open, 5 = Fault", address: "DB436.B130" },
+                        { name: "HTD vertical speed", address: "DB174.R160" },
+                        { name: "HTD Link Tilt status-0 = None, 1 = Float ON, 2 = Vertical, 3 = Float OFF, 4 = Extend, 5 = Retract, 6 = Fault", address: "DB436.B178" },
+                        { name: "PCT Sequence-0=OFF, 1=MAKE-UP, 2=BREAK-OUT, 3=RESET, 4=FAULT", address: "DB244.B184" },
+                        { name: "PCT SPINNER FLOATING-0=OFF, 1=ON, 10=SPINNER NOT MOUNTED", address: "DB244.B96" },
+                        { name: "PCT SpinnerActMakeUpTorque-daN*m", address: "DB244.R72" }
+                    ]
+                }
+            ]
+        };
+
+        const newSlaves = [...config.slaves];
+        newSlaves[slaveIndex] = { ...newSlaves[slaveIndex], ...s7Defaults };
+        setConfig({ ...config, slaves: newSlaves });
+        showNotification('S7-1500 Default Configuration Loaded!');
+    };
+
     // Helper to fetch data
     const fetchConfig = async () => {
         try {
             setLoading(true);
-            const res = await axios.get('/api/modbus');
+            const res = await axios.get('/api/config/plc');
             const data = res.data.slaves ? res.data : { slaves: [] };
             setConfig(data);
         } catch (err) {
@@ -64,8 +156,8 @@ export default function AdminPanel() {
     };
 
     useEffect(() => {
-        if (value === 0) fetchUsers();
-        if (value === 1) fetchConfig();
+        if (value === 0) fetchConfig();
+        if (value === 1) fetchUsers();
     }, [value]);
 
     const handleChange = (event, newValue) => {
@@ -119,17 +211,17 @@ export default function AdminPanel() {
         }
     };
 
-    // --- Modbus Actions ---
-
-    // ... (Existing Modbus functions: addSlave, removeSlave, etc. - kept same logic)
+    // --- Device Actions ---
     const addSlave = () => {
         const newSlave = {
             id: Date.now(),
             name: `PLC_${config.slaves.length + 1}`,
-            ip: '192.168.1.10',
-            port: 502,
-            slaveId: 1,
-            registers: []
+            protocol: 's7comm',
+            ip: '192.168.0.10',
+            port: 102,
+            rack: 0,
+            slot: 0,
+            metrics: []
         };
         setConfig({ ...config, slaves: [...config.slaves, newSlave] });
     };
@@ -143,17 +235,21 @@ export default function AdminPanel() {
     const updateSlave = (index, field, val) => {
         const newSlaves = [...config.slaves];
         newSlaves[index][field] = val;
+
+        // Default ports when switching protocol
+        if (field === 'protocol') {
+            newSlaves[index].port = val === 's7comm' ? 102 : 502;
+            if (val === 's7comm' && !newSlaves[index].metrics) {
+                newSlaves[index].metrics = [];
+            }
+        }
+
         setConfig({ ...config, slaves: newSlaves });
     };
 
+    // Modbus Specific
     const addRegister = (slaveIndex) => {
-        const newRegister = {
-            name: 'NEW_TAG',
-            address: 40001,
-            type: 'holding_register',
-            dataType: 'INT16',
-            scale: 1.0
-        };
+        const newRegister = { name: 'NEW_TAG', address: 40001, type: 'holding_register', dataType: 'INT16', scale: 1.0 };
         const newSlaves = [...config.slaves];
         newSlaves[slaveIndex].registers.push(newRegister);
         setConfig({ ...config, slaves: newSlaves });
@@ -168,21 +264,31 @@ export default function AdminPanel() {
     const updateRegister = (slaveIndex, regIndex, field, val) => {
         const newSlaves = [...config.slaves];
         newSlaves[slaveIndex].registers[regIndex][field] = val;
+        setConfig({ ...config, slaves: newSlaves });
+    };
 
-        // If user changes register type to coil or discrete_input, ensure dataType is INT16
-        if (field === 'type' && (val === 'coil' || val === 'discrete_input')) {
-            newSlaves[slaveIndex].registers[regIndex]['dataType'] = 'INT16';
-        }
+    // S7comm Specific
+    const addMetric = (slaveIndex) => {
+        const newMetric = { name: 'AHWR', tags: { equipment: 'DAS' }, fields: [] };
+        const newSlaves = [...config.slaves];
+        if (!newSlaves[slaveIndex].metrics) newSlaves[slaveIndex].metrics = [];
+        newSlaves[slaveIndex].metrics.push(newMetric);
+        setConfig({ ...config, slaves: newSlaves });
+    };
 
+    const addS7Field = (slaveIndex, metricIndex) => {
+        const newField = { name: 'NEW_S7_TAG', address: 'DB1.R0' };
+        const newSlaves = [...config.slaves];
+        newSlaves[slaveIndex].metrics[metricIndex].fields.push(newField);
         setConfig({ ...config, slaves: newSlaves });
     };
 
     const saveConfiguration = async () => {
         try {
             setLoading(true);
-            const res = await axios.post('/api/modbus', config);
+            const res = await axios.post('/api/config/plc', config);
             if (res.data.success) {
-                showNotification('Configuration saved! Restarting Telegraf might be required.');
+                showNotification('Configuration saved and Telegraf restarted!');
             }
         } catch (err) {
             console.error(err);
@@ -196,13 +302,274 @@ export default function AdminPanel() {
         <Box sx={{ width: '100%' }}>
             <Box sx={{ borderBottom: 1, borderColor: '#334155' }}>
                 <Tabs value={value} onChange={handleChange} textColor="primary" indicatorColor="primary">
+                    <Tab label="PLC & S7 Configuration" sx={{ color: '#38bdf8', fontWeight: 'bold' }} />
                     <Tab label="User Management" sx={{ color: '#94a3b8' }} />
-                    <Tab label="Modbus Configuration" sx={{ color: '#94a3b8' }} />
                 </Tabs>
             </Box>
 
-            {/* TAB 0: User Management */}
+            {/* TAB 0: PLC & S7 Configuration */}
             <TabPanel value={value} index={0}>
+                <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 3 }}>
+                    <Box>
+                        <Typography variant="h5" sx={{ fontWeight: 'bold', mb: 0.5 }}>PLC & Siemens S7 Communication</Typography>
+                        <Typography variant="body2" sx={{ color: '#94a3b8' }}>Configure Siemens S7comm protocol data ingestion.</Typography>
+                    </Box>
+                    <Box sx={{ display: 'flex', gap: 2 }}>
+                        <Button variant="outlined" startIcon={<RefreshCw />} onClick={fetchConfig} sx={{ color: '#38bdf8', borderColor: '#334155' }}>
+                            Reload
+                        </Button>
+                        <Button variant="contained" startIcon={<Save />} onClick={saveConfiguration} disabled={loading} sx={{ bgcolor: '#34d399', '&:hover': { bgcolor: '#10b981' } }}>
+                            {loading ? 'Saving...' : 'Save & Apply'}
+                        </Button>
+                    </Box>
+                </Box>
+
+                {config.slaves.map((slave, sIndex) => (
+                    <Paper key={slave.id || sIndex} sx={{ p: 3, mb: 3, bgcolor: '#1e293b', border: '1px solid #334155' }}>
+                        <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 2, alignItems: 'center' }}>
+                            <Box sx={{ display: 'flex', gap: 2, alignItems: 'center' }}>
+                                <Typography variant="subtitle1" sx={{ fontWeight: 'bold', color: '#38bdf8' }}>
+                                    Device #{sIndex + 1}
+                                </Typography>
+                                <Select
+                                    value={slave.protocol || 's7comm'} size="small"
+                                    onChange={(e) => updateSlave(sIndex, 'protocol', e.target.value)}
+                                    sx={{ bgcolor: '#0f172a', color: 'white', '.MuiOutlinedInput-notchedOutline': { borderColor: '#334155' }, '.MuiSvgIcon-root': { color: 'white' } }}
+                                >
+                                    <MenuItem value="s7comm">Siemens S7comm</MenuItem>
+                                </Select>
+                                {slave.protocol === 's7comm' && (
+                                    <Button size="small" variant="outlined" onClick={() => loadS7Defaults(sIndex)} sx={{ color: '#fbbf24', borderColor: '#fbbf24', '&:hover': { borderColor: '#eab308' } }}>
+                                        Load S7-1500 Defaults
+                                    </Button>
+                                )}
+                            </Box>
+                            <IconButton size="small" onClick={() => removeSlave(sIndex)} sx={{ color: '#ef4444' }}>
+                                <Trash2 size={18} />
+                            </IconButton>
+                        </Box>
+
+                        <Grid container spacing={2} sx={{ mb: 3 }}>
+                            <Grid item xs={12} md={3}>
+                                <TextField
+                                    label="Name" fullWidth size="small"
+                                    value={slave.name} onChange={(e) => updateSlave(sIndex, 'name', e.target.value)}
+                                    sx={{ bgcolor: '#0f172a', input: { color: 'white' }, label: { color: '#94a3b8' }, '.MuiOutlinedInput-notchedOutline': { borderColor: '#334155' } }}
+                                />
+                            </Grid>
+                            <Grid item xs={12} md={3}>
+                                <TextField
+                                    label="IP Address" fullWidth size="small"
+                                    value={slave.ip} onChange={(e) => updateSlave(sIndex, 'ip', e.target.value)}
+                                    sx={{ bgcolor: '#0f172a', input: { color: 'white' }, label: { color: '#94a3b8' }, '.MuiOutlinedInput-notchedOutline': { borderColor: '#334155' } }}
+                                />
+                            </Grid>
+                            <Grid item xs={12} md={1}>
+                                <TextField
+                                    label="Port" type="number" fullWidth size="small"
+                                    value={slave.port} onChange={(e) => updateSlave(sIndex, 'port', parseInt(e.target.value))}
+                                    sx={{ bgcolor: '#0f172a', input: { color: 'white' }, label: { color: '#94a3b8' }, '.MuiOutlinedInput-notchedOutline': { borderColor: '#334155' } }}
+                                />
+                            </Grid>
+
+                            {slave.protocol === 'modbus' ? (
+                                <Grid item xs={12} md={1}>
+                                    <TextField
+                                        label="Slave ID" type="number" fullWidth size="small"
+                                        value={slave.slaveId} onChange={(e) => updateSlave(sIndex, 'slaveId', parseInt(e.target.value))}
+                                        sx={{ bgcolor: '#0f172a', input: { color: 'white' }, label: { color: '#94a3b8' }, '.MuiOutlinedInput-notchedOutline': { borderColor: '#334155' } }}
+                                    />
+                                </Grid>
+                            ) : (
+                                <>
+                                    <Grid item xs={12} md={1}>
+                                        <TextField
+                                            label="Rack" type="number" fullWidth size="small"
+                                            value={slave.rack || 0} onChange={(e) => updateSlave(sIndex, 'rack', parseInt(e.target.value))}
+                                            sx={{ bgcolor: '#0f172a', input: { color: 'white' }, label: { color: '#94a3b8' }, '.MuiOutlinedInput-notchedOutline': { borderColor: '#334155' } }}
+                                        />
+                                    </Grid>
+                                    <Grid item xs={12} md={1}>
+                                        <TextField
+                                            label="Slot" type="number" fullWidth size="small"
+                                            value={slave.slot || 0} onChange={(e) => updateSlave(sIndex, 'slot', parseInt(e.target.value))}
+                                            sx={{ bgcolor: '#0f172a', input: { color: 'white' }, label: { color: '#94a3b8' }, '.MuiOutlinedInput-notchedOutline': { borderColor: '#334155' } }}
+                                        />
+                                    </Grid>
+                                </>
+                            )}
+                        </Grid>
+
+                        {slave.protocol === 'modbus' ? (
+                            <>
+                                <Typography variant="subtitle2" sx={{ mb: 1, color: '#94a3b8' }}>Modbus Registers</Typography>
+                                <TableContainer component={Paper} sx={{ bgcolor: '#0f172a', mb: 2, border: '1px solid #334155' }}>
+                                    <Table size="small">
+                                        <TableHead>
+                                            <TableRow>
+                                                <TableCell sx={{ color: '#94a3b8' }}>Name</TableCell>
+                                                <TableCell sx={{ color: '#94a3b8' }}>Type</TableCell>
+                                                <TableCell sx={{ color: '#94a3b8' }}>Addr</TableCell>
+                                                <TableCell sx={{ color: '#94a3b8' }}>Data Type</TableCell>
+                                                <TableCell sx={{ color: '#94a3b8' }}>Scale</TableCell>
+                                                <TableCell align="right"></TableCell>
+                                            </TableRow>
+                                        </TableHead>
+                                        <TableBody>
+                                            {slave.registers?.map((reg, rIndex) => (
+                                                <TableRow key={rIndex}>
+                                                    <TableCell sx={{ color: 'white' }}>
+                                                        <TextField
+                                                            variant="standard" size="small" fullWidth
+                                                            value={reg.name} onChange={(e) => updateRegister(sIndex, rIndex, 'name', e.target.value)}
+                                                            InputProps={{ disableUnderline: true, sx: { color: 'white' } }}
+                                                        />
+                                                    </TableCell>
+                                                    <TableCell sx={{ color: 'white' }}>
+                                                        <Select
+                                                            value={reg.type}
+                                                            onChange={(e) => updateRegister(sIndex, rIndex, 'type', e.target.value)}
+                                                            variant="standard" size="small" fullWidth disableUnderline
+                                                            sx={{ color: 'white', '.MuiSelect-icon': { color: 'white' } }}
+                                                        >
+                                                            <MenuItem value="holding_register">Holding</MenuItem>
+                                                            <MenuItem value="input_register">Input</MenuItem>
+                                                            <MenuItem value="coil">Coil</MenuItem>
+                                                            <MenuItem value="discrete_input">Discrete</MenuItem>
+                                                        </Select>
+                                                    </TableCell>
+                                                    <TableCell>
+                                                        <TextField
+                                                            type="number" variant="standard"
+                                                            value={reg.address} onChange={(e) => updateRegister(sIndex, rIndex, 'address', parseInt(e.target.value))}
+                                                            InputProps={{ disableUnderline: true, sx: { color: 'white' } }}
+                                                        />
+                                                    </TableCell>
+                                                    <TableCell>
+                                                        <Select
+                                                            value={reg.dataType}
+                                                            onChange={(e) => updateRegister(sIndex, rIndex, 'dataType', e.target.value)}
+                                                            variant="standard" size="small" fullWidth disableUnderline
+                                                            sx={{ color: 'white', '.MuiSelect-icon': { color: 'white' } }}
+                                                        >
+                                                            <MenuItem value="INT16">INT16</MenuItem>
+                                                            <MenuItem value="UINT16">UINT16</MenuItem>
+                                                            <MenuItem value="FLOAT32">FLOAT32</MenuItem>
+                                                            <MenuItem value="FLOAT32-IEEE">FLOAT32-IEEE</MenuItem>
+                                                            <MenuItem value="BOOL">BOOL</MenuItem>
+                                                        </Select>
+                                                    </TableCell>
+                                                    <TableCell>
+                                                        <TextField
+                                                            type="number" variant="standard"
+                                                            value={reg.scale} onChange={(e) => updateRegister(sIndex, rIndex, 'scale', parseFloat(e.target.value))}
+                                                            InputProps={{ disableUnderline: true, sx: { color: 'white' } }}
+                                                        />
+                                                    </TableCell>
+                                                    <TableCell align="right">
+                                                        <IconButton size="small" onClick={() => removeRegister(sIndex, rIndex)} sx={{ color: '#64748b', '&:hover': { color: '#ef4444' } }}>
+                                                            <Trash2 size={14} />
+                                                        </IconButton>
+                                                    </TableCell>
+                                                </TableRow>
+                                            ))}
+                                        </TableBody>
+                                    </Table>
+                                </TableContainer>
+                                <Button startIcon={<Plus size={16} />} onClick={() => addRegister(sIndex)} sx={{ color: '#38bdf8' }}>
+                                    Add Modbus Tag
+                                </Button>
+                            </>
+                        ) : (
+                            <>
+                                <Typography variant="subtitle2" sx={{ mb: 1, color: '#FBBC24' }}>S7comm Metrics & Tags</Typography>
+                                {slave.metrics?.map((metric, mIndex) => (
+                                    <Box key={mIndex} sx={{ mb: 2, p: 2, bgcolor: '#0f172a', borderRadius: 1, border: '1px solid #334155' }}>
+                                        <Box sx={{ display: 'flex', gap: 2, mb: 1, alignItems: 'center' }}>
+                                            <TextField
+                                                size="small" label="Metric Name"
+                                                value={metric.name} onChange={(e) => {
+                                                    const newSlaves = [...config.slaves];
+                                                    newSlaves[sIndex].metrics[mIndex].name = e.target.value;
+                                                    setConfig({ ...config, slaves: newSlaves });
+                                                }}
+                                                sx={{ input: { color: 'white' }, label: { color: '#94a3b8' }, '.MuiOutlinedInput-notchedOutline': { borderColor: '#334155' } }}
+                                            />
+                                            <TextField
+                                                size="small" label="Equipment Tag"
+                                                value={metric.tags?.equipment || ''} onChange={(e) => {
+                                                    const newSlaves = [...config.slaves];
+                                                    newSlaves[sIndex].metrics[mIndex].tags = { ...newSlaves[sIndex].metrics[mIndex].tags, equipment: e.target.value };
+                                                    setConfig({ ...config, slaves: newSlaves });
+                                                }}
+                                                sx={{ input: { color: 'white' }, label: { color: '#94a3b8' }, '.MuiOutlinedInput-notchedOutline': { borderColor: '#334155' } }}
+                                            />
+                                        </Box>
+                                        <Table size="small">
+                                            <TableHead>
+                                                <TableRow>
+                                                    <TableCell sx={{ color: '#94a3b8' }}>Field Name</TableCell>
+                                                    <TableCell sx={{ color: '#94a3b8' }}>Address (DB#.Type#)</TableCell>
+                                                    <TableCell align="right"></TableCell>
+                                                </TableRow>
+                                            </TableHead>
+                                            <TableBody>
+                                                {metric.fields?.map((f, fIndex) => (
+                                                    <TableRow key={fIndex}>
+                                                        <TableCell>
+                                                            <TextField
+                                                                variant="standard" value={f.name} fullWidth size="small"
+                                                                InputProps={{ disableUnderline: true, sx: { color: 'white' } }}
+                                                                onChange={(e) => {
+                                                                    const newSlaves = [...config.slaves];
+                                                                    newSlaves[sIndex].metrics[mIndex].fields[fIndex].name = e.target.value;
+                                                                    setConfig({ ...config, slaves: newSlaves });
+                                                                }}
+                                                            />
+                                                        </TableCell>
+                                                        <TableCell>
+                                                            <TextField
+                                                                variant="standard" value={f.address} fullWidth size="small"
+                                                                InputProps={{ disableUnderline: true, sx: { color: 'white' } }}
+                                                                onChange={(e) => {
+                                                                    const newSlaves = [...config.slaves];
+                                                                    newSlaves[sIndex].metrics[mIndex].fields[fIndex].address = e.target.value;
+                                                                    setConfig({ ...config, slaves: newSlaves });
+                                                                }}
+                                                            />
+                                                        </TableCell>
+                                                        <TableCell align="right">
+                                                            <IconButton size="small" sx={{ color: '#64748b', '&:hover': { color: '#ef4444' } }} onClick={() => {
+                                                                const newSlaves = [...config.slaves];
+                                                                newSlaves[sIndex].metrics[mIndex].fields.splice(fIndex, 1);
+                                                                setConfig({ ...config, slaves: newSlaves });
+                                                            }}>
+                                                                <Trash2 size={14} />
+                                                            </IconButton>
+                                                        </TableCell>
+                                                    </TableRow>
+                                                ))}
+                                            </TableBody>
+                                        </Table>
+                                        <Button size="small" startIcon={<Plus size={14} />} onClick={() => addS7Field(sIndex, mIndex)} sx={{ color: '#fbbf24', mt: 1, '&:hover': { bgcolor: 'rgba(251, 188, 36, 0.08)' } }}>
+                                            Add S7 Tag
+                                        </Button>
+                                    </Box>
+                                ))}
+                                <Button startIcon={<Plus size={16} />} onClick={() => addMetric(sIndex)} sx={{ color: '#fbbf24', '&:hover': { bgcolor: 'rgba(251, 188, 36, 0.08)' } }}>
+                                    Add S7 Metric Group
+                                </Button>
+                            </>
+                        )}
+                    </Paper>
+                ))}
+
+                <Button variant="outlined" startIcon={<Plus />} onClick={addSlave} sx={{ color: 'white', borderColor: '#334155', borderStyle: 'dashed', width: '100%', py: 2, '&:hover': { borderColor: '#94a3b8' } }}>
+                    Add New PLC Device
+                </Button>
+            </TabPanel>
+
+            <TabPanel value={value} index={1}>
                 <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 2, alignItems: 'center' }}>
                     <Typography variant="h6">User Management</Typography>
                     <Button variant="contained" startIcon={<Plus size={16} />} onClick={() => handleOpenUserDialog()} sx={{ bgcolor: '#38bdf8', '&:hover': { bgcolor: '#0ea5e9' } }}>
@@ -257,145 +624,6 @@ export default function AdminPanel() {
                 </Paper>
             </TabPanel>
 
-            {/* TAB 1: Modbus Configuration */}
-            <TabPanel value={value} index={1}>
-                {/* Header Actions */}
-                <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 3 }}>
-                    <Typography variant="h6">Modbus TCP Configuration</Typography>
-                    <Box sx={{ display: 'flex', gap: 2 }}>
-                        <Button variant="outlined" startIcon={<RefreshCw />} onClick={fetchConfig} sx={{ color: '#38bdf8', borderColor: '#334155' }}>
-                            Reload
-                        </Button>
-                        <Button variant="contained" startIcon={<Save />} onClick={saveConfiguration} disabled={loading} sx={{ bgcolor: '#34d399', '&:hover': { bgcolor: '#10b981' } }}>
-                            {loading ? 'Saving...' : 'Save & Apply'}
-                        </Button>
-                    </Box>
-                </Box>
-
-                {config.slaves.map((slave, sIndex) => (
-                    <Paper key={slave.id || sIndex} sx={{ p: 3, mb: 3, bgcolor: '#1e293b', border: '1px solid #334155' }}>
-                        {/* Slave Header */}
-                        <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 2, alignItems: 'center' }}>
-                            <Typography variant="subtitle1" sx={{ fontWeight: 'bold', color: '#38bdf8' }}>
-                                Device #{sIndex + 1}
-                            </Typography>
-                            <IconButton size="small" onClick={() => removeSlave(sIndex)} sx={{ color: '#ef4444' }}>
-                                <Trash2 size={18} />
-                            </IconButton>
-                        </Box>
-
-                        <Grid container spacing={2} sx={{ mb: 3 }}>
-                            <Grid item xs={12} md={3}>
-                                <TextField
-                                    label="Name" fullWidth size="small"
-                                    value={slave.name} onChange={(e) => updateSlave(sIndex, 'name', e.target.value)}
-                                    sx={{ bgcolor: '#0f172a', input: { color: 'white' }, label: { color: '#94a3b8' } }}
-                                />
-                            </Grid>
-                            <Grid item xs={12} md={3}>
-                                <TextField
-                                    label="IP Address" fullWidth size="small"
-                                    value={slave.ip} onChange={(e) => updateSlave(sIndex, 'ip', e.target.value)}
-                                    sx={{ bgcolor: '#0f172a', input: { color: 'white' }, label: { color: '#94a3b8' } }}
-                                />
-                            </Grid>
-                            <Grid item xs={12} md={2}>
-                                <TextField
-                                    label="Port" type="number" fullWidth size="small"
-                                    value={slave.port} onChange={(e) => updateSlave(sIndex, 'port', parseInt(e.target.value))}
-                                    sx={{ bgcolor: '#0f172a', input: { color: 'white' }, label: { color: '#94a3b8' } }}
-                                />
-                            </Grid>
-                            <Grid item xs={12} md={2}>
-                                <TextField
-                                    label="Slave ID" type="number" fullWidth size="small"
-                                    value={slave.slaveId} onChange={(e) => updateSlave(sIndex, 'slaveId', parseInt(e.target.value))}
-                                    sx={{ bgcolor: '#0f172a', input: { color: 'white' }, label: { color: '#94a3b8' } }}
-                                />
-                            </Grid>
-                        </Grid>
-
-                        {/* Registers Table */}
-                        <Typography variant="subtitle2" sx={{ mb: 1, color: '#94a3b8' }}>Register Map</Typography>
-                        <TableContainer component={Paper} sx={{ bgcolor: '#0f172a', mb: 2 }}>
-                            <Table size="small">
-                                <TableHead>
-                                    <TableRow>
-                                        <TableCell sx={{ color: '#94a3b8' }}>Tag Name</TableCell>
-                                        <TableCell sx={{ color: '#94a3b8' }}>Register Type</TableCell>
-                                        <TableCell sx={{ color: '#94a3b8' }}>Address</TableCell>
-                                        <TableCell sx={{ color: '#94a3b8' }}>Data Type</TableCell>
-                                        <TableCell sx={{ color: '#94a3b8' }}>Scale</TableCell>
-                                        <TableCell align="right" sx={{ color: '#94a3b8' }}>Action</TableCell>
-                                    </TableRow>
-                                </TableHead>
-                                <TableBody>
-                                    {slave.registers.map((reg, rIndex) => (
-                                        <TableRow key={rIndex}>
-                                            <TableCell>
-                                                <TextField
-                                                    variant="standard" InputProps={{ disableUnderline: true, style: { color: 'white' } }}
-                                                    value={reg.name} onChange={(e) => updateRegister(sIndex, rIndex, 'name', e.target.value)}
-                                                />
-                                            </TableCell>
-                                            <TableCell>
-                                                <Select
-                                                    value={reg.type}
-                                                    onChange={(e) => updateRegister(sIndex, rIndex, 'type', e.target.value)}
-                                                    variant="standard" disableUnderline sx={{ color: 'white', '.MuiSelect-icon': { color: 'white' } }}
-                                                >
-                                                    <MenuItem value="holding_register">Holding Register</MenuItem>
-                                                    <MenuItem value="input_register">Input Register</MenuItem>
-                                                    <MenuItem value="coil">Coil</MenuItem>
-                                                    <MenuItem value="discrete_input">Discrete Input</MenuItem>
-                                                </Select>
-                                            </TableCell>
-                                            <TableCell>
-                                                <TextField
-                                                    type="number" variant="standard" InputProps={{ disableUnderline: true, style: { color: 'white' } }}
-                                                    value={reg.address} onChange={(e) => updateRegister(sIndex, rIndex, 'address', parseInt(e.target.value))}
-                                                />
-                                            </TableCell>
-                                            <TableCell>
-                                                <Select
-                                                    value={reg.dataType}
-                                                    onChange={(e) => updateRegister(sIndex, rIndex, 'dataType', e.target.value)}
-                                                    variant="standard" disableUnderline sx={{ color: 'white', '.MuiSelect-icon': { color: 'white' } }}
-                                                >
-                                                    <MenuItem value="INT16">INT16</MenuItem>
-                                                    <MenuItem value="UINT16">UINT16</MenuItem>
-                                                    <MenuItem value="FLOAT32">FLOAT32</MenuItem>
-                                                    <MenuItem value="FLOAT32-IEEE">FLOAT32-IEEE</MenuItem>
-                                                    <MenuItem value="BOOL">BOOL</MenuItem>
-                                                </Select>
-                                            </TableCell>
-                                            <TableCell>
-                                                <TextField
-                                                    type="number" variant="standard" InputProps={{ disableUnderline: true, style: { color: 'white' } }}
-                                                    value={reg.scale} onChange={(e) => updateRegister(sIndex, rIndex, 'scale', parseFloat(e.target.value))}
-                                                />
-                                            </TableCell>
-                                            <TableCell align="right">
-                                                <IconButton size="small" onClick={() => removeRegister(sIndex, rIndex)} sx={{ color: '#64748b', '&:hover': { color: '#ef4444' } }}>
-                                                    <Trash2 size={16} />
-                                                </IconButton>
-                                            </TableCell>
-                                        </TableRow>
-                                    ))}
-                                </TableBody>
-                            </Table>
-                        </TableContainer>
-                        <Button startIcon={<Plus size={16} />} onClick={() => addRegister(sIndex)} sx={{ color: '#38bdf8' }}>
-                            Add Register
-                        </Button>
-                    </Paper>
-                ))}
-
-                <Button variant="outlined" startIcon={<Plus />} onClick={addSlave} sx={{ color: 'white', borderColor: '#334155', borderStyle: 'dashed', width: '100%', py: 2 }}>
-                    Add New PLC Device
-                </Button>
-            </TabPanel>
-
             <Snackbar
                 open={notification.open}
                 autoHideDuration={6000}
@@ -419,7 +647,7 @@ export default function AdminPanel() {
                         variant="outlined"
                         value={currentUser.username}
                         onChange={(e) => setCurrentUser({ ...currentUser, username: e.target.value })}
-                        sx={{ mt: 2, bgcolor: '#0f172a', input: { color: 'white' }, label: { color: '#94a3b8' } }}
+                        sx={{ mt: 2, bgcolor: '#0f172a', input: { color: 'white' }, label: { color: '#94a3b8' }, '.MuiOutlinedInput-notchedOutline': { borderColor: '#334155' } }}
                     />
                     <TextField
                         margin="dense"
@@ -429,7 +657,7 @@ export default function AdminPanel() {
                         variant="outlined"
                         value={currentUser.password}
                         onChange={(e) => setCurrentUser({ ...currentUser, password: e.target.value })}
-                        sx={{ mt: 2, bgcolor: '#0f172a', input: { color: 'white' }, label: { color: '#94a3b8' } }}
+                        sx={{ mt: 2, bgcolor: '#0f172a', input: { color: 'white' }, label: { color: '#94a3b8' }, '.MuiOutlinedInput-notchedOutline': { borderColor: '#334155' } }}
                     />
                     <FormControl fullWidth sx={{ mt: 2 }}>
                         <InputLabel sx={{ color: '#94a3b8' }}>Role</InputLabel>
@@ -437,7 +665,7 @@ export default function AdminPanel() {
                             value={currentUser.role}
                             label="Role"
                             onChange={(e) => setCurrentUser({ ...currentUser, role: e.target.value })}
-                            sx={{ bgcolor: '#0f172a', color: 'white', '.MuiSvgIcon-root': { color: 'white' } }}
+                            sx={{ bgcolor: '#0f172a', color: 'white', '.MuiSvgIcon-root': { color: 'white' }, '.MuiOutlinedInput-notchedOutline': { borderColor: '#334155' } }}
                         >
                             <MenuItem value="admin">Admin</MenuItem>
                             <MenuItem value="operator">Operator</MenuItem>
@@ -450,7 +678,7 @@ export default function AdminPanel() {
                             value={currentUser.status}
                             label="Status"
                             onChange={(e) => setCurrentUser({ ...currentUser, status: e.target.value })}
-                            sx={{ bgcolor: '#0f172a', color: 'white', '.MuiSvgIcon-root': { color: 'white' } }}
+                            sx={{ bgcolor: '#0f172a', color: 'white', '.MuiSvgIcon-root': { color: 'white' }, '.MuiOutlinedInput-notchedOutline': { borderColor: '#334155' } }}
                         >
                             <MenuItem value="active">Active</MenuItem>
                             <MenuItem value="inactive">Inactive</MenuItem>
