@@ -16,6 +16,7 @@ const ldap = require('./lib/ldap');
 const alarms = require('./lib/alarms');
 const workover = require('./lib/workover');
 const maintenance = require('./lib/maintenance');
+const edrCatalog = require('../shared/edrMetrics.json');
 
 const PORT = Number(process.env.PORT || 5000);
 const DATA_DIR = process.env.DATA_DIR || __dirname;
@@ -852,6 +853,22 @@ app.delete('/api/users/:id', auth.requireAuth, auth.requireRole('admin'), async 
 
 // --- Dashboard Persistence ---
 const DASHBOARD_FULL_CONFIG_FILE = path.join(DATA_DIR, 'dashboard_layout.json');
+const DASHBOARD_AUDIT_FILE = path.join(DATA_DIR, 'dashboard_layout_audit.json');
+const DASHBOARD_AUDIT_LIMIT = 500;
+
+const EDR_STRIP_LIMITS = { min: 1, max: 6 };
+const EDR_PEN_LIMITS = { min: 1, max: 4 };
+const EDR_COLOR_RE = /^#[0-9a-f]{6}$/i;
+const EDR_METRICS = edrCatalog.categories.flatMap(category =>
+    category.fields.map(field => ({
+        ...field,
+        value: `${category.id}.${field.id}`,
+        category: category.id,
+        categoryLabel: category.label
+    }))
+);
+const EDR_METRIC_BY_VALUE = new Map(EDR_METRICS.map(metric => [metric.value, metric]));
+const DEFAULT_EDR_CONFIG = edrCatalog.defaultLayout;
 
 // Default Layout (Fallback)
 const DEFAULT_DASHBOARD_CONFIG = {
@@ -865,6 +882,8 @@ const DEFAULT_DASHBOARD_CONFIG = {
         { key: 'pump_pressure', label: 'SPP', unit: 'Bar', min: 0, max: 500 },
         { key: 'torque', label: 'Drill String Torque', unit: 'daN·m', min: 0, max: 20000 }
     ],
+    _meta: { version: 1, updatedAt: null, updatedBy: 'system', updatedByRole: 'system' },
+    edr: DEFAULT_EDR_CONFIG,
     units: { wob: 'tonnes', depth: 'm' },
     wellInfo: { well: 'WELL-001', rig: 'RIG-ALPHA' },
     bottomStats: [
@@ -915,9 +934,114 @@ const DEFAULT_DASHBOARD_CONFIG = {
     ]
 };
 
+const auditId = () => `audit_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+
+const appendDashboardAudit = async (record) => {
+    const audit = readJsonSync(DASHBOARD_AUDIT_FILE, []);
+    const rows = Array.isArray(audit) ? audit : [];
+    rows.push(record);
+    await writeJsonAtomic(DASHBOARD_AUDIT_FILE, rows.slice(-DASHBOARD_AUDIT_LIMIT));
+};
+
+const clampInteger = (value, fallback, min, max) => {
+    const parsed = Number.parseInt(value, 10);
+    if (!Number.isFinite(parsed)) return fallback;
+    return Math.min(max, Math.max(min, parsed));
+};
+
+const numericOrFallback = (value, fallback) => {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : fallback;
+};
+
+const getDefaultEdrPen = (stripIndex, penIndex) => {
+    const strip = DEFAULT_EDR_CONFIG.strips[stripIndex % DEFAULT_EDR_CONFIG.strips.length];
+    return strip.pens[penIndex % strip.pens.length] || DEFAULT_EDR_CONFIG.strips[0].pens[0];
+};
+
+const sanitizeEdrPen = (pen, stripIndex, penIndex) => {
+    const fallback = getDefaultEdrPen(stripIndex, penIndex);
+    const source = pen && typeof pen === 'object' ? pen : {};
+    const metric = EDR_METRIC_BY_VALUE.has(source.metric) ? source.metric : fallback.metric;
+    const meta = EDR_METRIC_BY_VALUE.get(metric);
+    const min = numericOrFallback(source.min, fallback.min ?? meta?.defaultMin ?? 0);
+    let max = numericOrFallback(source.max, fallback.max ?? meta?.defaultMax ?? 1);
+    if (max <= min) max = min + 1;
+
+    return {
+        id: typeof source.id === 'string' && source.id.trim() ? source.id.trim().slice(0, 40) : `s${stripIndex + 1}p${penIndex + 1}`,
+        metric,
+        min,
+        max,
+        color: EDR_COLOR_RE.test(source.color || '') ? source.color : fallback.color
+    };
+};
+
+const normalizeLegacyEdrStrips = (config) => {
+    if (Array.isArray(config?.strips)) return config.strips;
+    if (!Array.isArray(config?.tracks)) return [];
+    return config.tracks.map((track, stripIndex) => ({
+        id: `strip-${stripIndex + 1}`,
+        title: `Strip ${stripIndex + 1}`,
+        pens: [track.left, track.right].filter(Boolean)
+    }));
+};
+
+const sanitizeEdrPreset = (preset, index) => {
+    const source = preset && typeof preset === 'object' ? preset : {};
+    const configSource = source.config && typeof source.config === 'object' ? source.config : source;
+    return {
+        id: typeof source.id === 'string' && source.id.trim() ? source.id.trim().slice(0, 48) : `preset-${index + 1}`,
+        name: typeof source.name === 'string' && source.name.trim() ? source.name.trim().slice(0, 80) : `Preset ${index + 1}`,
+        createdAt: typeof source.createdAt === 'string' ? source.createdAt : new Date().toISOString(),
+        createdBy: typeof source.createdBy === 'string' ? source.createdBy.slice(0, 80) : 'unknown',
+        config: sanitizeEdrConfig(configSource, { includePresets: false })
+    };
+};
+
+const sanitizeEdrConfig = (config = {}, options = { includePresets: true }) => {
+    const source = config && typeof config === 'object' ? config : {};
+    const sourceStrips = normalizeLegacyEdrStrips(source);
+    const stripCount = clampInteger(
+        source.stripCount ?? sourceStrips.length,
+        DEFAULT_EDR_CONFIG.stripCount,
+        EDR_STRIP_LIMITS.min,
+        EDR_STRIP_LIMITS.max
+    );
+    const pensPerStrip = clampInteger(
+        source.pensPerStrip,
+        DEFAULT_EDR_CONFIG.pensPerStrip,
+        EDR_PEN_LIMITS.min,
+        EDR_PEN_LIMITS.max
+    );
+
+    const result = {
+        stripCount,
+        pensPerStrip,
+        strips: Array.from({ length: stripCount }, (_, stripIndex) => {
+            const sourceStrip = sourceStrips[stripIndex] || DEFAULT_EDR_CONFIG.strips[stripIndex % DEFAULT_EDR_CONFIG.strips.length];
+            return {
+                id: typeof sourceStrip.id === 'string' && sourceStrip.id.trim() ? sourceStrip.id.trim().slice(0, 40) : `strip-${stripIndex + 1}`,
+                title: typeof sourceStrip.title === 'string' && sourceStrip.title.trim() ? sourceStrip.title.trim().slice(0, 60) : `Strip ${stripIndex + 1}`,
+                pens: Array.from({ length: pensPerStrip }, (_, penIndex) => (
+                    sanitizeEdrPen(sourceStrip.pens?.[penIndex], stripIndex, penIndex)
+                ))
+            };
+        })
+    };
+    if (options.includePresets !== false) {
+        result.presets = Array.isArray(source.presets)
+            ? source.presets.slice(0, 20).map((preset, index) => sanitizeEdrPreset(preset, index))
+            : [];
+    }
+    return result;
+};
+
 const getDashboardConfig = () => {
     // Clone the default so we never mutate the shared constant by reference.
-    let config = readJsonSync(DASHBOARD_FULL_CONFIG_FILE, null) || JSON.parse(JSON.stringify(DEFAULT_DASHBOARD_CONFIG));
+    const defaultConfig = JSON.parse(JSON.stringify(DEFAULT_DASHBOARD_CONFIG));
+    let config = readJsonSync(DASHBOARD_FULL_CONFIG_FILE, null) || defaultConfig;
+    config = { ...defaultConfig, ...config };
 
     // Migration: Enforce allowed gauges (WOH, WOB, HTD RPM, HTD TORQUE, PCT TORQUE) and max 5
     if (config.gauges) {
@@ -935,6 +1059,15 @@ const getDashboardConfig = () => {
         config.units.depth = 'm';
     }
 
+    const version = Number(config._meta?.version);
+    config._meta = {
+        version: Number.isFinite(version) && version > 0 ? version : 1,
+        updatedAt: config._meta?.updatedAt || null,
+        updatedBy: config._meta?.updatedBy || 'system',
+        updatedByRole: config._meta?.updatedByRole || 'system'
+    };
+    config.edr = sanitizeEdrConfig(config.edr);
+
     return config;
 };
 
@@ -951,8 +1084,10 @@ app.get('/api/dashboard/layout', auth.requireAuth, (req, res) => {
 
 // API: Save Dashboard Layout (admin)
 app.post('/api/dashboard/layout', auth.requireAuth, auth.requireRole('admin'), async (req, res) => {
-    const incomingConfig = req.body;
+    const incomingConfig = { ...(req.body || {}) };
+    delete incomingConfig._meta;
     const existingConfig = getDashboardConfig();
+    const changedSections = Object.keys(incomingConfig);
 
     // Migration: Sanitize incoming gauges (Allow WOH, WOB, HTD RPM, HTD TORQUE, PCT TORQUE) and limit to 5
     if (incomingConfig.gauges) {
@@ -960,16 +1095,216 @@ app.post('/api/dashboard/layout', auth.requireAuth, auth.requireRole('admin'), a
         incomingConfig.gauges = incomingConfig.gauges.filter(g => allowedKeys.includes(g.dataKey)).slice(0, 5);
     }
 
+    if (incomingConfig.edr) {
+        incomingConfig.edr = sanitizeEdrConfig(incomingConfig.edr);
+    }
+
     // Merge existing config with incoming updates
     const mergedConfig = {
         ...existingConfig,
         ...incomingConfig
     };
+    mergedConfig.edr = sanitizeEdrConfig(mergedConfig.edr);
+    mergedConfig._meta = {
+        version: (Number(existingConfig._meta?.version) || 1) + 1,
+        updatedAt: new Date().toISOString(),
+        updatedBy: req.user?.username || 'unknown',
+        updatedByRole: req.user?.role || 'unknown'
+    };
 
     await saveDashboardConfig(mergedConfig);
+    await appendDashboardAudit({
+        id: auditId(),
+        ts: mergedConfig._meta.updatedAt,
+        version: mergedConfig._meta.version,
+        by: mergedConfig._meta.updatedBy,
+        role: mergedConfig._meta.updatedByRole,
+        sections: changedSections,
+        summary: {
+            edr: incomingConfig.edr ? {
+                stripCount: mergedConfig.edr.stripCount,
+                pensPerStrip: mergedConfig.edr.pensPerStrip,
+                metrics: mergedConfig.edr.strips.flatMap(strip => strip.pens.map(pen => pen.metric))
+            } : undefined,
+            wellInfo: incomingConfig.wellInfo || undefined
+        }
+    });
     // Real-time broadcast
     io.emit('dashboard_layout_update', mergedConfig);
     res.json({ success: true, config: mergedConfig });
+});
+
+// API: Dashboard layout audit (admin)
+app.get('/api/dashboard/audit', auth.requireAuth, auth.requireRole('admin'), (req, res) => {
+    const section = typeof req.query.section === 'string' ? req.query.section : null;
+    const limit = Math.min(200, Math.max(1, Number(req.query.limit) || 50));
+    const audit = readJsonSync(DASHBOARD_AUDIT_FILE, []);
+    const rows = Array.isArray(audit) ? audit : [];
+    const filtered = section ? rows.filter(row => row.sections?.includes(section)) : rows;
+    res.json({ events: filtered.slice(-limit).reverse() });
+});
+
+// --- Central / Fleet Baseline ---
+const CENTRAL_REGISTRY_FILE = path.join(DATA_DIR, 'central_rig_registry.json');
+const DEFAULT_CENTRAL_REGISTRY = {
+    roleMappings: {
+        admin: ['DGC', 'Corporate Digital', 'Rig Superintendent'],
+        operator: ['Rig Operator', 'Driller', 'Toolpusher'],
+        viewer: ['Asset Team', 'Planning', 'Maintenance']
+    },
+    rigs: [
+        {
+            id: 'local',
+            source: 'local',
+            rigName: 'RIG-ALPHA',
+            wellName: 'WELL-001',
+            assetType: 'Workover Rig',
+            basin: 'Local',
+            location: 'Current rig',
+            connectionMode: 'site-gateway',
+            offlineBufferCount: 0,
+            notes: 'Live rig served by this gateway'
+        }
+    ]
+};
+
+const sanitizeText = (value, fallback = '', max = 120) => (
+    typeof value === 'string' && value.trim() ? value.trim().slice(0, max) : fallback
+);
+
+const sanitizeCentralRig = (rig, index) => {
+    const source = rig && typeof rig === 'object' ? rig : {};
+    return {
+        id: sanitizeText(source.id, `rig-${index + 1}`, 60).replace(/[^A-Za-z0-9_-]/g, '-'),
+        source: source.source === 'local' ? 'local' : 'remote',
+        rigName: sanitizeText(source.rigName, `RIG-${index + 1}`, 80),
+        wellName: sanitizeText(source.wellName, '', 80),
+        assetType: sanitizeText(source.assetType, 'Workover Rig', 80),
+        basin: sanitizeText(source.basin, '', 80),
+        location: sanitizeText(source.location, '', 120),
+        connectionMode: sanitizeText(source.connectionMode, 'site-gateway', 80),
+        status: ['online', 'stale', 'offline', 'planned'].includes(source.status) ? source.status : 'planned',
+        syncStatus: ['healthy', 'stale', 'buffering', 'offline', 'not-configured'].includes(source.syncStatus) ? source.syncStatus : 'not-configured',
+        lastSyncAt: typeof source.lastSyncAt === 'string' ? source.lastSyncAt : null,
+        offlineBufferCount: Math.max(0, Number(source.offlineBufferCount) || 0),
+        syncLagSec: Math.max(0, Number(source.syncLagSec) || 0),
+        notes: sanitizeText(source.notes, '', 240)
+    };
+};
+
+const sanitizeRoleMappings = (roleMappings = {}) => {
+    const roles = ['admin', 'operator', 'viewer'];
+    return Object.fromEntries(roles.map(role => {
+        const values = Array.isArray(roleMappings[role]) ? roleMappings[role] : DEFAULT_CENTRAL_REGISTRY.roleMappings[role];
+        return [role, values.slice(0, 12).map(value => sanitizeText(value, '', 80)).filter(Boolean)];
+    }));
+};
+
+const getCentralRegistry = () => {
+    const stored = readJsonSync(CENTRAL_REGISTRY_FILE, null);
+    const source = stored && typeof stored === 'object' ? stored : DEFAULT_CENTRAL_REGISTRY;
+    const rigs = Array.isArray(source.rigs) ? source.rigs.map(sanitizeCentralRig) : DEFAULT_CENTRAL_REGISTRY.rigs;
+    if (!rigs.some(rig => rig.id === 'local')) {
+        rigs.unshift(sanitizeCentralRig(DEFAULT_CENTRAL_REGISTRY.rigs[0], 0));
+    }
+    return {
+        roleMappings: sanitizeRoleMappings(source.roleMappings),
+        rigs: rigs.slice(0, 100)
+    };
+};
+
+const saveCentralRegistry = async (registry) => writeJsonAtomic(CENTRAL_REGISTRY_FILE, registry);
+
+const enrichRig = (rig) => {
+    if (rig.source !== 'local') {
+        const lastSyncMs = rig.lastSyncAt ? Date.parse(rig.lastSyncAt) : NaN;
+        const lagSec = Number.isFinite(lastSyncMs) ? Math.max(0, Math.round((Date.now() - lastSyncMs) / 1000)) : rig.syncLagSec;
+        return {
+            ...rig,
+            syncLagSec: lagSec,
+            status: rig.status,
+            syncStatus: rig.offlineBufferCount > 0 ? 'buffering' : rig.syncStatus,
+            alarmCounts: { active: 0, unack: 0, p1: 0, p2: 0, p3: 0, highest: null },
+            currentActivity: null
+        };
+    }
+
+    const layout = getDashboardConfig();
+    const meta = latestRigData?._meta || {};
+    const alarmCounts = latestRigData?._alarms || alarms.snapshot().counts;
+    const connected = !!meta.connected && !meta.stale;
+    return {
+        ...rig,
+        rigName: layout.wellInfo?.rig || rig.rigName,
+        wellName: layout.wellInfo?.well || rig.wellName,
+        status: connected ? 'online' : (meta.stale ? 'stale' : 'offline'),
+        syncStatus: connected ? 'healthy' : (meta.stale ? 'stale' : 'offline'),
+        lastSyncAt: meta.ts || rig.lastSyncAt || null,
+        syncLagSec: Math.round((meta.age_ms || 0) / 1000),
+        offlineBufferCount: 0,
+        alarmCounts,
+        currentActivity: workover.getCurrent()
+    };
+};
+
+const getCentralSnapshot = () => {
+    const registry = getCentralRegistry();
+    const rigs = registry.rigs.map(enrichRig);
+    return {
+        generatedAt: new Date().toISOString(),
+        roleMappings: registry.roleMappings,
+        rigs,
+        summary: {
+            total: rigs.length,
+            online: rigs.filter(rig => rig.status === 'online').length,
+            stale: rigs.filter(rig => rig.status === 'stale').length,
+            offline: rigs.filter(rig => rig.status === 'offline').length,
+            buffering: rigs.filter(rig => rig.offlineBufferCount > 0).length,
+            activeAlarms: rigs.reduce((sum, rig) => sum + (rig.alarmCounts?.active || 0), 0),
+            unackedAlarms: rigs.reduce((sum, rig) => sum + (rig.alarmCounts?.unack || 0), 0)
+        }
+    };
+};
+
+app.get('/api/central/rigs', auth.requireAuth, (req, res) => res.json(getCentralSnapshot()));
+
+app.post('/api/central/rigs', auth.requireAuth, auth.requireRole('admin'), async (req, res) => {
+    const incoming = req.body && typeof req.body === 'object' ? req.body : {};
+    const registry = {
+        roleMappings: sanitizeRoleMappings(incoming.roleMappings),
+        rigs: Array.isArray(incoming.rigs) ? incoming.rigs.map(sanitizeCentralRig).slice(0, 100) : getCentralRegistry().rigs
+    };
+    if (!registry.rigs.some(rig => rig.id === 'local')) registry.rigs.unshift(sanitizeCentralRig(DEFAULT_CENTRAL_REGISTRY.rigs[0], 0));
+    await saveCentralRegistry(registry);
+    res.json({ success: true, ...getCentralSnapshot() });
+});
+
+app.get('/api/central/role-mapping', auth.requireAuth, (req, res) => {
+    res.json({ roleMappings: getCentralRegistry().roleMappings });
+});
+
+app.post('/api/central/role-mapping', auth.requireAuth, auth.requireRole('admin'), async (req, res) => {
+    const registry = getCentralRegistry();
+    registry.roleMappings = sanitizeRoleMappings(req.body?.roleMappings || req.body || {});
+    await saveCentralRegistry(registry);
+    res.json({ success: true, roleMappings: registry.roleMappings });
+});
+
+app.get('/api/central/sync-health', auth.requireAuth, (req, res) => {
+    const snapshot = getCentralSnapshot();
+    res.json({
+        generatedAt: snapshot.generatedAt,
+        summary: snapshot.summary,
+        rigs: snapshot.rigs.map(rig => ({
+            id: rig.id,
+            rigName: rig.rigName,
+            status: rig.status,
+            syncStatus: rig.syncStatus,
+            lastSyncAt: rig.lastSyncAt,
+            syncLagSec: rig.syncLagSec,
+            offlineBufferCount: rig.offlineBufferCount
+        }))
+    });
 });
 
 // --- Workover: Activity / NPT ---

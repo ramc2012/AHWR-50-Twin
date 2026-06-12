@@ -8,7 +8,7 @@ import {
     ReferenceLine, Legend
 } from 'recharts';
 import { Gauge as GaugeIcon, Wrench, ListChecks } from 'lucide-react';
-import axios from 'axios';
+import axios from '../../api';
 import { socket } from '../../socket';
 import AnalogGauge from '../Common/AnalogGauge';
 import GaugeCard from '../Common/GaugeCard';

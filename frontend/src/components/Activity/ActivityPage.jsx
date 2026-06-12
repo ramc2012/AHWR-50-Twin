@@ -5,7 +5,7 @@ import {
     TableRow, Snackbar, Alert
 } from '@mui/material';
 import { Activity as ActivityIcon, Clock, Zap, RotateCcw, CheckCircle2, AlertTriangle } from 'lucide-react';
-import axios from 'axios';
+import axios from '../../api';
 import { socket } from '../../socket';
 import { useAuth } from '../../context/AuthContext';
 import { formatDuration, formatClock, secondsSince, todayISO } from '../../utils/format';

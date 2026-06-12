@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Box, Typography, Button, Tooltip } from '@mui/material';
 import { Bell, BellOff, Volume2, VolumeX, Check } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-import axios from 'axios';
+import axios from '../../api';
 import { socket } from '../../socket';
 import { useAuth } from '../../context/AuthContext';
 import { priorityColor } from '../../utils/alarms';

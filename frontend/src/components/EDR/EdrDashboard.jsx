@@ -1,117 +1,262 @@
-import React, { useState, useEffect } from 'react';
-import { Box, Typography, Paper, Grid, MenuItem, Select, FormControl, Button, FormGroup, ListSubheader } from '@mui/material';
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import {
+    Alert,
+    Box,
+    Button,
+    Chip,
+    Dialog,
+    DialogActions,
+    DialogContent,
+    DialogTitle,
+    FormControl,
+    Grid,
+    ListSubheader,
+    MenuItem,
+    Paper,
+    Select,
+    Snackbar,
+    TextField,
+    Tooltip as MuiTooltip,
+    Typography
+} from '@mui/material';
+import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+import { Clock, Download, History, Printer, RotateCcw, Save, Settings, Trash2 } from 'lucide-react';
+import axios from '../../api';
 import { socket } from '../../socket';
-import axios from 'axios';
-import { Clock } from 'lucide-react';
+import { useAuth } from '../../context/AuthContext';
+import edrCatalog from '../../../../shared/edrMetrics.json';
 
-const AVAILABLE_METRICS = {
-    drilling: ['hook_load', 'wob', 'bit_depth', 'hole_depth', 'rop', 'rpm', 'torque', 'delta_torque'],
-    drawworks: ['hook_load', 'block_position'],
-    mudpump: ['spm', 'pressure', 'total_spm', 'flow_in', 'flow_out_percentage'],
-    fluid: ['total_tank_volume', 'tank_gain_loss', 'trip_tank'],
-    cat_engine: ['rpm', 'load', 'coolant_temp', 'fuel_pressure', 'oil_pressure', 'battery_voltage', 'fuel_rate'],
-    htd: ['rpm', 'torque', 'inclination', 'vertical_speed'],
-    hpu: ['aux_pressure', 'discharge_pressure', 'oil_temp', 'oil_level'],
-    pct: ['makeup_torque', 'last_makeup_torque', 'clamp_up_pressure', 'clamp_low_pressure'],
-    cwk: ['clamp_pressure', 'clamp_force'],
-    acs: ['block_position', 'crownsaver', 'floorsaver', 'bottomsaver', 'upper_tag', 'lower_tag']
-};
-
-const ALL_METRICS = Object.entries(AVAILABLE_METRICS).flatMap(([category, fields]) =>
-    fields.map(field => ({
-        value: `${category}.${field}`,
-        label: `${category.toUpperCase()} - ${field.replace(/_/g, ' ')}`,
-        shortLabel: field.replace(/_/g, ' ')
-    }))
+const AVAILABLE_METRICS = Object.fromEntries(
+    edrCatalog.categories.map(category => [category.id, category.fields.map(field => field.id)])
 );
 
-const DEFAULT_TRACKS = [
-    {
-        left: { metric: 'cat_engine.rpm', min: 0, max: 2000 },
-        right: { metric: 'drawworks.hook_load', min: 0, max: 500 }
-    },
-    {
-        left: { metric: 'mudpump.pressure', min: 0, max: 500 },
-        right: { metric: 'mudpump.spm', min: 0, max: 200 }
-    },
-    {
-        left: { metric: 'cat_engine.coolant_temp', min: 0, max: 120 },
-        right: { metric: 'cat_engine.oil_pressure', min: 0, max: 10 }
+const METRIC_OPTIONS = edrCatalog.categories.flatMap(category => (
+    category.fields.map(field => ({
+        ...field,
+        value: `${category.id}.${field.id}`,
+        category: category.id,
+        categoryLabel: category.label,
+        shortLabel: field.label
+    }))
+));
+const METRIC_LOOKUP = new Map(METRIC_OPTIONS.map(option => [option.value, option]));
+const METRIC_VALUES = new Set(METRIC_OPTIONS.map(option => option.value));
+
+const PEN_COLORS = ['#38bdf8', '#fbbf24', '#4ade80', '#f472b6', '#a78bfa', '#fb7185', '#22d3ee', '#f97316'];
+const STRIP_OPTIONS = [1, 2, 3, 4, 5, 6];
+const PEN_OPTIONS = [1, 2, 3, 4];
+const COLOR_RE = /^#[0-9a-f]{6}$/i;
+
+const DEFAULT_EDR_CONFIG = edrCatalog.defaultLayout;
+
+const menuProps = {
+    PaperProps: {
+        sx: {
+            bgcolor: '#0f172a',
+            color: '#e5e7eb',
+            border: '1px solid #334155',
+            maxHeight: 360
+        }
     }
-];
+};
+
+const formFieldSx = {
+    '& .MuiInputBase-root': { color: '#e5e7eb', bgcolor: '#0f172a' },
+    '& .MuiInputLabel-root': { color: '#94a3b8' },
+    '& .MuiOutlinedInput-notchedOutline': { borderColor: '#334155' },
+    '&:hover .MuiOutlinedInput-notchedOutline': { borderColor: '#64748b' },
+    '& .MuiSvgIcon-root': { color: '#94a3b8' }
+};
+
+const selectSx = {
+    color: '#e5e7eb',
+    bgcolor: '#0f172a',
+    '& .MuiOutlinedInput-notchedOutline': { borderColor: '#334155' },
+    '&:hover .MuiOutlinedInput-notchedOutline': { borderColor: '#64748b' },
+    '& .MuiSvgIcon-root': { color: '#94a3b8' }
+};
+
+const getRangeMs = (range) => {
+    if (range === '-1m') return 60 * 1000;
+    if (range === '-5m') return 5 * 60 * 1000;
+    if (range === '-10m') return 10 * 60 * 1000;
+    if (range === '-15m') return 15 * 60 * 1000;
+    if (range === '-1h') return 60 * 60 * 1000;
+    if (range === '-12h') return 12 * 60 * 60 * 1000;
+    if (range === '-24h') return 24 * 60 * 60 * 1000;
+    return 15 * 60 * 1000;
+};
+
+const cloneConfig = (config) => JSON.parse(JSON.stringify(config));
+
+const clampCount = (value, fallback, min, max) => {
+    const parsed = Number.parseInt(value, 10);
+    if (!Number.isFinite(parsed)) return fallback;
+    return Math.min(max, Math.max(min, parsed));
+};
+
+const toNumber = (value, fallback) => {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : fallback;
+};
+
+const getDefaultStrip = (stripIndex) => DEFAULT_EDR_CONFIG.strips[stripIndex % DEFAULT_EDR_CONFIG.strips.length];
+
+const getDefaultPen = (stripIndex, penIndex) => {
+    const strip = getDefaultStrip(stripIndex);
+    return strip.pens[penIndex % strip.pens.length] || DEFAULT_EDR_CONFIG.strips[0].pens[0];
+};
+
+const normalizeLegacyStrips = (config) => {
+    if (Array.isArray(config?.strips)) return config.strips;
+    if (!Array.isArray(config?.tracks)) return [];
+    return config.tracks.map((track, stripIndex) => ({
+        id: `strip-${stripIndex + 1}`,
+        title: `Strip ${stripIndex + 1}`,
+        pens: [track.left, track.right].filter(Boolean)
+    }));
+};
+
+const normalizePen = (pen, stripIndex, penIndex) => {
+    const fallback = getDefaultPen(stripIndex, penIndex);
+    const source = pen && typeof pen === 'object' ? pen : {};
+    const metric = METRIC_VALUES.has(source.metric) ? source.metric : fallback.metric;
+    const meta = METRIC_LOOKUP.get(metric);
+    const min = toNumber(source.min, fallback.min ?? meta?.defaultMin ?? 0);
+    let max = toNumber(source.max, fallback.max ?? meta?.defaultMax ?? 1);
+    if (max <= min) max = min + 1;
+
+    return {
+        id: typeof source.id === 'string' && source.id ? source.id : `s${stripIndex + 1}p${penIndex + 1}`,
+        metric,
+        min,
+        max,
+        color: COLOR_RE.test(source.color || '') ? source.color : PEN_COLORS[(stripIndex + penIndex) % PEN_COLORS.length]
+    };
+};
+
+const normalizeEdrPreset = (preset, index) => {
+    const source = preset && typeof preset === 'object' ? preset : {};
+    const configSource = source.config && typeof source.config === 'object' ? source.config : source;
+    return {
+        id: typeof source.id === 'string' && source.id ? source.id : `preset-${index + 1}`,
+        name: typeof source.name === 'string' && source.name ? source.name : `Preset ${index + 1}`,
+        createdAt: typeof source.createdAt === 'string' ? source.createdAt : '',
+        createdBy: typeof source.createdBy === 'string' ? source.createdBy : '',
+        config: normalizeEdrConfig(configSource, { includePresets: false })
+    };
+};
+
+const normalizeEdrConfig = (config = DEFAULT_EDR_CONFIG, options = { includePresets: true }) => {
+    const source = config && typeof config === 'object' ? config : DEFAULT_EDR_CONFIG;
+    const sourceStrips = normalizeLegacyStrips(source);
+    const stripCount = clampCount(source.stripCount ?? sourceStrips.length, DEFAULT_EDR_CONFIG.stripCount, 1, 6);
+    const pensPerStrip = clampCount(source.pensPerStrip, DEFAULT_EDR_CONFIG.pensPerStrip, 1, 4);
+
+    const normalized = {
+        stripCount,
+        pensPerStrip,
+        strips: Array.from({ length: stripCount }, (_, stripIndex) => {
+            const fallbackStrip = getDefaultStrip(stripIndex);
+            const sourceStrip = sourceStrips[stripIndex] || fallbackStrip;
+            return {
+                id: typeof sourceStrip.id === 'string' && sourceStrip.id ? sourceStrip.id : `strip-${stripIndex + 1}`,
+                title: typeof sourceStrip.title === 'string' && sourceStrip.title ? sourceStrip.title : fallbackStrip.title,
+                pens: Array.from({ length: pensPerStrip }, (_, penIndex) => (
+                    normalizePen(sourceStrip.pens?.[penIndex], stripIndex, penIndex)
+                ))
+            };
+        })
+    };
+    if (options.includePresets !== false) {
+        normalized.presets = Array.isArray(source.presets)
+            ? source.presets.slice(0, 20).map((preset, index) => normalizeEdrPreset(preset, index))
+            : [];
+    }
+    return normalized;
+};
+
+const metricLabel = (metric) => {
+    const meta = METRIC_LOOKUP.get(metric);
+    return meta ? `${meta.categoryLabel} - ${meta.label}` : metric.replace(/[._]/g, ' ');
+};
+const metricShortLabel = (metric) => METRIC_LOOKUP.get(metric)?.shortLabel || metric.replace(/[._]/g, ' ');
+const metricUnit = (metric) => METRIC_LOOKUP.get(metric)?.unit || '';
+const metricPrecision = (metric) => METRIC_LOOKUP.get(metric)?.precision ?? 1;
+
+const metricOptions = (keyPrefix = 'metric') => edrCatalog.categories.flatMap(category => [
+    <ListSubheader key={`${keyPrefix}-${category.id}`} sx={{ bgcolor: '#101827', color: '#7dd3fc', fontWeight: 800, lineHeight: '32px' }}>
+        {category.label.toUpperCase()}
+    </ListSubheader>,
+    ...category.fields.map(field => (
+        <MenuItem key={`${keyPrefix}-${category.id}.${field.id}`} value={`${category.id}.${field.id}`}>
+            <Box component="span" sx={{ color: '#64748b', fontSize: '0.7rem', fontWeight: 800, textTransform: 'uppercase', mr: 1 }}>
+                {category.label}
+            </Box>
+            {field.label} {field.unit ? `(${field.unit})` : ''}
+        </MenuItem>
+    ))
+]);
 
 export default function EdrDashboard() {
+    const { user } = useAuth();
+    const canPersistConfig = user?.role === 'admin';
     const [data, setData] = useState([]);
-    const [tracks, setTracks] = useState(DEFAULT_TRACKS);
+    const [edrConfig, setEdrConfig] = useState(() => normalizeEdrConfig(DEFAULT_EDR_CONFIG));
+    const [draftConfig, setDraftConfig] = useState(() => normalizeEdrConfig(DEFAULT_EDR_CONFIG));
+    const [isConfigOpen, setIsConfigOpen] = useState(false);
     const [timeRange, setTimeRange] = useState('-15m');
     const [customRange, setCustomRange] = useState({ start: '', end: '' });
     const [isCustom, setIsCustom] = useState(false);
     const [showCustomDate, setShowCustomDate] = useState(false);
+    const [notice, setNotice] = useState({ open: false, severity: 'success', message: '' });
+    const [selectedPresetId, setSelectedPresetId] = useState('default');
+    const [presetName, setPresetName] = useState('');
+    const [auditEvents, setAuditEvents] = useState([]);
 
-    // How many ms worth of data to keep for each range
-    const getRangeMs = (range) => {
-        if (range === '-1m') return 60 * 1000;
-        if (range === '-5m') return 5 * 60 * 1000;
-        if (range === '-10m') return 10 * 60 * 1000;
-        if (range === '-15m') return 15 * 60 * 1000;
-        if (range === '-1h') return 60 * 60 * 1000;
-        if (range === '-12h') return 12 * 60 * 60 * 1000;
-        if (range === '-24h') return 24 * 60 * 60 * 1000;
-        return 15 * 60 * 1000;
-    };
+    const configuredMetrics = useMemo(() => (
+        Array.from(new Set(edrConfig.strips.flatMap(strip => strip.pens.map(pen => pen.metric))))
+    ), [edrConfig]);
 
-    // Fetch history from API
-    const fetchHistory = async () => {
+    const gridWidth = useMemo(() => Math.max(2, 12 / edrConfig.stripCount), [edrConfig.stripCount]);
+
+    const presetOptions = useMemo(() => ([
+        { id: 'default', name: 'Default EDR', createdBy: 'system', config: normalizeEdrConfig(DEFAULT_EDR_CONFIG, { includePresets: false }) },
+        ...(draftConfig.presets || [])
+    ]), [draftConfig.presets]);
+
+    const buildHistoryUrl = useCallback(() => {
+        const params = new URLSearchParams();
+        if (customRange.start && customRange.end) {
+            params.set('start', new Date(customRange.start).toISOString());
+            params.set('stop', new Date(customRange.end).toISOString());
+        } else {
+            params.set('range', timeRange);
+        }
+        return `/api/history?${params.toString()}`;
+    }, [customRange.end, customRange.start, timeRange]);
+
+    const fetchHistory = useCallback(async () => {
         try {
-            let url = '/api/history';
-            if (customRange.start && customRange.end) {
-                url += `?start=${new Date(customRange.start).toISOString()}&stop=${new Date(customRange.end).toISOString()}`;
-            } else {
-                url += `?range=${timeRange}`;
-            }
-
-            const res = await axios.get(url);
-            if (res.data && res.data.length > 0) {
-                setData(res.data);
-            } else {
-                if (isCustom || (customRange.start && customRange.end)) {
-                    setData([]);
-                }
-            }
+            const res = await axios.get(buildHistoryUrl());
+            setData(Array.isArray(res.data) ? res.data : []);
         } catch (err) {
-            console.error("Failed to fetch history", err);
-            if (isCustom || (customRange.start && customRange.end)) {
-                setData([]);
-            }
+            console.error('Failed to fetch history', err);
+            setData([]);
         }
-    };
+    }, [buildHistoryUrl]);
 
-    useEffect(() => {
-        if (!isCustom) {
-            fetchHistory();
-
-            // Also fetch the single latest point for immediate readout update
-            axios.get('/api/rig/latest')
-                .then(({ data: latestPoint }) => {
-                    if (latestPoint && Object.keys(latestPoint).length > 0) {
-                        processLivePoint(latestPoint);
-                    }
-                })
-                .catch(err => console.error("Failed to fetch latest EDR point:", err));
+    const loadAuditEvents = useCallback(async () => {
+        if (!canPersistConfig) return;
+        try {
+            const res = await axios.get('/api/dashboard/audit?section=edr&limit=8');
+            setAuditEvents(Array.isArray(res.data?.events) ? res.data.events : []);
+        } catch (err) {
+            console.error('Failed to fetch EDR audit:', err);
         }
+    }, [canPersistConfig]);
 
-        if (!isCustom) {
-            const handleSocketData = (newData) => {
-                processLivePoint(newData);
-            };
-
-            socket.on('rig_data', handleSocketData);
-            return () => socket.off('rig_data', handleSocketData);
-        }
-    }, [tracks, timeRange, isCustom]);
-
-    const processLivePoint = (newData) => {
+    const processLivePoint = useCallback((newData) => {
         setData(prev => {
             const now = new Date();
             const newPoint = {
@@ -119,7 +264,7 @@ export default function EdrDashboard() {
                 timestamp: now.getTime()
             };
 
-            Object.keys(newData).forEach(measurement => {
+            Object.keys(newData || {}).forEach(measurement => {
                 if (typeof newData[measurement] === 'object' && newData[measurement] !== null) {
                     Object.keys(newData[measurement]).forEach(field => {
                         newPoint[`${measurement}.${field}`] = newData[measurement][field];
@@ -127,32 +272,69 @@ export default function EdrDashboard() {
                 }
             });
 
-            // Ensure all track metrics have at least a 0 value if missing
-            tracks.forEach(track => {
-                if (newPoint[track.left.metric] === undefined) newPoint[track.left.metric] = 0;
-                if (newPoint[track.right.metric] === undefined) newPoint[track.right.metric] = 0;
+            configuredMetrics.forEach(metric => {
+                if (newPoint[metric] === undefined) newPoint[metric] = null;
             });
 
-            // Merge and deduplicate
             const merged = [...prev, newPoint];
             const uniqueMap = new Map();
             merged.forEach(item => {
-                // If timestamp is within 1s, consider it same for EDR chart smoothing
-                const key = Math.floor(item.timestamp / 1000);
-                if (!uniqueMap.has(key)) {
-                    uniqueMap.set(key, item);
-                }
+                const key = Math.floor((item.timestamp || 0) / 1000);
+                if (!uniqueMap.has(key)) uniqueMap.set(key, item);
             });
 
-            const sorted = Array.from(uniqueMap.values()).sort((a, b) => a.timestamp - b.timestamp);
-
-            // Trim data older than selected range
             const cutoff = now.getTime() - getRangeMs(timeRange);
-            const trimmed = sorted.filter(pt => (pt.timestamp || 0) >= cutoff);
-
-            return trimmed;
+            return Array.from(uniqueMap.values())
+                .sort((a, b) => a.timestamp - b.timestamp)
+                .filter(pt => (pt.timestamp || 0) >= cutoff);
         });
-    };
+    }, [configuredMetrics, timeRange]);
+
+    useEffect(() => {
+        let mounted = true;
+
+        axios.get('/api/dashboard/layout')
+            .then(({ data: layout }) => {
+                if (!mounted) return;
+                const next = normalizeEdrConfig(layout?.edr || DEFAULT_EDR_CONFIG);
+                setEdrConfig(next);
+                setDraftConfig(next);
+            })
+            .catch(err => console.error('Failed to fetch EDR layout:', err));
+
+        const handleLayoutUpdate = (layout) => {
+            if (!layout?.edr) return;
+            const next = normalizeEdrConfig(layout.edr);
+            setEdrConfig(next);
+            setDraftConfig(next);
+        };
+
+        socket.on('dashboard_layout_update', handleLayoutUpdate);
+        return () => {
+            mounted = false;
+            socket.off('dashboard_layout_update', handleLayoutUpdate);
+        };
+    }, []);
+
+    useEffect(() => {
+        if (isCustom) return undefined;
+
+        fetchHistory();
+
+        axios.get('/api/rig/latest')
+            .then(({ data: latestPoint }) => {
+                if (latestPoint && Object.keys(latestPoint).length > 0) processLivePoint(latestPoint);
+            })
+            .catch(err => console.error('Failed to fetch latest EDR point:', err));
+
+        const handleSocketData = (newData) => processLivePoint(newData);
+        socket.on('rig_data', handleSocketData);
+        return () => socket.off('rig_data', handleSocketData);
+    }, [fetchHistory, isCustom, processLivePoint]);
+
+    useEffect(() => {
+        if (isConfigOpen) loadAuditEvents();
+    }, [isConfigOpen, loadAuditEvents]);
 
     const applyCustomRange = () => {
         if (customRange.start && customRange.end) {
@@ -167,53 +349,236 @@ export default function EdrDashboard() {
         setCustomRange({ start: '', end: '' });
     };
 
-    const handleTrackMetricChange = (trackIndex, side, newMetric) => {
-        const newTracks = [...tracks];
-        newTracks[trackIndex][side] = { ...newTracks[trackIndex][side], metric: newMetric };
-        setTracks(newTracks);
+    const openConfig = () => {
+        setDraftConfig(cloneConfig(edrConfig));
+        setSelectedPresetId('default');
+        setPresetName('');
+        setIsConfigOpen(true);
     };
 
-    const handleTrackScaleChange = (trackIndex, side, field, value) => {
-        const newTracks = [...tracks];
-        newTracks[trackIndex][side] = { ...newTracks[trackIndex][side], [field]: Number(value) };
-        setTracks(newTracks);
+    const handleDraftCountChange = (field, value) => {
+        setDraftConfig(prev => normalizeEdrConfig({ ...prev, [field]: Number(value) }));
     };
 
-    // Helper to get latest value
+    const handleDraftStripChange = (stripIndex, value) => {
+        setDraftConfig(prev => ({
+            ...prev,
+            strips: prev.strips.map((strip, index) => (
+                index === stripIndex ? { ...strip, title: value } : strip
+            ))
+        }));
+    };
+
+    const handleDraftPenChange = (stripIndex, penIndex, field, value) => {
+        setDraftConfig(prev => ({
+            ...prev,
+            strips: prev.strips.map((strip, currentStripIndex) => (
+                currentStripIndex !== stripIndex ? strip : {
+                    ...strip,
+                    pens: strip.pens.map((pen, currentPenIndex) => (
+                        currentPenIndex === penIndex ? (() => {
+                            if (field !== 'metric') return { ...pen, [field]: value };
+                            const meta = METRIC_LOOKUP.get(value);
+                            return {
+                                ...pen,
+                                metric: value,
+                                min: meta?.defaultMin ?? pen.min,
+                                max: meta?.defaultMax ?? pen.max
+                            };
+                        })() : pen
+                    ))
+                }
+            ))
+        }));
+    };
+
+    const resetDraftConfig = () => {
+        setDraftConfig(prev => ({ ...normalizeEdrConfig(DEFAULT_EDR_CONFIG, { includePresets: false }), presets: prev.presets || [] }));
+        setSelectedPresetId('default');
+        setPresetName('');
+    };
+
+    const applyPreset = (presetId) => {
+        const preset = presetOptions.find(option => option.id === presetId);
+        if (!preset) return;
+        const next = normalizeEdrConfig(preset.config, { includePresets: false });
+        setDraftConfig(prev => ({ ...next, presets: prev.presets || [] }));
+        setSelectedPresetId(presetId);
+        setPresetName(preset.id === 'default' ? '' : preset.name);
+    };
+
+    const savePreset = () => {
+        const cleanName = presetName.trim() || `${draftConfig.stripCount}x${draftConfig.pensPerStrip} EDR`;
+        const id = selectedPresetId && selectedPresetId !== 'default'
+            ? selectedPresetId
+            : `preset-${Date.now().toString(36)}`;
+        const preset = {
+            id,
+            name: cleanName,
+            createdAt: new Date().toISOString(),
+            createdBy: user?.username || 'session',
+            config: normalizeEdrConfig(draftConfig, { includePresets: false })
+        };
+        setDraftConfig(prev => ({
+            ...prev,
+            presets: [...(prev.presets || []).filter(item => item.id !== id), preset]
+        }));
+        setSelectedPresetId(id);
+        setPresetName(cleanName);
+    };
+
+    const deletePreset = () => {
+        if (!selectedPresetId || selectedPresetId === 'default') return;
+        setDraftConfig(prev => ({
+            ...prev,
+            presets: (prev.presets || []).filter(item => item.id !== selectedPresetId)
+        }));
+        setSelectedPresetId('default');
+        setPresetName('');
+    };
+
+    const saveDraftConfig = async () => {
+        const next = normalizeEdrConfig(draftConfig);
+        setEdrConfig(next);
+        setDraftConfig(next);
+        setIsConfigOpen(false);
+
+        if (!canPersistConfig) {
+            setNotice({
+                open: true,
+                severity: 'info',
+                message: 'Applied for this session. Admin login is required to save globally.'
+            });
+            return;
+        }
+
+        try {
+            const res = await axios.post('/api/dashboard/layout', { edr: next });
+            const saved = normalizeEdrConfig(res.data?.config?.edr || next);
+            setEdrConfig(saved);
+            setDraftConfig(saved);
+            setNotice({ open: true, severity: 'success', message: 'EDR configuration saved.' });
+            loadAuditEvents();
+        } catch (err) {
+            console.error('Failed to save EDR configuration:', err);
+            setNotice({
+                open: true,
+                severity: 'error',
+                message: err.response?.data?.error || 'Failed to save EDR configuration.'
+            });
+        }
+    };
+
+    const escapeCsv = (value) => {
+        const text = value == null ? '' : String(value);
+        return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+    };
+
+    const exportCsv = () => {
+        const metrics = Array.from(new Set(edrConfig.strips.flatMap(strip => strip.pens.map(pen => pen.metric))));
+        const headers = [
+            'Timestamp',
+            ...metrics.map(metric => `${metricLabel(metric)}${metricUnit(metric) ? ` (${metricUnit(metric)})` : ''}`)
+        ];
+        const rows = data.map(row => [
+            row.timestamp ? new Date(row.timestamp).toISOString() : row.name,
+            ...metrics.map(metric => {
+                const value = row[metric];
+                return Number.isFinite(Number(value)) ? Number(value).toFixed(metricPrecision(metric)) : '';
+            })
+        ]);
+        const csv = [headers, ...rows].map(row => row.map(escapeCsv).join(',')).join('\n');
+        const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = `edr-${new Date().toISOString().replace(/[:.]/g, '-')}.csv`;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        URL.revokeObjectURL(url);
+        setNotice({ open: true, severity: 'success', message: `Exported ${rows.length} EDR rows.` });
+    };
+
+    const printEdr = () => {
+        window.print();
+    };
+
     const getLatestValue = (metric) => {
-        if (data.length === 0) return 0;
-        return Number(data[data.length - 1][metric] || 0).toFixed(1);
+        if (data.length === 0) return '0.0';
+        const latest = data[data.length - 1][metric];
+        const precision = metricPrecision(metric);
+        return Number.isFinite(Number(latest)) ? Number(latest).toFixed(precision) : Number(0).toFixed(precision);
     };
 
     return (
-        <Box sx={{ height: 'calc(100vh - 100px)', display: 'flex', flexDirection: 'column' }}>
+        <Box sx={{ height: 'calc(100vh - 100px)', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
             <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 2, alignItems: 'center', flexWrap: 'wrap', gap: 2 }}>
-                <Typography variant="h5" sx={{ fontWeight: 'bold' }}>Electronic Drilling Recorder (EDR)</Typography>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap' }}>
+                    <Typography variant="h5" sx={{ fontWeight: 'bold' }}>Electronic Drilling Recorder (EDR)</Typography>
+                    <Chip
+                        size="small"
+                        label={`${edrConfig.stripCount} strips x ${edrConfig.pensPerStrip} pens`}
+                        sx={{ bgcolor: '#172033', color: '#7dd3fc', border: '1px solid #334155', fontWeight: 800 }}
+                    />
+                    <Button
+                        variant="outlined"
+                        size="small"
+                        startIcon={<Settings size={16} />}
+                        onClick={openConfig}
+                        sx={{ color: '#e5e7eb', borderColor: '#334155', bgcolor: '#111827' }}
+                    >
+                        Configure
+                    </Button>
+                    <Button
+                        variant="outlined"
+                        size="small"
+                        startIcon={<Download size={16} />}
+                        onClick={exportCsv}
+                        sx={{ color: '#e5e7eb', borderColor: '#334155', bgcolor: '#111827' }}
+                    >
+                        Export
+                    </Button>
+                    <Button
+                        variant="outlined"
+                        size="small"
+                        startIcon={<Printer size={16} />}
+                        onClick={printEdr}
+                        sx={{ color: '#e5e7eb', borderColor: '#334155', bgcolor: '#111827' }}
+                    >
+                        Print
+                    </Button>
+                </Box>
 
-                <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
-                    {/* Watch Symbol for Custom Range Dropdown */}
+                <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', flexWrap: 'wrap' }}>
                     <Box sx={{ position: 'relative' }}>
-                        <Button
-                            variant="outlined"
-                            onClick={() => setShowCustomDate(!showCustomDate)}
-                            sx={{ color: 'white', borderColor: '#334155', height: '100%', bgcolor: '#1e293b', minWidth: '40px', px: 1 }}
-                        >
-                            <Clock size={20} />
-                        </Button>
+                        <MuiTooltip title="Custom range">
+                            <Button
+                                variant="outlined"
+                                onClick={() => setShowCustomDate(!showCustomDate)}
+                                sx={{ color: 'white', borderColor: '#334155', height: '100%', bgcolor: '#1e293b', minWidth: '40px', px: 1 }}
+                            >
+                                <Clock size={20} />
+                            </Button>
+                        </MuiTooltip>
                         {showCustomDate && (
-                            <Paper sx={{ position: 'absolute', top: '100%', left: 0, mt: 1, p: 2, bgcolor: '#0f172a', border: '1px solid #334155', zIndex: 50, width: 'max-content' }}>
-                                <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
+                            <Paper sx={{ position: 'absolute', top: '100%', right: 0, mt: 1, p: 2, bgcolor: '#0f172a', border: '1px solid #334155', zIndex: 50, width: 'max-content' }}>
+                                <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', flexWrap: 'wrap' }}>
                                     <Typography sx={{ color: '#94a3b8', fontSize: '0.875rem', fontWeight: 'bold' }}>CUSTOM RANGE</Typography>
-                                    <input
+                                    <Box
+                                        component="input"
                                         type="datetime-local"
-                                        style={{ background: 'transparent', color: 'white', border: '1px solid #334155', borderRadius: '4px', padding: '4px', colorScheme: 'dark' }}
+                                        value={customRange.start}
                                         onChange={(e) => setCustomRange(prev => ({ ...prev, start: e.target.value }))}
+                                        sx={{ bgcolor: 'transparent', color: 'white', border: '1px solid #334155', borderRadius: '4px', p: '4px', colorScheme: 'dark' }}
                                     />
-                                    <span style={{ color: '#94a3b8' }}>-</span>
-                                    <input
+                                    <Box component="span" sx={{ color: '#94a3b8' }}>-</Box>
+                                    <Box
+                                        component="input"
                                         type="datetime-local"
-                                        style={{ background: 'transparent', color: 'white', border: '1px solid #334155', borderRadius: '4px', padding: '4px', colorScheme: 'dark' }}
+                                        value={customRange.end}
                                         onChange={(e) => setCustomRange(prev => ({ ...prev, end: e.target.value }))}
+                                        sx={{ bgcolor: 'transparent', color: 'white', border: '1px solid #334155', borderRadius: '4px', p: '4px', colorScheme: 'dark' }}
                                     />
                                     <Button variant="contained" size="small" onClick={() => { applyCustomRange(); setShowCustomDate(false); }} sx={{ ml: 1 }}>Go</Button>
                                 </Box>
@@ -234,7 +599,7 @@ export default function EdrDashboard() {
                     ].map((opt) => (
                         <Button
                             key={opt.val}
-                            variant={!isCustom && timeRange === opt.val ? "contained" : "outlined"}
+                            variant={!isCustom && timeRange === opt.val ? 'contained' : 'outlined'}
                             onClick={() => handlePresetClick(opt.val)}
                             size="small"
                             sx={{
@@ -250,141 +615,317 @@ export default function EdrDashboard() {
                 </Box>
             </Box>
 
-            <Grid container spacing={1} sx={{ flexGrow: 1, minHeight: 0 }}>
-                {tracks.map((track, idx) => (
-                    <Grid item xs={12} md={4} key={idx} sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-
-                        {/* THE VERTICAL CHART */}
-                        <Paper sx={{ flexGrow: 1, bgcolor: 'black', border: '1px solid #334155', position: 'relative', overflow: 'hidden' }}>
+            <Grid container spacing={1} sx={{ flex: '1 1 auto', minHeight: 0, alignItems: 'stretch' }}>
+                {edrConfig.strips.map((strip) => (
+                    <Grid item xs={12} md={gridWidth} key={strip.id} sx={{ minHeight: { xs: 460, md: 0 }, display: 'flex', flexDirection: 'column' }}>
+                        <Paper sx={{ flex: '1 1 auto', minHeight: 0, bgcolor: 'black', border: '1px solid #334155', position: 'relative', overflow: 'hidden', borderRadius: 1 }}>
+                            <Box sx={{ position: 'absolute', top: 8, left: 8, right: 8, zIndex: 1, display: 'flex', justifyContent: 'space-between', gap: 1, alignItems: 'flex-start' }}>
+                                <Typography sx={{ color: '#e5e7eb', fontSize: '0.75rem', fontWeight: 900, textTransform: 'uppercase', letterSpacing: 0, bgcolor: 'rgba(15,23,42,0.78)', px: 1, py: 0.5, borderRadius: 1 }}>
+                                    {strip.title}
+                                </Typography>
+                                <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, justifyContent: 'flex-end' }}>
+                                    {strip.pens.map(pen => (
+                                        <Box key={`${strip.id}-${pen.id}-legend`} sx={{ display: 'flex', alignItems: 'center', gap: 0.5, bgcolor: 'rgba(15,23,42,0.78)', px: 0.75, py: 0.4, borderRadius: 1 }}>
+                                            <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: pen.color }} />
+                                            <Typography sx={{ color: '#cbd5e1', fontSize: '0.65rem', fontWeight: 800, maxWidth: 92, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                                {metricShortLabel(pen.metric)}
+                                            </Typography>
+                                        </Box>
+                                    ))}
+                                </Box>
+                            </Box>
                             <ResponsiveContainer width="100%" height="100%">
                                 <LineChart
                                     data={data}
                                     layout="vertical"
-                                    margin={{ top: 20, right: 10, left: 0, bottom: 20 }}
+                                    margin={{ top: 48, right: 12, left: 0, bottom: 16 }}
                                 >
-                                    <CartesianGrid strokeDasharray="3 3" stroke="#334155" horizontal={true} vertical={true} />
-
-                                    {/* The Time Axis (Y-Axis in vertical layout) */}
+                                    <CartesianGrid strokeDasharray="3 3" stroke="#243044" horizontal vertical />
                                     <YAxis
                                         dataKey="timestamp"
                                         type="number"
                                         scale="time"
                                         domain={isCustom && customRange.start && customRange.end ? [new Date(customRange.start).getTime(), new Date(customRange.end).getTime()] : ['dataMin', 'dataMax']}
-                                        reversed={true} // Scroll down
+                                        reversed
                                         tickFormatter={(unixTime) => new Date(unixTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })}
                                         stroke="#94a3b8"
                                         width={80}
-                                        tick={{ fontSize: 12, fill: '#22c55e' }}
+                                        tick={{ fontSize: 11, fill: '#22c55e' }}
                                     />
-
-                                    {/* Dual X-Axes for the two variables */}
-                                    <XAxis type="number" xAxisId="left" orientation="top" stroke="#38bdf8" hide={true} domain={[track.left.min, track.left.max]} />
-                                    <XAxis type="number" xAxisId="right" orientation="top" stroke="#fbbf24" hide={true} domain={[track.right.min, track.right.max]} />
-
+                                    {strip.pens.map(pen => (
+                                        <XAxis
+                                            key={`${strip.id}-${pen.id}-axis`}
+                                            type="number"
+                                            xAxisId={pen.id}
+                                            orientation="top"
+                                            hide
+                                            domain={[pen.min, pen.max]}
+                                        />
+                                    ))}
                                     <Tooltip
                                         contentStyle={{ backgroundColor: '#1e293b', border: '1px solid #334155', color: 'white' }}
                                         labelFormatter={(label) => new Date(label).toLocaleTimeString()}
+                                        formatter={(value, name) => {
+                                            const unit = metricUnit(name);
+                                            const formatted = Number.isFinite(Number(value))
+                                                ? Number(value).toFixed(metricPrecision(name))
+                                                : value;
+                                            return [`${formatted}${unit ? ` ${unit}` : ''}`, metricLabel(name)];
+                                        }}
                                     />
-
-                                    <Line type="monotone" dataKey={track.left.metric} xAxisId="left" stroke="#38bdf8" strokeWidth={2} dot={false} isAnimationActive={false} />
-                                    <Line type="monotone" dataKey={track.right.metric} xAxisId="right" stroke="#fbbf24" strokeWidth={2} dot={false} isAnimationActive={false} />
+                                    {strip.pens.map(pen => (
+                                        <Line
+                                            key={`${strip.id}-${pen.id}-line`}
+                                            type="monotone"
+                                            dataKey={pen.metric}
+                                            xAxisId={pen.id}
+                                            stroke={pen.color}
+                                            strokeWidth={2}
+                                            dot={false}
+                                            connectNulls
+                                            isAnimationActive={false}
+                                        />
+                                    ))}
                                 </LineChart>
                             </ResponsiveContainer>
                         </Paper>
 
-                        {/* BOTTOM PARAMETER READOUTS */}
-                        <Paper sx={{ display: 'flex', flexDirection: 'column', gap: 0.5, mt: 1, p: 1, bgcolor: '#d6d3d1', borderRadius: 2, border: '2px solid #a8a29e', boxShadow: 'inset 0 2px 4px rgba(255,255,255,0.5)' }}>
-                            {/* Top Parameter (Left Axis) */}
-                            <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-                                <FormControl size="small" variant="standard" sx={{ mb: 0.5 }}>
-                                    <Select
-                                        value={track.left.metric}
-                                        onChange={(e) => handleTrackMetricChange(idx, 'left', e.target.value)}
-                                        disableUnderline
-                                        sx={{
-                                            color: 'black',
-                                            fontWeight: '900',
-                                            fontSize: '0.85rem',
-                                            textTransform: 'capitalize',
-                                            bgcolor: '#f8fafc',
-                                            borderRadius: 1,
-                                            border: '1px inset #a8a29e',
-                                            px: 1,
-                                            boxShadow: '0 1px 2px rgba(0,0,0,0.1)',
-                                            '& .MuiSelect-select': { py: 0.5 }
-                                        }}
-                                    >
-                                        {Object.entries(AVAILABLE_METRICS).map(([category, fields]) => [
-                                            <ListSubheader key={`${category}-header`} sx={{ bgcolor: '#f1f5f9', fontWeight: 'bold', color: '#475569', lineHeight: '32px' }}>
-                                                {category.toUpperCase()}
-                                            </ListSubheader>,
-                                            ...fields.map(field => (
-                                                <MenuItem key={`${category}.${field}`} value={`${category}.${field}`} sx={{ pl: 3 }}>
-                                                    <Box component="span" sx={{ color: '#64748b', fontSize: '0.7rem', fontWeight: 'bold', textTransform: 'uppercase', mr: 1 }}>{category.replace('_', ' ')}</Box>
-                                                    {field.replace(/_/g, ' ')}
-                                                </MenuItem>
-                                            ))
-                                        ])}
-                                    </Select>
-                                </FormControl>
-                                <Box sx={{ width: '100%', bgcolor: 'black', py: 0.5, textAlign: 'center', border: '3px solid #78716c', borderRadius: '4px', boxShadow: 'inset 0 0 10px rgba(0,0,0,1)' }}>
-                                    <Typography variant="h5" sx={{ fontWeight: 'bold', color: '#22c55e', textShadow: '0 0 5px rgba(34, 197, 94, 0.5)', lineHeight: 1 }}>
-                                        {getLatestValue(track.left.metric)}
-                                    </Typography>
-                                </Box>
-                                <Box sx={{ display: 'flex', justifyContent: 'space-between', width: '100%', px: 0.5 }}>
-                                    <input type="number" value={track.left.min} onChange={(e) => handleTrackScaleChange(idx, 'left', 'min', e.target.value)} style={{ background: 'transparent', border: 'none', color: 'black', fontSize: '0.7rem', fontWeight: 'bold', width: '45px', textAlign: 'left', outline: 'none' }} />
-                                    <input type="number" value={track.left.max} onChange={(e) => handleTrackScaleChange(idx, 'left', 'max', e.target.value)} style={{ background: 'transparent', border: 'none', color: 'black', fontSize: '0.7rem', fontWeight: 'bold', width: '45px', textAlign: 'right', outline: 'none' }} />
-                                </Box>
-                                <Box sx={{ width: '100%', height: '1px', bgcolor: '#a8a29e', my: 0.5 }} />
-                            </Box>
-
-                            {/* Bottom Parameter (Right Axis) */}
-                            <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-                                <FormControl size="small" variant="standard" sx={{ mb: 0.5 }}>
-                                    <Select
-                                        value={track.right.metric}
-                                        onChange={(e) => handleTrackMetricChange(idx, 'right', e.target.value)}
-                                        disableUnderline
-                                        sx={{
-                                            color: 'black',
-                                            fontWeight: '900',
-                                            fontSize: '0.85rem',
-                                            textTransform: 'capitalize',
-                                            bgcolor: '#f8fafc',
-                                            borderRadius: 1,
-                                            border: '1px inset #a8a29e',
-                                            px: 1,
-                                            boxShadow: '0 1px 2px rgba(0,0,0,0.1)',
-                                            '& .MuiSelect-select': { py: 0.5 }
-                                        }}
-                                    >
-                                        {Object.entries(AVAILABLE_METRICS).map(([category, fields]) => [
-                                            <ListSubheader key={`${category}-header-right`} sx={{ bgcolor: '#f1f5f9', fontWeight: 'bold', color: '#475569', lineHeight: '32px' }}>
-                                                {category.toUpperCase()}
-                                            </ListSubheader>,
-                                            ...fields.map(field => (
-                                                <MenuItem key={`${category}.${field}`} value={`${category}.${field}`} sx={{ pl: 3 }}>
-                                                    {field.replace(/_/g, ' ')}
-                                                </MenuItem>
-                                            ))
-                                        ])}
-                                    </Select>
-                                </FormControl>
-                                <Box sx={{ width: '100%', bgcolor: 'black', py: 0.5, textAlign: 'center', border: '3px solid #78716c', borderRadius: '4px', boxShadow: 'inset 0 0 10px rgba(0,0,0,1)' }}>
-                                    <Typography variant="h5" sx={{ fontWeight: 'bold', color: '#38bdf8', textShadow: '0 0 5px rgba(56, 189, 248, 0.5)', lineHeight: 1 }}>
-                                        {getLatestValue(track.right.metric)}
-                                    </Typography>
-                                </Box>
-                                <Box sx={{ display: 'flex', justifyContent: 'space-between', width: '100%', px: 0.5 }}>
-                                    <input type="number" value={track.right.min} onChange={(e) => handleTrackScaleChange(idx, 'right', 'min', e.target.value)} style={{ background: 'transparent', border: 'none', color: 'black', fontSize: '0.7rem', fontWeight: 'bold', width: '45px', textAlign: 'left', outline: 'none' }} />
-                                    <input type="number" value={track.right.max} onChange={(e) => handleTrackScaleChange(idx, 'right', 'max', e.target.value)} style={{ background: 'transparent', border: 'none', color: 'black', fontSize: '0.7rem', fontWeight: 'bold', width: '45px', textAlign: 'right', outline: 'none' }} />
-                                </Box>
+                        <Paper sx={{ mt: 1, p: 0.75, bgcolor: '#d6d3d1', borderRadius: 1, border: '2px solid #a8a29e', boxShadow: 'inset 0 2px 4px rgba(255,255,255,0.5)' }}>
+                            <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(132px, 1fr))', gap: 0.75 }}>
+                                {strip.pens.map(pen => (
+                                    <Box key={`${strip.id}-${pen.id}-readout`} sx={{ bgcolor: '#111827', border: '2px solid #78716c', borderRadius: 1, overflow: 'hidden', minWidth: 0 }}>
+                                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, px: 0.75, py: 0.5, bgcolor: '#f8fafc' }}>
+                                            <Box sx={{ width: 8, height: 24, borderRadius: '4px', bgcolor: pen.color, flex: '0 0 auto' }} />
+                                            <Typography sx={{ color: '#111827', fontSize: '0.72rem', fontWeight: 900, textTransform: 'uppercase', lineHeight: 1.1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                                {metricShortLabel(pen.metric)}
+                                            </Typography>
+                                        </Box>
+                                        <Box sx={{ px: 1, py: 0.65, textAlign: 'center', boxShadow: 'inset 0 0 10px rgba(0,0,0,1)' }}>
+                                            <Typography sx={{ fontSize: '1.25rem', fontWeight: 900, color: '#22c55e', lineHeight: 1 }}>
+                                                {getLatestValue(pen.metric)}
+                                            </Typography>
+                                            <Typography sx={{ color: '#94a3b8', fontSize: '0.62rem', mt: 0.3 }}>
+                                                {metricUnit(pen.metric) || 'unitless'} | {pen.min} - {pen.max}
+                                            </Typography>
+                                        </Box>
+                                    </Box>
+                                ))}
                             </Box>
                         </Paper>
                     </Grid>
                 ))}
             </Grid>
+
+            <Dialog
+                open={isConfigOpen}
+                onClose={() => setIsConfigOpen(false)}
+                maxWidth="lg"
+                fullWidth
+                PaperProps={{ sx: { bgcolor: '#111827', color: '#e5e7eb', border: '1px solid #334155' } }}
+            >
+                <DialogTitle sx={{ fontWeight: 900, borderBottom: '1px solid #334155' }}>EDR Configuration</DialogTitle>
+                <DialogContent dividers sx={{ borderColor: '#334155', bgcolor: '#0b1120' }}>
+                    <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 2, mb: 2, alignItems: 'center' }}>
+                        <FormControl size="small" sx={{ minWidth: 220 }}>
+                            <Typography sx={{ color: '#94a3b8', fontSize: '0.75rem', fontWeight: 800, mb: 0.5 }}>PRESET</Typography>
+                            <Select
+                                value={selectedPresetId}
+                                onChange={(e) => applyPreset(e.target.value)}
+                                MenuProps={menuProps}
+                                sx={selectSx}
+                            >
+                                {presetOptions.map(option => (
+                                    <MenuItem key={option.id} value={option.id}>{option.name}</MenuItem>
+                                ))}
+                            </Select>
+                        </FormControl>
+                        <TextField
+                            label="Preset Name"
+                            value={presetName}
+                            onChange={(e) => setPresetName(e.target.value)}
+                            size="small"
+                            sx={{ ...formFieldSx, minWidth: 220 }}
+                        />
+                        <Button
+                            variant="outlined"
+                            startIcon={<Save size={16} />}
+                            onClick={savePreset}
+                            sx={{ color: '#e5e7eb', borderColor: '#334155', alignSelf: 'flex-end' }}
+                        >
+                            Save Preset
+                        </Button>
+                        <Button
+                            variant="outlined"
+                            startIcon={<Trash2 size={16} />}
+                            onClick={deletePreset}
+                            disabled={selectedPresetId === 'default'}
+                            sx={{ color: '#fca5a5', borderColor: '#7f1d1d', alignSelf: 'flex-end', '&.Mui-disabled': { color: '#64748b', borderColor: '#334155' } }}
+                        >
+                            Delete
+                        </Button>
+                    </Box>
+
+                    <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 2, mb: 2, alignItems: 'center' }}>
+                        <FormControl size="small" sx={{ minWidth: 180 }}>
+                            <Typography sx={{ color: '#94a3b8', fontSize: '0.75rem', fontWeight: 800, mb: 0.5 }}>NO. OF STRIPS</Typography>
+                            <Select
+                                value={draftConfig.stripCount}
+                                onChange={(e) => handleDraftCountChange('stripCount', e.target.value)}
+                                MenuProps={menuProps}
+                                sx={selectSx}
+                            >
+                                {STRIP_OPTIONS.map(option => <MenuItem key={option} value={option}>{option}</MenuItem>)}
+                            </Select>
+                        </FormControl>
+                        <FormControl size="small" sx={{ minWidth: 180 }}>
+                            <Typography sx={{ color: '#94a3b8', fontSize: '0.75rem', fontWeight: 800, mb: 0.5 }}>NO. OF PENS PER STRIP</Typography>
+                            <Select
+                                value={draftConfig.pensPerStrip}
+                                onChange={(e) => handleDraftCountChange('pensPerStrip', e.target.value)}
+                                MenuProps={menuProps}
+                                sx={selectSx}
+                            >
+                                {PEN_OPTIONS.map(option => <MenuItem key={option} value={option}>{option}</MenuItem>)}
+                            </Select>
+                        </FormControl>
+                    </Box>
+
+                    <Grid container spacing={2}>
+                        {draftConfig.strips.map((strip, stripIndex) => (
+                            <Grid item xs={12} md={6} key={strip.id}>
+                                <Paper sx={{ bgcolor: '#111827', border: '1px solid #334155', p: 1.5, borderRadius: 1 }}>
+                                    <TextField
+                                        label={`Strip ${stripIndex + 1}`}
+                                        value={strip.title}
+                                        onChange={(e) => handleDraftStripChange(stripIndex, e.target.value)}
+                                        size="small"
+                                        fullWidth
+                                        sx={{ ...formFieldSx, mb: 1.5 }}
+                                    />
+                                    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.25 }}>
+                                        {strip.pens.map((pen, penIndex) => (
+                                            <Paper key={pen.id} sx={{ bgcolor: '#0f172a', border: '1px solid #243044', p: 1.25, borderRadius: 1 }}>
+                                                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
+                                                    <Box sx={{ width: 10, height: 28, borderRadius: '4px', bgcolor: pen.color, flex: '0 0 auto' }} />
+                                                    <Typography sx={{ color: '#e5e7eb', fontWeight: 900, minWidth: 42 }}>P{penIndex + 1}</Typography>
+                                                    <FormControl size="small" fullWidth>
+                                                        <Select
+                                                            value={pen.metric}
+                                                            onChange={(e) => handleDraftPenChange(stripIndex, penIndex, 'metric', e.target.value)}
+                                                            MenuProps={menuProps}
+                                                            sx={selectSx}
+                                                        >
+                                                            {metricOptions(`${strip.id}-${pen.id}`)}
+                                                        </Select>
+                                                    </FormControl>
+                                                </Box>
+                                                <Grid container spacing={1}>
+                                                    <Grid item xs={4}>
+                                                        <TextField
+                                                            label="Min"
+                                                            type="number"
+                                                            value={pen.min}
+                                                            onChange={(e) => handleDraftPenChange(stripIndex, penIndex, 'min', e.target.value)}
+                                                            size="small"
+                                                            fullWidth
+                                                            sx={formFieldSx}
+                                                        />
+                                                    </Grid>
+                                                    <Grid item xs={4}>
+                                                        <TextField
+                                                            label="Max"
+                                                            type="number"
+                                                            value={pen.max}
+                                                            onChange={(e) => handleDraftPenChange(stripIndex, penIndex, 'max', e.target.value)}
+                                                            size="small"
+                                                            fullWidth
+                                                            sx={formFieldSx}
+                                                        />
+                                                    </Grid>
+                                                    <Grid item xs={4}>
+                                                        <TextField
+                                                            label="Color"
+                                                            type="color"
+                                                            value={COLOR_RE.test(pen.color || '') ? pen.color : '#38bdf8'}
+                                                            onChange={(e) => handleDraftPenChange(stripIndex, penIndex, 'color', e.target.value)}
+                                                            size="small"
+                                                            fullWidth
+                                                            sx={{
+                                                                ...formFieldSx,
+                                                                '& input': { height: 23, p: '4px' }
+                                                            }}
+                                                        />
+                                                    </Grid>
+                                                </Grid>
+                                            </Paper>
+                                        ))}
+                                    </Box>
+                                </Paper>
+                            </Grid>
+                        ))}
+                    </Grid>
+
+                    {canPersistConfig && (
+                        <Paper sx={{ mt: 2, bgcolor: '#111827', border: '1px solid #334155', p: 1.5, borderRadius: 1 }}>
+                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
+                                <History size={16} color="#7dd3fc" />
+                                <Typography sx={{ color: '#e5e7eb', fontWeight: 900 }}>Version History</Typography>
+                            </Box>
+                            {auditEvents.length === 0 ? (
+                                <Typography sx={{ color: '#64748b', fontSize: '0.8rem' }}>No saved EDR changes yet.</Typography>
+                            ) : (
+                                <Box sx={{ display: 'grid', gap: 0.75 }}>
+                                    {auditEvents.map(event => (
+                                        <Box key={event.id} sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: '100px 1fr 140px' }, gap: 1, alignItems: 'center', bgcolor: '#0f172a', border: '1px solid #243044', borderRadius: 1, px: 1, py: 0.75 }}>
+                                            <Typography sx={{ color: '#7dd3fc', fontWeight: 900, fontSize: '0.78rem' }}>v{event.version}</Typography>
+                                            <Typography sx={{ color: '#cbd5e1', fontSize: '0.78rem' }}>
+                                                {(event.summary?.edr?.stripCount || '-')} strips x {(event.summary?.edr?.pensPerStrip || '-')} pens by {event.by || 'unknown'}
+                                            </Typography>
+                                            <Typography sx={{ color: '#64748b', fontSize: '0.72rem', textAlign: { xs: 'left', md: 'right' } }}>
+                                                {event.ts ? new Date(event.ts).toLocaleString() : ''}
+                                            </Typography>
+                                        </Box>
+                                    ))}
+                                </Box>
+                            )}
+                        </Paper>
+                    )}
+                </DialogContent>
+                <DialogActions sx={{ borderTop: '1px solid #334155', p: 1.5, bgcolor: '#111827' }}>
+                    <Button
+                        variant="outlined"
+                        startIcon={<RotateCcw size={16} />}
+                        onClick={resetDraftConfig}
+                        sx={{ color: '#e5e7eb', borderColor: '#334155' }}
+                    >
+                        Reset
+                    </Button>
+                    <Box sx={{ flex: 1 }} />
+                    {!canPersistConfig && (
+                        <Chip size="small" label="Session only" sx={{ bgcolor: '#1e293b', color: '#fbbf24', border: '1px solid #334155', mr: 1 }} />
+                    )}
+                    <Button onClick={() => setIsConfigOpen(false)} sx={{ color: '#94a3b8' }}>Cancel</Button>
+                    <Button
+                        variant="contained"
+                        startIcon={<Save size={16} />}
+                        onClick={saveDraftConfig}
+                        sx={{ bgcolor: '#38bdf8', color: '#0f172a', fontWeight: 900 }}
+                    >
+                        {canPersistConfig ? 'Save' : 'Apply'}
+                    </Button>
+                </DialogActions>
+            </Dialog>
+
+            <Snackbar
+                open={notice.open}
+                autoHideDuration={3500}
+                onClose={() => setNotice(prev => ({ ...prev, open: false }))}
+                anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+            >
+                <Alert severity={notice.severity} variant="filled" onClose={() => setNotice(prev => ({ ...prev, open: false }))}>
+                    {notice.message}
+                </Alert>
+            </Snackbar>
         </Box>
     );
 }

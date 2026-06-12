@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="675" viewBox="0 0 1200 675">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#111827"/>
+      <stop offset="1" stop-color="#0f172a"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="10" stdDeviation="12" flood-color="#020617" flood-opacity="0.35"/>
+    </filter>
+  </defs>
+  <rect width="1200" height="675" rx="28" fill="url(#bg)"/>
+  <text x="60" y="86" fill="#e5e7eb" font-family="Inter, Arial, sans-serif" font-size="40" font-weight="700">Technology Stack</text>
+  <text x="60" y="126" fill="#94a3b8" font-family="Inter, Arial, sans-serif" font-size="20">Dockerized industrial web app for real-time monitoring</text>
+
+  <g filter="url(#shadow)" font-family="Inter, Arial, sans-serif">
+    <rect x="70" y="205" width="245" height="275" rx="18" fill="#1e293b" stroke="#334155"/>
+    <rect x="70" y="205" width="245" height="10" rx="5" fill="#38bdf8"/>
+    <text x="100" y="258" fill="#38bdf8" font-size="25" font-weight="700">Frontend</text>
+    <text x="100" y="306" fill="#e5e7eb" font-size="20">React 18</text>
+    <text x="100" y="340" fill="#e5e7eb" font-size="20">Vite 5</text>
+    <text x="100" y="374" fill="#e5e7eb" font-size="20">Material UI</text>
+    <text x="100" y="408" fill="#e5e7eb" font-size="20">Recharts</text>
+    <text x="100" y="442" fill="#e5e7eb" font-size="20">Socket.IO client</text>
+
+    <rect x="345" y="205" width="245" height="275" rx="18" fill="#1e293b" stroke="#334155"/>
+    <rect x="345" y="205" width="245" height="10" rx="5" fill="#a78bfa"/>
+    <text x="375" y="258" fill="#a78bfa" font-size="25" font-weight="700">Backend</text>
+    <text x="375" y="306" fill="#e5e7eb" font-size="20">Node.js</text>
+    <text x="375" y="340" fill="#e5e7eb" font-size="20">Express</text>
+    <text x="375" y="374" fill="#e5e7eb" font-size="20">Socket.IO</text>
+    <text x="375" y="408" fill="#e5e7eb" font-size="20">JWT + RBAC</text>
+    <text x="375" y="442" fill="#e5e7eb" font-size="20">LDAP / AD</text>
+
+    <rect x="620" y="205" width="245" height="275" rx="18" fill="#1e293b" stroke="#334155"/>
+    <rect x="620" y="205" width="245" height="10" rx="5" fill="#fbbf24"/>
+    <text x="650" y="258" fill="#fbbf24" font-size="25" font-weight="700">Data Layer</text>
+    <text x="650" y="306" fill="#e5e7eb" font-size="20">InfluxDB 2.7</text>
+    <text x="650" y="340" fill="#e5e7eb" font-size="20">Telegraf 1.29</text>
+    <text x="650" y="374" fill="#e5e7eb" font-size="20">S7comm</text>
+    <text x="650" y="408" fill="#e5e7eb" font-size="20">Modbus TCP</text>
+    <text x="650" y="442" fill="#e5e7eb" font-size="20">Mock generator</text>
+
+    <rect x="895" y="205" width="245" height="275" rx="18" fill="#1e293b" stroke="#334155"/>
+    <rect x="895" y="205" width="245" height="10" rx="5" fill="#4ade80"/>
+    <text x="925" y="258" fill="#4ade80" font-size="25" font-weight="700">Runtime</text>
+    <text x="925" y="306" fill="#e5e7eb" font-size="20">Docker Compose</text>
+    <text x="925" y="340" fill="#e5e7eb" font-size="20">nginx frontend</text>
+    <text x="925" y="374" fill="#e5e7eb" font-size="20">Internal API</text>
+    <text x="925" y="408" fill="#e5e7eb" font-size="20">Volumes</text>
+    <text x="925" y="442" fill="#e5e7eb" font-size="20">Health checks</text>
+  </g>
+
+  <rect x="220" y="545" width="760" height="58" rx="14" fill="#0f172a" stroke="#334155"/>
+  <text x="600" y="582" text-anchor="middle" fill="#cbd5e1" font-family="Inter, Arial, sans-serif" font-size="20">Single operator URL: frontend only exposed; backend and historian stay internal</text>
+</svg>

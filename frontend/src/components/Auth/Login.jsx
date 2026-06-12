@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Box, Paper, TextField, Button, Typography, Alert, Container } from '@mui/material';
 import { User, Lock, Activity } from 'lucide-react';
-import axios from 'axios';
+import axios from '../../api';
 import { useAuth } from '../../context/AuthContext';
 
 const Login = () => {

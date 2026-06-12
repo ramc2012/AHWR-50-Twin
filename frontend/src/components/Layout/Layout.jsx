@@ -14,7 +14,8 @@ import {
     Bell,
     Wrench,
     FileText,
-    HeartPulse
+    HeartPulse,
+    Network
 } from 'lucide-react';
 import {
     Box,
@@ -54,6 +55,7 @@ const menuItems = [
     { text: 'Live Trends', icon: <ChartIcon size={20} />, path: '/trends' },
     { text: 'Reports', icon: <FileText size={20} />, path: '/reports' },
     { text: 'Maintenance', icon: <HeartPulse size={20} />, path: '/maintenance' },
+    { text: 'Fleet', icon: <Network size={20} />, path: '/fleet' },
     // Admin/Settings is appended at render time only for role 'admin'.
 ];
 

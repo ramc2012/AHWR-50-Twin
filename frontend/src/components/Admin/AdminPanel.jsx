@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Box, Typography, Tabs, Tab, Paper, TextField, Button, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, IconButton, Select, MenuItem, InputLabel, FormControl, Grid, Alert, Snackbar, Dialog, DialogTitle, DialogContent, DialogActions } from '@mui/material';
 import { Trash2, Save, Plus, AlertCircle, RefreshCw, Edit2 } from 'lucide-react';
-import axios from 'axios';
+import axios from '../../api';
 
 function TabPanel(props) {
     const { children, value, index, ...other } = props;

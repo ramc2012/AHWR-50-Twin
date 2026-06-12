@@ -4,11 +4,12 @@ ENV NODE_ENV=production
 WORKDIR /app
 
 # Install only production dependencies from the lockfile (reproducible).
-COPY package*.json ./
+COPY backend/package*.json ./
 RUN npm ci --omit=dev && npm cache clean --force
 
 # App source (node_modules excluded via .dockerignore).
-COPY . .
+COPY backend/. .
+COPY shared /shared
 
 # Writable state directory, owned by the unprivileged 'node' user.
 RUN mkdir -p /data && chown -R node:node /data /app

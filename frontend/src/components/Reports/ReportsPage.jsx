@@ -5,7 +5,7 @@ import {
     DialogContent, DialogActions, Snackbar, Alert, Chip
 } from '@mui/material';
 import { FileText, Printer, Download, Edit2 } from 'lucide-react';
-import axios from 'axios';
+import axios from '../../api';
 import { useAuth } from '../../context/AuthContext';
 import { formatDuration, formatClock, todayISO } from '../../utils/format';
 import { priorityColor } from '../../utils/alarms';

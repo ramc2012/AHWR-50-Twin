@@ -1,9 +1,10 @@
 # --- Build stage: produce the optimized static bundle ---
 FROM node:20-alpine AS build
 WORKDIR /app
-COPY package*.json ./
+COPY frontend/package*.json ./
 RUN npm install --no-audit --no-fund
-COPY . .
+COPY frontend/. .
+COPY shared /shared
 RUN npm run build
 
 # --- Serve stage: static files behind nginx (proxies /api and /socket.io) ---

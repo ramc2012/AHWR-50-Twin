@@ -6,7 +6,7 @@ import {
     FormControl, InputLabel, Select
 } from '@mui/material';
 import { HeartPulse, Wrench, SlidersHorizontal, AlertTriangle, Plus } from 'lucide-react';
-import axios from 'axios';
+import axios from '../../api';
 import { useAuth } from '../../context/AuthContext';
 import { formatHours } from '../../utils/format';
 

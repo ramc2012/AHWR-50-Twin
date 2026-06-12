@@ -100,6 +100,12 @@ const AnalogGauge = ({
 
     const hasWarn = warnLevel != null && criticalLevel != null && warnLevel < criticalLevel;
     const formattedValue = hasNumericValue ? numericValue.toFixed(0) : value;
+    const valueY = center + (gaugeSize * 0.13);
+    const unitY = center + (gaugeSize * 0.22);
+    const labelY = center - (gaugeSize * 0.16);
+    const valueFontSize = gaugeSize * 0.15;
+    const unitFontSize = gaugeSize * 0.064;
+    const labelFontSize = gaugeSize * 0.048;
 
     // Generate Ticks
     const ticks = [];
@@ -209,22 +215,45 @@ const AnalogGauge = ({
                         filter="drop-shadow(0px 2px 2px rgba(0,0,0,0.5))"
                     />
                     <circle cx={center} cy={center} r="6" fill="#334155" stroke="white" strokeWidth="1" />
-                </svg>
 
-                {/* Value & Unit - centered inside the dial. Secondary values render below. */}
-                <Box sx={{ position: 'absolute', top: '61%', left: '50%', transform: 'translate(-50%, -50%)', textAlign: 'center', maxWidth: gaugeSize * 0.48 }}>
-                    <Typography variant="h4" noWrap sx={{ color: isCritical ? dangerColor : 'white', fontWeight: 'bold', lineHeight: 1, textShadow: '0 2px 4px rgba(0,0,0,0.5)', fontSize: `${gaugeSize * 0.16}px` }}>
+                    <text
+                        x={center}
+                        y={labelY}
+                        textAnchor="middle"
+                        dominantBaseline="middle"
+                        fill="#94a3b8"
+                        fontSize={labelFontSize}
+                        fontWeight="700"
+                        letterSpacing="0"
+                    >
+                        {String(label || '').toUpperCase()}
+                    </text>
+
+                    <text
+                        x={center}
+                        y={valueY}
+                        textAnchor="middle"
+                        dominantBaseline="middle"
+                        fill={isCritical ? dangerColor : 'white'}
+                        fontSize={valueFontSize}
+                        fontWeight="800"
+                        style={{ filter: 'drop-shadow(0px 2px 2px rgba(0,0,0,0.65))' }}
+                    >
                         {formattedValue}
-                    </Typography>
-                    <Typography variant="caption" noWrap sx={{ color: '#94a3b8', fontSize: `${gaugeSize * 0.065}px`, display: 'block' }}>
-                        {unit}
-                    </Typography>
-                </Box>
+                    </text>
 
-                {/* Label - Top Center */}
-                <Typography variant="body2" noWrap sx={{ position: 'absolute', top: '29%', maxWidth: gaugeSize * 0.58, color: '#94a3b8', fontWeight: 'bold', fontSize: `${gaugeSize * 0.047}px`, textTransform: 'uppercase', letterSpacing: 0.7, textAlign: 'center' }}>
-                    {label}
-                </Typography>
+                    <text
+                        x={center}
+                        y={unitY}
+                        textAnchor="middle"
+                        dominantBaseline="middle"
+                        fill="#94a3b8"
+                        fontSize={unitFontSize}
+                        fontWeight="500"
+                    >
+                        {unit}
+                    </text>
+                </svg>
             </Box>
 
             {hasSubValue && (

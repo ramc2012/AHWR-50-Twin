@@ -3,7 +3,7 @@ import { Box, Typography, Paper, Grid, Checkbox, FormControlLabel, FormGroup, Ac
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
 import { ChevronDown, RefreshCw, Download, Clock } from 'lucide-react';
 import { socket } from '../../socket';
-import axios from 'axios';
+import axios from '../../api';
 
 const AVAILABLE_METRICS = {
     drilling: ['hook_load', 'wob', 'bit_depth', 'hole_depth', 'rop', 'rpm', 'torque', 'delta_torque'],

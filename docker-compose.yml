@@ -47,7 +47,9 @@ services:
         condition: service_healthy
 
   backend:
-    build: ./backend
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
     container_name: romii_backend
     restart: unless-stopped
     environment:
@@ -87,7 +89,9 @@ services:
     # No host port: the backend is reachable only via the frontend's nginx proxy.
 
   frontend:
-    build: ./frontend
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
     container_name: romii_frontend
     restart: unless-stopped
     ports:

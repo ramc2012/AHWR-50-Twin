@@ -4,7 +4,7 @@ import {
     TableContainer, TableHead, TableRow, TableSortLabel, Chip, Tooltip
 } from '@mui/material';
 import { ShieldAlert, Check, History as HistoryIcon, Star } from 'lucide-react';
-import axios from 'axios';
+import axios from '../../api';
 import { socket } from '../../socket';
 import { useAuth } from '../../context/AuthContext';
 import { priorityColor, stateLabel, priorityRank } from '../../utils/alarms';

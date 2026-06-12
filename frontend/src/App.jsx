@@ -14,6 +14,7 @@ const AlarmsPage = lazy(() => import('./components/Alarms/AlarmsPage'));
 const WorkoverPage = lazy(() => import('./components/Workover/WorkoverPage'));
 const ReportsPage = lazy(() => import('./components/Reports/ReportsPage'));
 const MaintenancePage = lazy(() => import('./components/Maintenance/MaintenancePage'));
+const FleetDashboard = lazy(() => import('./components/Central/FleetDashboard'));
 
 const darkTheme = createTheme({
     palette: {
@@ -68,6 +69,7 @@ function App() {
                                 <Route path="workover" element={screen(WorkoverPage)} />
                                 <Route path="reports" element={screen(ReportsPage)} />
                                 <Route path="maintenance" element={screen(MaintenancePage)} />
+                                <Route path="fleet" element={screen(FleetDashboard)} />
                                 {/* Admin / Settings restricted to role 'admin' */}
                                 <Route element={<RoleRoute allow={['admin']} />}>
                                     <Route path="admin" element={screen(AdminPanel)} />
