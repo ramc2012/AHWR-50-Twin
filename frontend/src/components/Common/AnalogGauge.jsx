@@ -17,6 +17,7 @@ const AnalogGauge = ({
     warnLevel = 0.65,    // 65% -> amber warn band
     subValue,
     subLabel,
+    subValueInside = false,
     minSize = 160,
     maxSize = 320
 }) => {
@@ -35,7 +36,7 @@ const AnalogGauge = ({
 
         const measure = () => {
             const rect = node.getBoundingClientRect();
-            const subValueReserve = hasSubValue ? 34 : 0;
+            const subValueReserve = hasSubValue && !subValueInside ? 34 : 0;
             const usableHeight = rect.height > minSize ? rect.height - subValueReserve : rect.width;
             const next = Math.round(clamp(Math.min(rect.width || maxSize, usableHeight || maxSize)));
             setMeasuredSize((current) => (Math.abs(current - next) > 1 ? next : current));
@@ -53,7 +54,7 @@ const AnalogGauge = ({
             cancelAnimationFrame(frame);
             observer.disconnect();
         };
-    }, [hasSubValue, isResponsive, maxSize, minSize]);
+    }, [hasSubValue, isResponsive, maxSize, minSize, subValueInside]);
 
     const gaugeSize = isResponsive ? measuredSize : Number(size) || 200;
 
@@ -103,9 +104,13 @@ const AnalogGauge = ({
     const valueY = center + (gaugeSize * 0.13);
     const unitY = center + (gaugeSize * 0.22);
     const labelY = center - (gaugeSize * 0.16);
+    const subValueY = center + (gaugeSize * 0.36);
+    const subLabelY = center + (gaugeSize * 0.43);
     const valueFontSize = gaugeSize * 0.15;
     const unitFontSize = gaugeSize * 0.064;
     const labelFontSize = gaugeSize * 0.048;
+    const subValueFontSize = gaugeSize * 0.082;
+    const subLabelFontSize = gaugeSize * 0.038;
 
     // Generate Ticks
     const ticks = [];
@@ -177,7 +182,7 @@ const AnalogGauge = ({
                 width: isResponsive ? '100%' : gaugeSize,
                 height: isResponsive ? '100%' : 'auto',
                 minWidth: 0,
-                minHeight: isResponsive ? minSize + (hasSubValue ? 34 : 0) : 'auto',
+                minHeight: isResponsive ? minSize + (hasSubValue && !subValueInside ? 34 : 0) : 'auto',
                 display: 'flex',
                 flexDirection: 'column',
                 alignItems: 'center',
@@ -253,10 +258,45 @@ const AnalogGauge = ({
                     >
                         {unit}
                     </text>
+
+                    {hasSubValue && subValueInside && (
+                        <>
+                            <line
+                                x1={center - (gaugeSize * 0.23)}
+                                x2={center + (gaugeSize * 0.23)}
+                                y1={center + (gaugeSize * 0.30)}
+                                y2={center + (gaugeSize * 0.30)}
+                                stroke="#334155"
+                                strokeWidth="1"
+                            />
+                            <text
+                                x={center}
+                                y={subValueY}
+                                textAnchor="middle"
+                                dominantBaseline="middle"
+                                fill="#bef264"
+                                fontSize={subValueFontSize}
+                                fontWeight="800"
+                            >
+                                {subValue}
+                            </text>
+                            <text
+                                x={center}
+                                y={subLabelY}
+                                textAnchor="middle"
+                                dominantBaseline="middle"
+                                fill="#94a3b8"
+                                fontSize={subLabelFontSize}
+                                fontWeight="600"
+                            >
+                                {subLabel || ''}
+                            </text>
+                        </>
+                    )}
                 </svg>
             </Box>
 
-            {hasSubValue && (
+            {hasSubValue && !subValueInside && (
                 <Box sx={{ mt: -1.5, minWidth: gaugeSize * 0.52, px: 1, py: 0.45, borderTop: '1px solid #334155', textAlign: 'center' }}>
                     <Typography variant="body2" noWrap sx={{ color: '#bef264', fontWeight: 'bold', fontSize: `${gaugeSize * 0.105}px`, lineHeight: 1 }}>
                         {subValue}

@@ -10,6 +10,7 @@ import {
     DialogTitle,
     FormControl,
     Grid,
+    IconButton,
     ListSubheader,
     MenuItem,
     Paper,
@@ -19,8 +20,8 @@ import {
     Tooltip as MuiTooltip,
     Typography
 } from '@mui/material';
-import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
-import { Clock, Download, History, Printer, RotateCcw, Save, Settings, Trash2 } from 'lucide-react';
+import { CartesianGrid, Line, LineChart, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+import { ChevronDown, ChevronUp, ChevronsDown, ChevronsUp, Clock, Download, History, Printer, RotateCcw, Save, Settings, Trash2 } from 'lucide-react';
 import axios from '../../api';
 import { socket } from '../../socket';
 import { useAuth } from '../../context/AuthContext';
@@ -46,8 +47,19 @@ const PEN_COLORS = ['#38bdf8', '#fbbf24', '#4ade80', '#f472b6', '#a78bfa', '#fb7
 const STRIP_OPTIONS = [1, 2, 3, 4, 5, 6];
 const PEN_OPTIONS = [1, 2, 3, 4];
 const COLOR_RE = /^#[0-9a-f]{6}$/i;
+const EDR_SYNC_ID = 'ahwr-edr-time-cursor';
+const CURSOR_STEPS_PER_PERIOD = 60;
 
 const DEFAULT_EDR_CONFIG = edrCatalog.defaultLayout;
+const DEPTH_LOG_TEMPLATE = {
+    id: 'depth-log',
+    title: 'Depth Log',
+    isDepthLog: true,
+    pens: [
+        { id: 'depth-bit', metric: 'drilling.bit_depth', min: 0, max: 3000, color: '#38bdf8' },
+        { id: 'depth-hole', metric: 'drilling.hole_depth', min: 0, max: 3000, color: '#fbbf24' }
+    ]
+};
 
 const menuProps = {
     PaperProps: {
@@ -76,15 +88,33 @@ const selectSx = {
     '& .MuiSvgIcon-root': { color: '#94a3b8' }
 };
 
+const edrEdgeButtonSx = {
+    width: 36,
+    height: 36,
+    color: '#e5e7eb',
+    bgcolor: 'rgba(15,23,42,0.92)',
+    border: '1px solid #334155',
+    '&:hover': { bgcolor: '#1e293b', borderColor: '#38bdf8' },
+    '&.Mui-disabled': { color: '#475569', borderColor: '#1f2937' }
+};
+
 const getRangeMs = (range) => {
-    if (range === '-1m') return 60 * 1000;
-    if (range === '-5m') return 5 * 60 * 1000;
-    if (range === '-10m') return 10 * 60 * 1000;
     if (range === '-15m') return 15 * 60 * 1000;
+    if (range === '-30m') return 30 * 60 * 1000;
     if (range === '-1h') return 60 * 60 * 1000;
+    if (range === '-2h') return 2 * 60 * 60 * 1000;
+    if (range === '-4h') return 4 * 60 * 60 * 1000;
     if (range === '-12h') return 12 * 60 * 60 * 1000;
-    if (range === '-24h') return 24 * 60 * 60 * 1000;
+    if (range === '-1d') return 24 * 60 * 60 * 1000;
+    if (range === '-5d') return 5 * 24 * 60 * 60 * 1000;
     return 15 * 60 * 1000;
+};
+
+const toDateTimeLocalValue = (value) => {
+    const date = value instanceof Date ? value : new Date(value);
+    if (!Number.isFinite(date.getTime())) return '';
+    const local = new Date(date.getTime() - (date.getTimezoneOffset() * 60 * 1000));
+    return local.toISOString().slice(0, 19);
 };
 
 const cloneConfig = (config) => JSON.parse(JSON.stringify(config));
@@ -213,12 +243,64 @@ export default function EdrDashboard() {
     const [selectedPresetId, setSelectedPresetId] = useState('default');
     const [presetName, setPresetName] = useState('');
     const [auditEvents, setAuditEvents] = useState([]);
+    const [cursorTimestamp, setCursorTimestamp] = useState(null);
+
+    const depthLogStrip = useMemo(() => {
+        const maxDepth = data.reduce((max, row) => {
+            const bitDepth = Number(row['drilling.bit_depth']);
+            const holeDepth = Number(row['drilling.hole_depth']);
+            return Math.max(
+                max,
+                Number.isFinite(bitDepth) ? bitDepth : 0,
+                Number.isFinite(holeDepth) ? holeDepth : 0
+            );
+        }, 0);
+        const rangeMax = Math.max(3000, Math.ceil((maxDepth + 100) / 500) * 500);
+        return {
+            ...DEPTH_LOG_TEMPLATE,
+            pens: DEPTH_LOG_TEMPLATE.pens.map(pen => ({ ...pen, max: rangeMax }))
+        };
+    }, [data]);
+
+    const displayedStrips = useMemo(() => [depthLogStrip, ...edrConfig.strips], [depthLogStrip, edrConfig.strips]);
 
     const configuredMetrics = useMemo(() => (
-        Array.from(new Set(edrConfig.strips.flatMap(strip => strip.pens.map(pen => pen.metric))))
-    ), [edrConfig]);
+        Array.from(new Set(displayedStrips.flatMap(strip => strip.pens.map(pen => pen.metric))))
+    ), [displayedStrips]);
 
-    const gridWidth = useMemo(() => Math.max(2, 12 / edrConfig.stripCount), [edrConfig.stripCount]);
+    const sortedTimestamps = useMemo(() => (
+        data
+            .map(row => Number(row.timestamp))
+            .filter(Number.isFinite)
+            .sort((a, b) => a - b)
+    ), [data]);
+
+    const selectedPeriodMs = useMemo(() => {
+        if (isCustom && customRange.start && customRange.end) {
+            const start = new Date(customRange.start).getTime();
+            const end = new Date(customRange.end).getTime();
+            if (Number.isFinite(start) && Number.isFinite(end) && end > start) return end - start;
+        }
+        return getRangeMs(timeRange);
+    }, [customRange.end, customRange.start, isCustom, timeRange]);
+
+    const cursorPoint = useMemo(() => {
+        if (data.length === 0) return null;
+        if (!Number.isFinite(Number(cursorTimestamp))) return data[data.length - 1];
+        return data.reduce((closest, row) => {
+            const currentDelta = Math.abs(Number(row.timestamp) - Number(cursorTimestamp));
+            const closestDelta = Math.abs(Number(closest.timestamp) - Number(cursorTimestamp));
+            return currentDelta < closestDelta ? row : closest;
+        }, data[0]);
+    }, [cursorTimestamp, data]);
+
+    const activeCursorTimestamp = Number.isFinite(Number(cursorTimestamp))
+        ? Number(cursorTimestamp)
+        : (Number.isFinite(Number(cursorPoint?.timestamp)) ? Number(cursorPoint.timestamp) : null);
+
+    const cursorLabel = activeCursorTimestamp
+        ? new Date(activeCursorTimestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })
+        : '--:--:--';
 
     const presetOptions = useMemo(() => ([
         { id: 'default', name: 'Default EDR', createdBy: 'system', config: normalizeEdrConfig(DEFAULT_EDR_CONFIG, { includePresets: false }) },
@@ -336,10 +418,29 @@ export default function EdrDashboard() {
         if (isConfigOpen) loadAuditEvents();
     }, [isConfigOpen, loadAuditEvents]);
 
+    useEffect(() => {
+        if (sortedTimestamps.length === 0) {
+            setCursorTimestamp(null);
+            return;
+        }
+        setCursorTimestamp(current => {
+            const first = sortedTimestamps[0];
+            const last = sortedTimestamps[sortedTimestamps.length - 1];
+            if (!Number.isFinite(Number(current))) return last;
+            if (current < first) return first;
+            if (current > last) return last;
+            return current;
+        });
+    }, [sortedTimestamps]);
+
+    useEffect(() => {
+        if (!isCustom || !customRange.start || !customRange.end) return;
+        fetchHistory();
+    }, [customRange.end, customRange.start, fetchHistory, isCustom]);
+
     const applyCustomRange = () => {
         if (customRange.start && customRange.end) {
             setIsCustom(true);
-            fetchHistory();
         }
     };
 
@@ -347,7 +448,84 @@ export default function EdrDashboard() {
         setIsCustom(false);
         setTimeRange(val);
         setCustomRange({ start: '', end: '' });
+        setCursorTimestamp(null);
     };
+
+    const getCurrentWindow = () => {
+        if (isCustom && customRange.start && customRange.end) {
+            const start = new Date(customRange.start).getTime();
+            const end = new Date(customRange.end).getTime();
+            if (Number.isFinite(start) && Number.isFinite(end) && end > start) return { start, end };
+        }
+        const end = Date.now();
+        return { start: end - selectedPeriodMs, end };
+    };
+
+    const pageWindow = (direction) => {
+        const period = Math.max(60 * 1000, selectedPeriodMs);
+        const { start, end } = getCurrentWindow();
+        if (direction > 0) {
+            if (!isCustom) return;
+            const nextStart = start + period;
+            const nextEnd = end + period;
+            if (nextEnd >= Date.now()) {
+                setIsCustom(false);
+                setCustomRange({ start: '', end: '' });
+                setCursorTimestamp(null);
+                return;
+            }
+            setCustomRange({ start: toDateTimeLocalValue(nextStart), end: toDateTimeLocalValue(nextEnd) });
+            setCursorTimestamp(nextEnd);
+            return;
+        }
+        const nextStart = start - period;
+        const nextEnd = end - period;
+        setIsCustom(true);
+        setCustomRange({ start: toDateTimeLocalValue(nextStart), end: toDateTimeLocalValue(nextEnd) });
+        setCursorTimestamp(nextEnd);
+    };
+
+    const advanceCursor = (direction) => {
+        if (sortedTimestamps.length === 0) return;
+        const current = Number.isFinite(Number(cursorTimestamp))
+            ? Number(cursorTimestamp)
+            : sortedTimestamps[sortedTimestamps.length - 1];
+        const step = Math.max(1000, Math.floor(selectedPeriodMs / CURSOR_STEPS_PER_PERIOD));
+        const first = sortedTimestamps[0];
+        const last = sortedTimestamps[sortedTimestamps.length - 1];
+        setCursorTimestamp(Math.max(first, Math.min(last, current + (direction * step))));
+    };
+
+    const edrNavigationControls = [
+        {
+            label: 'Page up EDR period',
+            tooltip: 'Page up period',
+            icon: <ChevronsUp size={18} />,
+            action: () => pageWindow(1),
+            disabled: !isCustom
+        },
+        {
+            label: 'Move cursor up',
+            tooltip: 'Move cursor up',
+            icon: <ChevronUp size={18} />,
+            action: () => advanceCursor(1),
+            disabled: sortedTimestamps.length === 0
+        },
+        {
+            label: 'Move cursor down',
+            tooltip: 'Move cursor down',
+            icon: <ChevronDown size={18} />,
+            action: () => advanceCursor(-1),
+            disabled: sortedTimestamps.length === 0
+        },
+        {
+            label: 'Page down EDR period',
+            tooltip: 'Page down period',
+            icon: <ChevronsDown size={18} />,
+            action: () => pageWindow(-1),
+            disabled: false
+        }
+    ];
 
     const openConfig = () => {
         setDraftConfig(cloneConfig(edrConfig));
@@ -475,7 +653,7 @@ export default function EdrDashboard() {
     };
 
     const exportCsv = () => {
-        const metrics = Array.from(new Set(edrConfig.strips.flatMap(strip => strip.pens.map(pen => pen.metric))));
+        const metrics = Array.from(new Set(displayedStrips.flatMap(strip => strip.pens.map(pen => pen.metric))));
         const headers = [
             'Timestamp',
             ...metrics.map(metric => `${metricLabel(metric)}${metricUnit(metric) ? ` (${metricUnit(metric)})` : ''}`)
@@ -505,8 +683,9 @@ export default function EdrDashboard() {
     };
 
     const getLatestValue = (metric) => {
-        if (data.length === 0) return '0.0';
-        const latest = data[data.length - 1][metric];
+        const source = cursorPoint || data[data.length - 1];
+        if (!source) return '0.0';
+        const latest = source[metric];
         const precision = metricPrecision(metric);
         return Number.isFinite(Number(latest)) ? Number(latest).toFixed(precision) : Number(0).toFixed(precision);
     };
@@ -518,8 +697,13 @@ export default function EdrDashboard() {
                     <Typography variant="h5" sx={{ fontWeight: 'bold' }}>Electronic Drilling Recorder (EDR)</Typography>
                     <Chip
                         size="small"
-                        label={`${edrConfig.stripCount} strips x ${edrConfig.pensPerStrip} pens`}
+                        label={`Depth + ${edrConfig.stripCount} strips x ${edrConfig.pensPerStrip} pens`}
                         sx={{ bgcolor: '#172033', color: '#7dd3fc', border: '1px solid #334155', fontWeight: 800 }}
+                    />
+                    <Chip
+                        size="small"
+                        label={`Cursor ${cursorLabel}`}
+                        sx={{ bgcolor: '#111827', color: '#bef264', border: '1px solid #334155', fontWeight: 800 }}
                     />
                     <Button
                         variant="outlined"
@@ -589,13 +773,14 @@ export default function EdrDashboard() {
                     <Box sx={{ width: '1px', height: '24px', bgcolor: '#334155', mx: 1 }} />
 
                     {[
-                        { label: '1m', val: '-1m' },
-                        { label: '5m', val: '-5m' },
-                        { label: '10m', val: '-10m' },
-                        { label: '15m', val: '-15m' },
-                        { label: '1h', val: '-1h' },
-                        { label: '12h', val: '-12h' },
-                        { label: '24h', val: '-24h' }
+                        { label: '15min', val: '-15m' },
+                        { label: '30min', val: '-30m' },
+                        { label: '1H', val: '-1h' },
+                        { label: '2H', val: '-2h' },
+                        { label: '4H', val: '-4h' },
+                        { label: '12H', val: '-12h' },
+                        { label: '1D', val: '-1d' },
+                        { label: '5D', val: '-5d' }
                     ].map((opt) => (
                         <Button
                             key={opt.val}
@@ -606,7 +791,9 @@ export default function EdrDashboard() {
                                 bgcolor: !isCustom && timeRange === opt.val ? '#38bdf8' : 'transparent',
                                 color: !isCustom && timeRange === opt.val ? '#0f172a' : '#94a3b8',
                                 borderColor: '#334155',
-                                minWidth: '40px'
+                                minWidth: '40px',
+                                textTransform: 'none',
+                                fontWeight: 800
                             }}
                         >
                             {opt.label}
@@ -615,9 +802,68 @@ export default function EdrDashboard() {
                 </Box>
             </Box>
 
-            <Grid container spacing={1} sx={{ flex: '1 1 auto', minHeight: 0, alignItems: 'stretch' }}>
-                {edrConfig.strips.map((strip) => (
-                    <Grid item xs={12} md={gridWidth} key={strip.id} sx={{ minHeight: { xs: 460, md: 0 }, display: 'flex', flexDirection: 'column' }}>
+            <Box sx={{ flex: '1 1 auto', minHeight: 0, position: 'relative' }}>
+                {[
+                    {
+                        key: 'left',
+                        label: 'Left',
+                        edgeSx: {
+                            left: { xs: 2, md: 0 },
+                            transform: { xs: 'none', md: 'translate(-50%, -50%)' }
+                        }
+                    },
+                    {
+                        key: 'right',
+                        label: 'Right',
+                        edgeSx: {
+                            right: { xs: 2, md: 0 },
+                            transform: { xs: 'none', md: 'translate(50%, -50%)' }
+                        }
+                    }
+                ].map((edge) => (
+                    <Box
+                        key={edge.key}
+                        sx={{
+                            position: 'absolute',
+                            top: '50%',
+                            zIndex: 5,
+                            display: 'grid',
+                            gap: 0.75,
+                            ...edge.edgeSx
+                        }}
+                    >
+                        {edrNavigationControls.map((control) => (
+                            <MuiTooltip key={`${edge.key}-${control.label}`} title={control.tooltip}>
+                                <span>
+                                    <IconButton
+                                        aria-label={`${edge.label} ${control.label}`}
+                                        onClick={control.action}
+                                        disabled={control.disabled}
+                                        sx={edrEdgeButtonSx}
+                                    >
+                                        {control.icon}
+                                    </IconButton>
+                                </span>
+                            </MuiTooltip>
+                        ))}
+                    </Box>
+                ))}
+
+                <Box
+                    sx={{
+                        height: '100%',
+                        minHeight: 0,
+                        display: 'grid',
+                        gap: 1,
+                        gridTemplateColumns: { xs: '1fr', md: `repeat(${displayedStrips.length}, minmax(0, 1fr))` },
+                        alignItems: 'stretch',
+                        px: { xs: 0, md: 2.5 }
+                    }}
+                >
+                    {displayedStrips.map((strip) => {
+                        const isDepthLog = Boolean(strip.isDepthLog);
+                        return (
+                        <Box key={strip.id} sx={{ minHeight: { xs: 460, md: 0 }, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
                         <Paper sx={{ flex: '1 1 auto', minHeight: 0, bgcolor: 'black', border: '1px solid #334155', position: 'relative', overflow: 'hidden', borderRadius: 1 }}>
                             <Box sx={{ position: 'absolute', top: 8, left: 8, right: 8, zIndex: 1, display: 'flex', justifyContent: 'space-between', gap: 1, alignItems: 'flex-start' }}>
                                 <Typography sx={{ color: '#e5e7eb', fontSize: '0.75rem', fontWeight: 900, textTransform: 'uppercase', letterSpacing: 0, bgcolor: 'rgba(15,23,42,0.78)', px: 1, py: 0.5, borderRadius: 1 }}>
@@ -638,7 +884,8 @@ export default function EdrDashboard() {
                                 <LineChart
                                     data={data}
                                     layout="vertical"
-                                    margin={{ top: 48, right: 12, left: 0, bottom: 16 }}
+                                    syncId={EDR_SYNC_ID}
+                                    margin={{ top: 48, right: 12, left: isDepthLog ? 0 : 4, bottom: 16 }}
                                 >
                                     <CartesianGrid strokeDasharray="3 3" stroke="#243044" horizontal vertical />
                                     <YAxis
@@ -649,8 +896,11 @@ export default function EdrDashboard() {
                                         reversed
                                         tickFormatter={(unixTime) => new Date(unixTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })}
                                         stroke="#94a3b8"
-                                        width={80}
-                                        tick={{ fontSize: 11, fill: '#22c55e' }}
+                                        width={isDepthLog ? 80 : 0}
+                                        hide={!isDepthLog}
+                                        tick={isDepthLog ? { fontSize: 11, fill: '#22c55e' } : false}
+                                        axisLine={isDepthLog}
+                                        tickLine={isDepthLog}
                                     />
                                     {strip.pens.map(pen => (
                                         <XAxis
@@ -664,6 +914,7 @@ export default function EdrDashboard() {
                                     ))}
                                     <Tooltip
                                         contentStyle={{ backgroundColor: '#1e293b', border: '1px solid #334155', color: 'white' }}
+                                        cursor={{ stroke: '#e5e7eb', strokeWidth: 1, strokeDasharray: '4 4' }}
                                         labelFormatter={(label) => new Date(label).toLocaleTimeString()}
                                         formatter={(value, name) => {
                                             const unit = metricUnit(name);
@@ -673,6 +924,16 @@ export default function EdrDashboard() {
                                             return [`${formatted}${unit ? ` ${unit}` : ''}`, metricLabel(name)];
                                         }}
                                     />
+                                    {Number.isFinite(Number(activeCursorTimestamp)) && (
+                                        <ReferenceLine
+                                            xAxisId={strip.pens[0]?.id}
+                                            y={activeCursorTimestamp}
+                                            stroke="#f8fafc"
+                                            strokeWidth={1.5}
+                                            strokeDasharray="4 4"
+                                            ifOverflow="extendDomain"
+                                        />
+                                    )}
                                     {strip.pens.map(pen => (
                                         <Line
                                             key={`${strip.id}-${pen.id}-line`}
@@ -712,9 +973,11 @@ export default function EdrDashboard() {
                                 ))}
                             </Box>
                         </Paper>
-                    </Grid>
-                ))}
-            </Grid>
+                        </Box>
+                        );
+                    })}
+                </Box>
+            </Box>
 
             <Dialog
                 open={isConfigOpen}

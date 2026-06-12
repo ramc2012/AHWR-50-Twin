@@ -71,7 +71,7 @@ const Login = () => {
                     <Box sx={{ mb: 3, display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
                         <Activity size={48} color="#38bdf8" />
                         <Typography variant="h4" sx={{ mt: 2, fontWeight: 'bold', color: '#fff', letterSpacing: 1 }}>
-                            ROM-II
+                            AHWR-50 Twin
                         </Typography>
                         <Typography variant="subtitle2" sx={{ color: '#94a3b8' }}>
                             Digital Twin Access

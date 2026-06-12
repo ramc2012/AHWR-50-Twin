@@ -30,6 +30,7 @@ import {
     TextField,
     DialogActions,
     Button,
+    Alert,
     Popover,
     List,
     ListItem,
@@ -81,6 +82,7 @@ export default function Layout() {
     const [wellInfo, setWellInfo] = useState({ well: 'WELL-001', rig: 'RIG-ALPHA' });
     const [isDialogOpen, setIsDialogOpen] = useState(false);
     const [tempInfo, setTempInfo] = useState({ well: '', rig: '' });
+    const [infoError, setInfoError] = useState('');
 
     useEffect(() => {
         // Layout owns the socket connection lifecycle (persistent shell, post-auth).
@@ -96,9 +98,7 @@ export default function Layout() {
 
         // Real-time Updates
         const handleLayoutUpdate = (config) => {
-            if (config.wellInfo && (config.wellInfo.well !== wellInfo.well || config.wellInfo.rig !== wellInfo.rig)) {
-                setWellInfo(config.wellInfo);
-            }
+            if (config.wellInfo) setWellInfo(config.wellInfo);
         };
         socket.on('dashboard_layout_update', handleLayoutUpdate);
 
@@ -121,17 +121,31 @@ export default function Layout() {
     }, []);
 
     const handleEditClick = () => {
+        if (user?.role !== 'admin') return;
         setTempInfo(wellInfo);
+        setInfoError('');
         setIsDialogOpen(true);
     };
 
-    const handleSaveInfo = () => {
-        setWellInfo(tempInfo);
-        // Save to Backend (Partial Update)
-        axios.post('/api/dashboard/layout', { wellInfo: tempInfo })
-            .catch(e => console.error("Failed to save rig info", e));
+    const handleSaveInfo = async () => {
+        if (user?.role !== 'admin') return;
+        const nextInfo = {
+            rig: tempInfo.rig.trim(),
+            well: tempInfo.well.trim()
+        };
+        if (!nextInfo.rig || !nextInfo.well) {
+            setInfoError('Rig name and well name are required.');
+            return;
+        }
 
-        setIsDialogOpen(false);
+        try {
+            const { data } = await axios.post('/api/dashboard/layout', { wellInfo: nextInfo });
+            setWellInfo(data?.config?.wellInfo || nextInfo);
+            setIsDialogOpen(false);
+        } catch (e) {
+            console.error("Failed to save rig info", e);
+            setInfoError(e.response?.data?.error || 'Failed to save rig details.');
+        }
     };
 
     const handleMenuOpen = (event) => {
@@ -176,7 +190,7 @@ export default function Layout() {
                 >
                     {/* App Name */}
                     <Typography variant="h6" noWrap sx={{ fontWeight: 'bold', color: '#38bdf8', mr: { xs: 0.5, md: 1 }, fontSize: { xs: '1rem', sm: '1.25rem' } }}>
-                        ANK-WS
+                        AHWR-50 Twin
                     </Typography>
 
                     {/* Navigation Dropdown Button */}
@@ -280,7 +294,23 @@ export default function Layout() {
                                 {connected ? 'Connected' : 'Disconnected'}
                             </Typography>
                         </Box>
-                        <Box sx={{ display: 'flex', alignItems: 'center', gap: { xs: 1, sm: 2 }, bgcolor: '#1e293b', px: { xs: 1, sm: 2 }, py: 1, borderRadius: 1, minWidth: 0 }}>
+                        <Box
+                            onClick={user?.role === 'admin' ? handleEditClick : undefined}
+                            title={user?.role === 'admin' ? 'Edit rig and well details' : undefined}
+                            sx={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: { xs: 1, sm: 2 },
+                                bgcolor: '#1e293b',
+                                px: { xs: 1, sm: 2 },
+                                py: 1,
+                                borderRadius: 1,
+                                minWidth: 0,
+                                cursor: user?.role === 'admin' ? 'pointer' : 'default',
+                                border: user?.role === 'admin' ? '1px solid rgba(56, 189, 248, 0.18)' : '1px solid transparent',
+                                '&:hover': user?.role === 'admin' ? { borderColor: 'rgba(56, 189, 248, 0.45)' } : undefined
+                            }}
+                        >
                             <Box>
                                 <Typography variant="body2" sx={{ color: '#94a3b8', lineHeight: 1 }}>Rig</Typography>
                                 <Typography variant="subtitle2" sx={{ color: '#38bdf8', fontWeight: 'bold' }}>{wellInfo.rig}</Typography>
@@ -291,7 +321,7 @@ export default function Layout() {
                                 <Typography variant="subtitle2" sx={{ color: '#38bdf8', fontWeight: 'bold' }}>{wellInfo.well}</Typography>
                             </Box>
                             {user?.role === 'admin' && (
-                                <IconButton size="small" onClick={handleEditClick} sx={{ color: '#38bdf8', bgcolor: 'rgba(56, 189, 248, 0.1)', ml: { xs: 0, sm: 1 }, '&:hover': { bgcolor: 'rgba(56, 189, 248, 0.2)' } }}>
+                                <IconButton size="small" onClick={(event) => { event.stopPropagation(); handleEditClick(); }} sx={{ color: '#38bdf8', bgcolor: 'rgba(56, 189, 248, 0.1)', ml: { xs: 0, sm: 1 }, '&:hover': { bgcolor: 'rgba(56, 189, 248, 0.2)' } }}>
                                     <Edit2 size={14} />
                                 </IconButton>
                             )}
@@ -305,29 +335,36 @@ export default function Layout() {
 
             {/* Edit Details Dialog */}
             <Dialog open={isDialogOpen} onClose={() => setIsDialogOpen(false)} PaperProps={{ sx: { bgcolor: '#1e293b', color: 'white', minWidth: 400 } }}>
-                <DialogTitle>Edit Operation Details</DialogTitle>
+                <DialogTitle>Edit Rig / Well Details</DialogTitle>
                 <DialogContent>
+                    {infoError && (
+                        <Alert severity="error" sx={{ mb: 2, bgcolor: 'rgba(127, 29, 29, 0.45)', color: '#fecaca' }}>
+                            {infoError}
+                        </Alert>
+                    )}
                     <TextField
                         autoFocus
-                        margin="dense"
-                        label="Well Name"
-                        fullWidth
-                        variant="outlined"
-                        value={tempInfo.well}
-                        onChange={(e) => setTempInfo({ ...tempInfo, well: e.target.value })}
-                        sx={{
-                            mb: 2,
-                            '& .MuiOutlinedInput-root': { color: 'white', '& fieldset': { borderColor: '#334155' } },
-                            '& .MuiInputLabel-root': { color: '#94a3b8' }
-                        }}
-                    />
-                    <TextField
                         margin="dense"
                         label="Rig Name"
                         fullWidth
                         variant="outlined"
                         value={tempInfo.rig}
                         onChange={(e) => setTempInfo({ ...tempInfo, rig: e.target.value })}
+                        helperText="Admin editable"
+                        sx={{
+                            mb: 2,
+                            '& .MuiOutlinedInput-root': { color: 'white', '& fieldset': { borderColor: '#334155' } },
+                            '& .MuiInputLabel-root': { color: '#94a3b8' },
+                            '& .MuiFormHelperText-root': { color: '#64748b' }
+                        }}
+                    />
+                    <TextField
+                        margin="dense"
+                        label="Well Name"
+                        fullWidth
+                        variant="outlined"
+                        value={tempInfo.well}
+                        onChange={(e) => setTempInfo({ ...tempInfo, well: e.target.value })}
                         sx={{
                             '& .MuiOutlinedInput-root': { color: 'white', '& fieldset': { borderColor: '#334155' } },
                             '& .MuiInputLabel-root': { color: '#94a3b8' }

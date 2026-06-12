@@ -564,9 +564,13 @@ app.get('/api/history', auth.requireAuth, async (req, res) => {
         if (range?.includes('mo')) windowPeriod = '24h';
         else if (range?.includes('30d')) windowPeriod = '6h';
         else if (range?.includes('7d')) windowPeriod = '1h';
-        else if (range?.includes('24h')) windowPeriod = '15m';
+        else if (range?.includes('5d')) windowPeriod = '30m';
+        else if (range?.includes('1d') || range?.includes('24h')) windowPeriod = '15m';
         else if (range?.includes('12h')) windowPeriod = '5m';
+        else if (range?.includes('4h')) windowPeriod = '2m';
+        else if (range?.includes('2h')) windowPeriod = '1m';
         else if (range?.includes('1h')) windowPeriod = '30s';
+        else if (range?.includes('30m')) windowPeriod = '10s';
         else if (range?.includes('15m')) windowPeriod = '5s';
         else if (range?.includes('10m')) windowPeriod = '5s';
         else if (range?.includes('5m')) windowPeriod = '2s';
@@ -574,7 +578,7 @@ app.get('/api/history', auth.requireAuth, async (req, res) => {
     }
 
     // Determine if we need date in the time label
-    const needsDate = range?.includes('24h') || range?.includes('7d') || range?.includes('30d') || range?.includes('mo') || (start && stop);
+    const needsDate = range?.includes('24h') || range?.includes('d') || range?.includes('mo') || (start && stop);
 
     // Same measurement set as the live view (crucially includes "AHWR", under
     // which all S7comm/PLC fields are written) so equipment history isn't empty.
@@ -954,6 +958,16 @@ const numericOrFallback = (value, fallback) => {
     return Number.isFinite(parsed) ? parsed : fallback;
 };
 
+const sanitizeWellInfo = (info = {}) => {
+    const fallback = DEFAULT_DASHBOARD_CONFIG.wellInfo;
+    const rig = typeof info.rig === 'string' ? info.rig.trim().slice(0, 40) : '';
+    const well = typeof info.well === 'string' ? info.well.trim().slice(0, 40) : '';
+    return {
+        rig: rig || fallback.rig,
+        well: well || fallback.well
+    };
+};
+
 const getDefaultEdrPen = (stripIndex, penIndex) => {
     const strip = DEFAULT_EDR_CONFIG.strips[stripIndex % DEFAULT_EDR_CONFIG.strips.length];
     return strip.pens[penIndex % strip.pens.length] || DEFAULT_EDR_CONFIG.strips[0].pens[0];
@@ -1067,6 +1081,7 @@ const getDashboardConfig = () => {
         updatedByRole: config._meta?.updatedByRole || 'system'
     };
     config.edr = sanitizeEdrConfig(config.edr);
+    config.wellInfo = sanitizeWellInfo(config.wellInfo);
 
     return config;
 };
@@ -1097,6 +1112,10 @@ app.post('/api/dashboard/layout', auth.requireAuth, auth.requireRole('admin'), a
 
     if (incomingConfig.edr) {
         incomingConfig.edr = sanitizeEdrConfig(incomingConfig.edr);
+    }
+
+    if (incomingConfig.wellInfo) {
+        incomingConfig.wellInfo = sanitizeWellInfo(incomingConfig.wellInfo);
     }
 
     // Merge existing config with incoming updates

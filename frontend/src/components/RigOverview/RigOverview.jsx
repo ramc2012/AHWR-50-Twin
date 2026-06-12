@@ -779,6 +779,7 @@ export default function RigOverview() {
                                             // Conditional Props for Hook Load, HTD RPM & PCT TORQUE
                                             subValue={g.dataKey === 'hook_load' ? formatWOB(rigData.wob) : (g.dataKey === 'htd_rpm' ? Number(rigData.ahtd_torque || 0).toFixed(1) : (g.dataKey === 'pct_torque' ? Number(rigData.pct_last_torque || 0).toFixed(1) : undefined))}
                                             subLabel={g.dataKey === 'hook_load' ? `WOB (${units.wob === 'tonnes' ? 'ton' : units.wob})` : (g.dataKey === 'htd_rpm' ? 'TORQUE (daN·m)' : (g.dataKey === 'pct_torque' ? 'LAST TORQUE (daN·m)' : undefined))}
+                                            subValueInside
                                         />
 
                                         {editMode && (
