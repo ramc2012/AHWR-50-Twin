@@ -671,13 +671,20 @@ export default function RigOverview() {
             <Box sx={{ flexGrow: 1, position: 'relative' }}>
                 <ResponsiveGridLayout
                     className="layout"
-                    layouts={{
-                        lg: [
+                    layouts={(() => {
+                        const layoutItems = [
                             visualizerLayout,
                             ...gauges.map(g => g.layout || { i: g.id, x: 0, y: 0, w: 4, h: 4 }),
                             ...bottomStats.map(s => s.layout || { i: s.id, x: 0, y: 4, w: 3, h: 4 })
-                        ]
-                    }}
+                        ];
+                        return {
+                            lg: layoutItems,
+                            md: layoutItems,
+                            sm: layoutItems,
+                            xs: layoutItems,
+                            xxs: layoutItems
+                        };
+                    })()}
                     breakpoints={{ lg: 1200, md: 996, sm: 768, xs: 480, xxs: 0 }}
                     cols={{ lg: 12, md: 10, sm: 6, xs: 4, xxs: 2 }}
                     rowHeight={50}
