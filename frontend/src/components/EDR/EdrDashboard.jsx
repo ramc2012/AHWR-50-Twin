@@ -290,6 +290,35 @@ export default function EdrDashboard() {
         return getRangeMs(timeRange);
     }, [customRange.end, customRange.start, isCustom, timeRange]);
 
+    const selectedTimeDomain = useMemo(() => {
+        if (isCustom && customRange.start && customRange.end) {
+            const start = new Date(customRange.start).getTime();
+            const end = new Date(customRange.end).getTime();
+            if (Number.isFinite(start) && Number.isFinite(end) && end > start) return [start, end];
+        }
+
+        const latestTimestamp = sortedTimestamps[sortedTimestamps.length - 1];
+        const end = Number.isFinite(latestTimestamp) ? latestTimestamp : Date.now();
+        return [end - selectedPeriodMs, end];
+    }, [customRange.end, customRange.start, isCustom, selectedPeriodMs, sortedTimestamps]);
+
+    const formatTimeTick = useCallback((unixTime) => {
+        const date = new Date(unixTime);
+        if (!Number.isFinite(date.getTime())) return '';
+        if (selectedPeriodMs >= 24 * 60 * 60 * 1000) {
+            return date.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
+        }
+        return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+    }, [selectedPeriodMs]);
+
+    const selectedTimeTicks = useMemo(() => {
+        const [start, end] = selectedTimeDomain;
+        if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return [];
+        const intervals = 4;
+        const step = (end - start) / intervals;
+        return Array.from({ length: intervals + 1 }, (_, index) => Math.round(start + (step * index)));
+    }, [selectedTimeDomain]);
+
     const cursorPoint = useMemo(() => {
         if (data.length === 0) return null;
         if (!Number.isFinite(Number(cursorTimestamp))) return data[data.length - 1];
@@ -321,8 +350,11 @@ export default function EdrDashboard() {
         } else {
             params.set('range', timeRange);
         }
+        if (configuredMetrics.length) {
+            params.set('fields', configuredMetrics.join(','));
+        }
         return `/api/history?${params.toString()}`;
-    }, [customRange.end, customRange.start, timeRange]);
+    }, [configuredMetrics, customRange.end, customRange.start, timeRange]);
 
     const fetchHistory = useCallback(async () => {
         try {
@@ -793,6 +825,7 @@ export default function EdrDashboard() {
                         <Button
                             key={opt.val}
                             variant={!isCustom && timeRange === opt.val ? 'contained' : 'outlined'}
+                            aria-pressed={!isCustom && timeRange === opt.val}
                             onClick={() => handlePresetClick(opt.val)}
                             size="small"
                             sx={{
@@ -900,10 +933,11 @@ export default function EdrDashboard() {
                                         dataKey="timestamp"
                                         type="number"
                                         scale="time"
-                                        domain={isCustom && customRange.start && customRange.end ? [new Date(customRange.start).getTime(), new Date(customRange.end).getTime()] : ['dataMin', 'dataMax']}
-                                        tickFormatter={(unixTime) => new Date(unixTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })}
+                                        domain={selectedTimeDomain}
+                                        ticks={selectedTimeTicks}
+                                        tickFormatter={formatTimeTick}
                                         stroke="#94a3b8"
-                                        width={isDepthLog ? 80 : 0}
+                                        width={isDepthLog ? (selectedPeriodMs >= 24 * 60 * 60 * 1000 ? 104 : 80) : 0}
                                         hide={!isDepthLog}
                                         tick={isDepthLog ? { fontSize: 11, fill: '#22c55e' } : false}
                                         axisLine={isDepthLog}

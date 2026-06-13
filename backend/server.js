@@ -420,6 +420,42 @@ const FIELD_MAP = {
 // Measurements polled for the live view (S7comm writes under "AHWR";
 // app-level measurements support mock/Modbus sources). Shared with /api/history.
 const LIVE_MEASUREMENTS = ['drawworks', 'engine', 'mudpump', 'wellcontrol', 'wellhead', 'modbus', 'AHWR', 'fluid', 'drilling', 'hpu', 'htd', 'acs', 'cat_engine', 'cwk', 'pct'];
+const METRIC_KEY_RE = /^[A-Za-z0-9_]+\.[A-Za-z0-9_]+$/;
+
+const parseHistoryFields = (fields) => {
+    if (fields === undefined) return [];
+    const raw = Array.isArray(fields) ? fields.join(',') : String(fields);
+    const metrics = [...new Set(raw.split(',').map(item => item.trim()).filter(Boolean))];
+    if (metrics.length > 80) {
+        const err = new Error('Too many history fields requested');
+        err.status = 400;
+        throw err;
+    }
+    metrics.forEach(metric => {
+        const [measurement] = metric.split('.');
+        if (!METRIC_KEY_RE.test(metric) || !LIVE_MEASUREMENTS.includes(measurement)) {
+            const err = new Error(`Invalid history field: ${metric}`);
+            err.status = 400;
+            throw err;
+        }
+    });
+    return metrics;
+};
+
+const buildHistoryFieldFilter = (metrics) => {
+    if (!metrics.length) return '';
+    const clauses = [];
+    metrics.forEach(metric => {
+        const [measurement, field] = metric.split('.');
+        clauses.push(`(r["_measurement"] == ${JSON.stringify(measurement)} and r["_field"] == ${JSON.stringify(field)})`);
+        Object.entries(FIELD_MAP).forEach(([rawField, mapped]) => {
+            if (`${mapped.meas}.${mapped.field}` === metric) {
+                clauses.push(`r["_field"] == ${JSON.stringify(rawField)}`);
+            }
+        });
+    });
+    return `|> filter(fn: (r) => ${clauses.join(' or ')})`;
+};
 
 let lastDataAt = 0; // epoch ms of the last tick that returned sensor data
 
@@ -550,7 +586,13 @@ const scheduleNextPoll = () => {
 // API: Get Historical Data
 // API: Get Historical Data
 app.get('/api/history', auth.requireAuth, async (req, res) => {
-    const { range, start, stop } = req.query;
+    const { range, start, stop, fields } = req.query;
+    let requestedFields = [];
+    try {
+        requestedFields = parseHistoryFields(fields);
+    } catch (err) {
+        return res.status(err.status || 400).json({ error: err.message });
+    }
 
     // Validate time inputs before they are interpolated into the Flux query
     // (prevents Flux injection). Allow relative durations and RFC3339 instants only.
@@ -603,12 +645,14 @@ app.get('/api/history', auth.requireAuth, async (req, res) => {
     // Same measurement set as the live view (crucially includes "AHWR", under
     // which all S7comm/PLC fields are written) so equipment history isn't empty.
     const measurementFilter = LIVE_MEASUREMENTS.map(m => `r["_measurement"] == "${m}"`).join(' or ');
+    const fieldFilter = buildHistoryFieldFilter(requestedFields);
 
     const fluxQuery = `
     import "types"
     from(bucket: "${INFLUX_BUCKET}")
       ${rangeFilter}
       |> filter(fn: (r) => ${measurementFilter})
+      ${fieldFilter}
       |> filter(fn: (r) => types.isType(v: r._value, type: "float") or types.isType(v: r._value, type: "int") or types.isType(v: r._value, type: "uint"))
       |> aggregateWindow(every: ${windowPeriod}, fn: last, createEmpty: false)
       |> yield(name: "last")
@@ -1419,6 +1463,19 @@ const loginLimiter = rateLimit({
 
 // Tells the login UI which providers are available (unauthenticated).
 app.get('/api/auth/info', (req, res) => res.json(ldap.info()));
+
+// Validate a restored browser session before the frontend mounts protected
+// dashboards with possibly stale localStorage state.
+app.get('/api/me', auth.requireAuth, (req, res) => {
+    const current = users.find(u => (
+        String(u.id) === String(req.user.sub) ||
+        u.username === req.user.username
+    ));
+    if (!current || current.status === 'inactive') {
+        return res.status(401).json({ error: 'Invalid or inactive user' });
+    }
+    return res.json({ user: sanitizeUser(current) });
+});
 
 // Login supports local accounts and/or Windows-domain (LDAP/AD) accounts,
 // selected by AUTH_MODE (local | ldap | both). In 'both', a local account is

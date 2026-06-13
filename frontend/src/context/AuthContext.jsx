@@ -18,21 +18,48 @@ export const AuthProvider = ({ children }) => {
     const [loading, setLoading] = useState(true);
 
     useEffect(() => {
-        // Restore persisted session on mount.
-        const storedToken = localStorage.getItem('romii_token');
-        const storedUser = localStorage.getItem('romii_user');
-        if (storedToken) {
-            setToken(storedToken);
-            setAuthHeader(storedToken);
-        }
-        if (storedUser) {
-            try {
-                setUser(JSON.parse(storedUser));
-            } catch (e) {
-                localStorage.removeItem('romii_user');
+        let cancelled = false;
+
+        const clearStoredSession = () => {
+            localStorage.removeItem('romii_user');
+            localStorage.removeItem('romii_token');
+            setAuthHeader(null);
+        };
+
+        const restoreSession = async () => {
+            // Restore persisted session only after the token still validates.
+            const storedToken = localStorage.getItem('romii_token');
+            if (!storedToken) {
+                clearStoredSession();
+                if (!cancelled) setLoading(false);
+                return;
             }
-        }
-        setLoading(false);
+
+            setAuthHeader(storedToken);
+            try {
+                const { data } = await axios.get('/api/me');
+                if (cancelled) return;
+                const restoredUser = data?.user;
+                if (!restoredUser) throw new Error('Session response missing user');
+                setToken(storedToken);
+                setUser(restoredUser);
+                localStorage.setItem('romii_user', JSON.stringify(restoredUser));
+            } catch (e) {
+                if (!cancelled) {
+                    setUser(null);
+                    setToken(null);
+                    clearStoredSession();
+                }
+            } finally {
+                if (!cancelled) setLoading(false);
+            }
+        };
+
+        restoreSession();
+
+        return () => {
+            cancelled = true;
+        };
     }, []);
 
     const login = (userData, newToken) => {
