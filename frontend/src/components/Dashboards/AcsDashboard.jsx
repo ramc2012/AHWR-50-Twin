@@ -63,17 +63,14 @@ export default function AcsDashboard() {
                 </Grid>
 
                 <Grid item xs={12} md={6}>
-                    <GaugeCard sx={{ minHeight: { xs: 300, md: 420 } }}>
-                        <AnalogGauge
-                            value={data.block_position || 0}
-                            max={30000}
-                            label="ACTUAL BLOCK POSITION"
-                            unit="mm"
-                            size="fill"
-                            maxSize={380}
-                            color="#38bdf8"
-                        />
-                    </GaugeCard>
+                    <Paper sx={{ p: 2, bgcolor: '#1e293b', height: '100%', display: 'flex', flexDirection: 'column' }}>
+                        <Typography variant="subtitle2" sx={{ color: '#94a3b8', mb: 2 }}>BLOCK POSITION</Typography>
+                        <Box sx={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', p: 3, bgcolor: '#0f172a', borderRadius: 2 }}>
+                            <Typography sx={{ color: '#38bdf8', fontWeight: 'bold', fontSize: '3rem' }}>
+                                {Number(data.block_position || 0).toFixed(1)} <Typography component="span" variant="h5" sx={{ color: '#64748b' }}>mm</Typography>
+                            </Typography>
+                        </Box>
+                    </Paper>
                 </Grid>
 
                 <Grid item xs={12} md={6}>

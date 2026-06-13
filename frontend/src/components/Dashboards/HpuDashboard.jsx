@@ -185,8 +185,8 @@ export default function HpuDashboard() {
                                     </Typography>
                                 </Box>
                                 <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
-                                    <Typography variant="caption" sx={{ color: '#64748b', fontWeight: '500' }}>FLOW: <span style={{ color: 'white' }}>{data.pdw_pump_flow || 0} %</span></Typography>
-                                    <Typography variant="caption" sx={{ color: '#64748b', fontWeight: '500' }}>PRESS: <span style={{ color: 'white' }}>{data.pdw_pump_press || 0} bar</span></Typography>
+                                    <Typography variant="caption" sx={{ color: '#64748b', fontWeight: '500' }}>FLOW: <span style={{ color: 'white' }}>{Number(data.pdw_pump_flow || 0).toFixed(1)} %</span></Typography>
+                                    <Typography variant="caption" sx={{ color: '#64748b', fontWeight: '500' }}>PRESS: <span style={{ color: 'white' }}>{Number(data.pdw_pump_press || 0).toFixed(1)} bar</span></Typography>
                                 </Box>
                             </Box>
 
@@ -198,8 +198,8 @@ export default function HpuDashboard() {
                                     </Typography>
                                 </Box>
                                 <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
-                                    <Typography variant="caption" sx={{ color: '#64748b', fontWeight: '500' }}>FLOW: <span style={{ color: 'white' }}>{data.htd_pump1_flow || 0} %</span></Typography>
-                                    <Typography variant="caption" sx={{ color: '#64748b', fontWeight: '500' }}>PRESS: <span style={{ color: 'white' }}>{data.htd_pump1_press || 0} bar</span></Typography>
+                                    <Typography variant="caption" sx={{ color: '#64748b', fontWeight: '500' }}>FLOW: <span style={{ color: 'white' }}>{Number(data.htd_pump1_flow || 0).toFixed(1)} %</span></Typography>
+                                    <Typography variant="caption" sx={{ color: '#64748b', fontWeight: '500' }}>PRESS: <span style={{ color: 'white' }}>{Number(data.htd_pump1_press || 0).toFixed(1)} bar</span></Typography>
                                 </Box>
                             </Box>
 
@@ -211,8 +211,8 @@ export default function HpuDashboard() {
                                     </Typography>
                                 </Box>
                                 <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
-                                    <Typography variant="caption" sx={{ color: '#64748b', fontWeight: '500' }}>FLOW: <span style={{ color: 'white' }}>{data.htd_pump2_flow || 0} %</span></Typography>
-                                    <Typography variant="caption" sx={{ color: '#64748b', fontWeight: '500' }}>PRESS: <span style={{ color: 'white' }}>{data.htd_pump2_press || 0} bar</span></Typography>
+                                    <Typography variant="caption" sx={{ color: '#64748b', fontWeight: '500' }}>FLOW: <span style={{ color: 'white' }}>{Number(data.htd_pump2_flow || 0).toFixed(1)} %</span></Typography>
+                                    <Typography variant="caption" sx={{ color: '#64748b', fontWeight: '500' }}>PRESS: <span style={{ color: 'white' }}>{Number(data.htd_pump2_press || 0).toFixed(1)} bar</span></Typography>
                                 </Box>
                             </Box>
 

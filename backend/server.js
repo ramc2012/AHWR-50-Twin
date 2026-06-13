@@ -20,6 +20,26 @@ const edrCatalog = require('../shared/edrMetrics.json');
 
 const PORT = Number(process.env.PORT || 5000);
 const DATA_DIR = process.env.DATA_DIR || __dirname;
+
+// --- SEED DEFAULTS ON FIRST BOOT ---
+const DEFAULTS_DIR = path.join(__dirname, 'defaults');
+if (fs.existsSync(DEFAULTS_DIR)) {
+    const filesToSeed = ['plc_config.json', 'users.json', 'dashboard_layout.json', 'alarms_config.json'];
+    for (const file of filesToSeed) {
+        const defaultPath = path.join(DEFAULTS_DIR, file);
+        const targetPath = path.join(DATA_DIR, file);
+        if (fs.existsSync(defaultPath) && !fs.existsSync(targetPath)) {
+            try {
+                fs.copyFileSync(defaultPath, targetPath);
+                console.log(`Seeded default ${file} to ${DATA_DIR}`);
+            } catch (err) {
+                console.error(`Failed to seed ${file}:`, err.message);
+            }
+        }
+    }
+}
+// -----------------------------------
+
 const INFLUX_URL = process.env.INFLUX_URL || 'http://influxdb:8086';
 const INFLUX_TOKEN = process.env.INFLUX_TOKEN;
 const INFLUX_ORG = process.env.INFLUX_ORG || 'romii_org';
@@ -878,9 +898,8 @@ const DEFAULT_EDR_CONFIG = edrCatalog.defaultLayout;
 const DEFAULT_DASHBOARD_CONFIG = {
     gauges: [
         { id: 'd1', label: 'WOH', dataKey: 'hook_load', min: 0, max: 100, unit: 'ton', color: '#3182ce', gridWidth: 3, size: 160, majorTicks: 10, minorTicks: 4 },
-        { id: 'd2', label: 'WOB', dataKey: 'wob', min: 0, max: 100, unit: 'kips', color: '#e53e3e', gridWidth: 3, size: 160, majorTicks: 10, minorTicks: 4 },
+        { id: 'd2', label: 'SPP', dataKey: 'SPP-Bar', min: 0, max: 5000, unit: 'psi', color: '#fbbf24', gridWidth: 3, size: 160, majorTicks: 5, minorTicks: 4 },
         { id: 'd6', label: 'HTD RPM', dataKey: 'htd_rpm', min: 0, max: 200, unit: 'RPM', color: '#4ade80', gridWidth: 3, size: 160 },
-        { id: 'd7', label: 'HTD TORQUE', dataKey: 'htd_torque', min: 0, max: 1000, unit: 'Nm', color: '#fbbf24', gridWidth: 3, size: 160 },
     ],
     sideStats: [
         { key: 'pump_pressure', label: 'SPP', unit: 'Bar', min: 0, max: 500 },
@@ -1059,7 +1078,7 @@ const getDashboardConfig = () => {
 
     // Migration: Enforce allowed gauges (WOH, WOB, HTD RPM, HTD TORQUE, PCT TORQUE) and max 5
     if (config.gauges) {
-        const allowedKeys = ['hook_load', 'wob', 'htd_rpm', 'htd_torque', 'pct_torque'];
+        const allowedKeys = ['hook_load', 'wob', 'htd_rpm', 'htd_torque', 'pct_torque', 'SPP-Bar'];
         config.gauges = config.gauges.filter(g => allowedKeys.includes(g.dataKey)).slice(0, 5);
 
         // If empty, restore defaults
@@ -1106,7 +1125,7 @@ app.post('/api/dashboard/layout', auth.requireAuth, auth.requireRole('admin'), a
 
     // Migration: Sanitize incoming gauges (Allow WOH, WOB, HTD RPM, HTD TORQUE, PCT TORQUE) and limit to 5
     if (incomingConfig.gauges) {
-        const allowedKeys = ['hook_load', 'wob', 'htd_rpm', 'htd_torque', 'pct_torque'];
+        const allowedKeys = ['hook_load', 'wob', 'htd_rpm', 'htd_torque', 'pct_torque', 'SPP-Bar'];
         incomingConfig.gauges = incomingConfig.gauges.filter(g => allowedKeys.includes(g.dataKey)).slice(0, 5);
     }
 

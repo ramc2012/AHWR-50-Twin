@@ -1,0 +1,16 @@
+[
+  {
+    "id": 1,
+    "username": "admin",
+    "password": "$2a$10$GADijmYQ4wJ4wnJa4CeHxubXTad.AU3k8iKsG5.8/0XCcSlhnlZam",
+    "role": "admin",
+    "status": "active"
+  },
+  {
+    "id": 1781294163246,
+    "username": "DigitalTwin_AHWR50III",
+    "password": "$2a$10$MdXLiCKFFTnpI4sE3uQ23u7CTANQYnY8rnfUsCmgp516BYCrLg9hS",
+    "role": "operator",
+    "status": "active"
+  }
+]

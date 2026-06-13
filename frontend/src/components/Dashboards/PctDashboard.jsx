@@ -217,14 +217,14 @@ export default function PctDashboard() {
                                     <Grid container spacing={1}>
                                         <Grid item xs={6}>
                                             <Typography variant="caption" sx={{ color: '#64748b', display: 'block' }}>PRESSURE (bar)</Typography>
-                                            <Typography sx={{ color: 'white', fontWeight: 'bold' }}>{data.clamp_up_pressure || 0}</Typography>
+                                            <Typography sx={{ color: 'white', fontWeight: 'bold' }}>{Number(data.clamp_up_pressure || 0).toFixed(1)}</Typography>
                                             <Typography variant="caption" sx={{ color: getStatusColor(data.clamp_up_pressure_ok, binaryMapping('OK', 'LOW')), fontSize: '0.65rem' }}>
                                                 {getStatusText(data.clamp_up_pressure_ok, binaryMapping('OK', 'LOW'))}
                                             </Typography>
                                         </Grid>
                                         <Grid item xs={6}>
                                             <Typography variant="caption" sx={{ color: '#64748b', display: 'block' }}>FORCE (daN)</Typography>
-                                            <Typography sx={{ color: 'white', fontWeight: 'bold' }}>{data.clamp_up_force || 0}</Typography>
+                                            <Typography sx={{ color: 'white', fontWeight: 'bold' }}>{Number(data.clamp_up_force || 0).toFixed(1)}</Typography>
                                             <Typography variant="caption" sx={{ color: getStatusColor(data.clamp_up_force_ok, binaryMapping('OK', 'LOW')), fontSize: '0.65rem' }}>
                                                 {getStatusText(data.clamp_up_force_ok, binaryMapping('OK', 'LOW'))}
                                             </Typography>
@@ -245,14 +245,14 @@ export default function PctDashboard() {
                                     <Grid container spacing={1}>
                                         <Grid item xs={6}>
                                             <Typography variant="caption" sx={{ color: '#64748b', display: 'block' }}>PRESSURE (bar)</Typography>
-                                            <Typography sx={{ color: 'white', fontWeight: 'bold' }}>{data.clamp_low_pressure || 0}</Typography>
+                                            <Typography sx={{ color: 'white', fontWeight: 'bold' }}>{Number(data.clamp_low_pressure || 0).toFixed(1)}</Typography>
                                             <Typography variant="caption" sx={{ color: getStatusColor(data.clamp_low_pressure_ok, binaryMapping('OK', 'LOW')), fontSize: '0.65rem' }}>
                                                 {getStatusText(data.clamp_low_pressure_ok, binaryMapping('OK', 'LOW'))}
                                             </Typography>
                                         </Grid>
                                         <Grid item xs={6}>
                                             <Typography variant="caption" sx={{ color: '#64748b', display: 'block' }}>FORCE (daN)</Typography>
-                                            <Typography sx={{ color: 'white', fontWeight: 'bold' }}>{data.clamp_low_force || 0}</Typography>
+                                            <Typography sx={{ color: 'white', fontWeight: 'bold' }}>{Number(data.clamp_low_force || 0).toFixed(1)}</Typography>
                                             <Typography variant="caption" sx={{ color: getStatusColor(data.clamp_low_force_ok, binaryMapping('OK', 'LOW')), fontSize: '0.65rem' }}>
                                                 {getStatusText(data.clamp_low_force_ok, binaryMapping('OK', 'LOW'))}
                                             </Typography>

@@ -5,6 +5,11 @@ import AnalogGauge from '../Common/AnalogGauge';
 import RigVisualizer from './RigVisualizer';
 import axios from '../../api';
 import { useAuth } from '../../context/AuthContext';
+import { Responsive, WidthProvider } from 'react-grid-layout';
+import 'react-grid-layout/css/styles.css';
+import 'react-resizable/css/styles.css';
+
+const ResponsiveGridLayout = WidthProvider(Responsive);
 import {
     Settings,
     Edit2,
@@ -16,16 +21,16 @@ import {
 
 // Default Config with Layout Props
 const DEFAULT_DASHBOARD_GAUGES = [
-    { id: 'd1', label: 'WOH', dataKey: 'hook_load', min: 0, max: 100, unit: 'ton', color: '#3182ce', gridWidth: 3, size: 160, majorTicks: 10, minorTicks: 4 },
-    { id: 'd2', label: 'WOB', dataKey: 'wob', min: 0, max: 100, unit: 'kips', color: '#e53e3e', gridWidth: 3, size: 160, majorTicks: 10, minorTicks: 4 },
-    { id: 'd6', label: 'HTD RPM', dataKey: 'htd_rpm', min: 0, max: 200, unit: 'RPM', color: '#4ade80', gridWidth: 3, size: 160 },
-    { id: 'd7', label: 'HTD TORQUE', dataKey: 'htd_torque', min: 0, max: 1000, unit: 'Nm', color: '#fbbf24', gridWidth: 3, size: 160 },
+    { id: 'd1', label: 'WOH', dataKey: 'hook_load', min: 0, max: 100, unit: 'ton', color: '#3182ce', majorTicks: 10, minorTicks: 4, layout: { i: 'd1', x: 0, y: 0, w: 4, h: 4, minW: 3, minH: 3 } },
+    { id: 'd2', label: 'SPP', dataKey: 'SPP-Bar', min: 0, max: 5000, unit: 'psi', color: '#fbbf24', majorTicks: 5, minorTicks: 4, layout: { i: 'd2', x: 4, y: 0, w: 4, h: 4, minW: 3, minH: 3 } },
+    { id: 'd6', label: 'HTD RPM', dataKey: 'htd_rpm', min: 0, max: 200, unit: 'RPM', color: '#4ade80', layout: { i: 'd6', x: 8, y: 0, w: 4, h: 4, minW: 3, minH: 3 } },
 ];
 
 const DEFAULT_BOTTOM_STATS = [
     {
         id: 'p1',
         title: 'DRILLING PARAMETERS',
+        layout: { i: 'p1', x: 0, y: 4, w: 3, h: 4, minW: 2, minH: 3 },
         params: [
             { id: 'p1_1', label: 'FLOW IN', dataKey: 'flow_in', unit: 'Lt/min' },
             { id: 'p1_2', label: 'FLOW OUT', dataKey: 'flow_out', unit: '%' },
@@ -37,6 +42,7 @@ const DEFAULT_BOTTOM_STATS = [
     {
         id: 'p2',
         title: 'HTD STATUS',
+        layout: { i: 'p2', x: 3, y: 4, w: 3, h: 4, minW: 2, minH: 3 },
         params: [
             { id: 'p2_1', label: 'IBOP', dataKey: 'ibop_status', unit: '' },
             { id: 'p2_2', label: 'ELEVATOR', dataKey: 'elevator_status', unit: '' },
@@ -48,6 +54,7 @@ const DEFAULT_BOTTOM_STATS = [
     {
         id: 'p3',
         title: 'EQUIPMENT STATUS',
+        layout: { i: 'p3', x: 6, y: 4, w: 3, h: 4, minW: 2, minH: 3 },
         params: [
             { id: 'p3_1', label: 'HPU', dataKey: 'hpu_status', unit: '' },
             { id: 'p3_2', label: 'HTD', dataKey: 'htd_status', unit: '' },
@@ -57,14 +64,12 @@ const DEFAULT_BOTTOM_STATS = [
         ]
     },
     {
-        id: 'p4',
-        title: 'PCT & CWK',
+        id: 'p5',
+        title: 'CAT ENG',
+        layout: { i: 'p5', x: 9, y: 4, w: 3, h: 2, minW: 2, minH: 2 },
         params: [
-            { id: 'p4_1', label: 'SEQUENCE', dataKey: 'pct_sequence', unit: '' },
-            { id: 'p4_2', label: 'SPINNER', dataKey: 'spinner_floating', unit: '' },
-            { id: 'p4_3', label: 'CLAMP FORCE', dataKey: 'cwk_clamp_pressure', unit: 'Bar' },
-            { id: 'p4_4', label: 'CLAMP', dataKey: 'cwk_clamp_status', unit: '' },
-            { id: 'p4_5', label: 'SPINNER TORQUE', dataKey: 'spinner_makeup_torque', unit: 'daN*m' }
+            { id: 'p5_1', label: 'RPM', dataKey: 'cat_rpm', unit: 'RPM' },
+            { id: 'p5_2', label: 'OIL P.', dataKey: 'cat_oil_press', unit: 'bar' }
         ]
     }
 ];
@@ -95,6 +100,7 @@ export default function RigOverview() {
     const [editMode, setEditMode] = useState(false);
     const [editingGauge, setEditingGauge] = useState(null);
     const [editingBottomStat, setEditingBottomStat] = useState(null);
+    const [visualizerLayout, setVisualizerLayout] = useState({ i: 'rig-visualizer', x: 0, y: 0, w: 3, h: 8, minW: 2, minH: 4 });
 
     const getOpModeLabel = (code) => {
         switch (Number(code)) {
@@ -204,8 +210,7 @@ export default function RigOverview() {
     const [isDialogOpen, setIsDialogOpen] = useState(false);
 
     // Drag State for Visual Feedback
-    const [dragOverIndex, setDragOverIndex] = useState(null);
-    const [statDragOverIndex, setStatDragOverIndex] = useState(null);
+
 
     // Drilling Controls State
     const [isDrillingControlsOpen, setIsDrillingControlsOpen] = useState(false);
@@ -229,6 +234,7 @@ export default function RigOverview() {
                 if (config.gauges) setGauges(config.gauges);
                 if (config.units) setUnits(config.units);
                 if (config.bottomStats) setBottomStats(config.bottomStats);
+                if (config.visualizerLayout) setVisualizerLayout(config.visualizerLayout);
             })
             .catch(err => console.error("Failed to load dashboard layout:", err));
 
@@ -284,6 +290,8 @@ export default function RigOverview() {
 
             // CAT Engine
             engine_status: newData.cat_engine?.status || 0,
+            cat_rpm: newData.cat_engine?.rpm || 0,
+            cat_oil_press: newData.cat_engine?.oil_pressure || 0,
 
             // CWK Data
             cwk_status: newData.cwk?.status || 0,
@@ -329,6 +337,7 @@ export default function RigOverview() {
             if (config.gauges) setGauges(config.gauges);
             if (config.units) setUnits(config.units);
             if (config.bottomStats) setBottomStats(config.bottomStats);
+            if (config.visualizerLayout) setVisualizerLayout(config.visualizerLayout);
         };
         socket.on('dashboard_layout_update', handleLayoutUpdate);
 
@@ -374,10 +383,11 @@ export default function RigOverview() {
     }, []);
 
     // --- Helpers ---
-    const saveLayout = (newGauges, newBottomStats) => {
+    const saveLayout = (newGauges, newBottomStats, newVisualizerLayout) => {
         const payload = {
             gauges: newGauges || gauges,
             bottomStats: newBottomStats || bottomStats,
+            visualizerLayout: newVisualizerLayout || visualizerLayout,
             units
         };
         axios.post('/api/dashboard/layout', payload)
@@ -386,12 +396,17 @@ export default function RigOverview() {
 
     const saveGauges = (newGauges) => {
         setGauges(newGauges);
-        saveLayout(newGauges, null);
+        saveLayout(newGauges, null, null);
     };
 
     const saveBottomStats = (newBottomStats) => {
         setBottomStats(newBottomStats);
-        saveLayout(null, newBottomStats);
+        saveLayout(null, newBottomStats, null);
+    };
+
+    const saveVisualizerLayout = (newVisLayout) => {
+        setVisualizerLayout(newVisLayout);
+        saveLayout(null, null, newVisLayout);
     };
 
     const saveUnits = (newUnits) => {
@@ -403,7 +418,7 @@ export default function RigOverview() {
     };
 
     const formatWOB = (val) => {
-        if (units.wob === 'lbs') return (val * 1000).toFixed(0);
+        if (units.wob === 'lbs') return (val * 1000).toFixed(1);
         if (units.wob === 'tonnes') return (val * 0.453592).toFixed(1);
         return val; // kips
     };
@@ -487,58 +502,7 @@ export default function RigOverview() {
         }
     };
 
-    // --- DnD Helpers ---
-    const handleDragStart = (e, id) => {
-        e.dataTransfer.setData("text/plain", id);
-        e.dataTransfer.effectAllowed = "move";
-    };
 
-    const handleDragOver = (e, index) => {
-        e.preventDefault();
-        setDragOverIndex(index);
-    };
-
-    const handleDrop = (e, targetIndex) => {
-        e.preventDefault();
-        setDragOverIndex(null);
-        const draggedId = e.dataTransfer.getData("text/plain");
-        if (!draggedId) return;
-
-        const draggedIndex = gauges.findIndex(g => g.id === draggedId);
-        if (draggedIndex === -1 || draggedIndex === targetIndex) return;
-
-        const newGauges = [...gauges];
-        const [movedItem] = newGauges.splice(draggedIndex, 1);
-        newGauges.splice(targetIndex, 0, movedItem);
-
-        saveGauges(newGauges);
-    };
-
-    const handleStatDragStart = (e, id) => {
-        e.dataTransfer.setData("stat-id", id);
-        e.dataTransfer.effectAllowed = "move";
-    };
-
-    const handleStatDragOver = (e, index) => {
-        e.preventDefault();
-        setStatDragOverIndex(index);
-    };
-
-    const handleStatDrop = (e, targetIndex) => {
-        e.preventDefault();
-        setStatDragOverIndex(null);
-        const draggedId = e.dataTransfer.getData("stat-id");
-        if (!draggedId) return;
-
-        const draggedIndex = bottomStats.findIndex(s => s.id === draggedId);
-        if (draggedIndex === -1 || draggedIndex === targetIndex) return;
-
-        const newStats = [...bottomStats];
-        const [movedItem] = newStats.splice(draggedIndex, 1);
-        newStats.splice(targetIndex, 0, movedItem);
-
-        saveBottomStats(newStats);
-    };
 
     // --- Digital Inputs are now directly parsed from Rig Data ---
 
@@ -572,21 +536,102 @@ export default function RigOverview() {
         overflowWrap: 'anywhere'
     };
 
+    const renderStatPanel = (panel, index) => (
+        <Paper
+            sx={{
+                p: 2.5,
+                height: '100%',
+                bgcolor: 'rgba(15, 23, 42, 0.6)',
+                backdropFilter: 'blur(12px)',
+                border: editMode ? '1px dashed #475569' : '1px solid rgba(56, 189, 248, 0.2)',
+                borderRadius: 3,
+                boxShadow: '0 8px 32px rgba(0,0,0,0.3)',
+                position: 'relative',
+                overflow: 'hidden',
+                transition: 'all 0.2s',
+                ...(editMode && {
+                    '&:hover': {
+                        bgcolor: '#1e293b',
+                        boxShadow: '0 0 0 2px #334155'
+                    },
+                    '&::before': {
+                        content: '""',
+                        position: 'absolute',
+                        top: 0, left: 0, right: 0, height: '4px',
+                        bgcolor: '#fbbf24',
+                        opacity: 0.6
+                    }
+                })
+            }}
+        >
+                <Typography
+                    variant="subtitle2"
+                    sx={{
+                        color: '#38bdf8',
+                        fontWeight: '800',
+                        mb: 2.5,
+                        letterSpacing: 1.5,
+                        textAlign: 'center',
+                        textShadow: '0 0 10px rgba(56, 189, 248, 0.3)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: 1
+                    }}
+                >
+                    {panel.title}
+                    {editMode && (
+                        <IconButton
+                            size="small"
+                            onClick={() => setEditingBottomStat(panel)}
+                            sx={{ color: '#fbbf24', p: 0.5 }}
+                        >
+                            <Edit2 size={14} />
+                        </IconButton>
+                    )}
+                </Typography>
+
+                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
+                    {panel.params.map((s, sIdx) => {
+                        const status = getStatusLabel(s.dataKey, rigData[s.dataKey]);
+                        return (
+                            <Box
+                                key={s.id || sIdx}
+                                sx={{
+                                    p: 2,
+                                    bgcolor: 'rgba(30, 41, 59, 0.5)',
+                                    borderRadius: 2,
+                                    border: '1px solid rgba(148, 163, 184, 0.1)',
+                                    display: 'flex',
+                                    justifyContent: 'space-between',
+                                    alignItems: 'center',
+                                    boxShadow: 'inset 0 2px 4px rgba(0,0,0,0.2)'
+                                }}
+                            >
+                                <Typography variant="body1" sx={{ color: '#cbd5e1', fontWeight: '600', letterSpacing: 0.5 }}>{s.label}</Typography>
+                                {status ? (
+                                    <Typography sx={{ color: status.color, fontWeight: '800', fontSize: '1.1rem', textShadow: `0 0 8px ${status.color}40` }}>
+                                        {status.label}
+                                    </Typography>
+                                ) : (
+                                    <Typography sx={{ color: '#38bdf8', fontWeight: '800', fontSize: '1.25rem', textShadow: '0 0 10px rgba(56,189,248,0.3)' }}>
+                                        {Number(rigData[s.dataKey] || 0).toFixed(1)}
+                                        <span style={{ color: '#94a3b8', fontSize: '0.85rem', fontWeight: '600', marginLeft: '6px' }}>
+                                            {s.unit}
+                                        </span>
+                                    </Typography>
+                                )}
+                            </Box>
+                        );
+                    })}
+                </Box>
+            </Paper>
+    );
+
     return (
         <Box sx={{ position: 'relative', maxWidth: '100%', overflowX: 'hidden' }}>
-            {feedAlert && (
-                <Box sx={{
-                    mb: 2, px: 2, py: 1, borderRadius: 1,
-                    bgcolor: `${feedAlert.color}1a`,
-                    border: `1px solid ${feedAlert.color}`,
-                    display: 'flex', alignItems: 'center', gap: 1
-                }}>
-                    <Box sx={{ width: 10, height: 10, borderRadius: '50%', bgcolor: feedAlert.color, boxShadow: `0 0 8px ${feedAlert.color}` }} />
-                    <Typography variant="body2" sx={{ color: feedAlert.color, fontWeight: 'bold', letterSpacing: 0.5 }}>
-                        {feedAlert.text}
-                    </Typography>
-                </Box>
-            )}
+
+
             {/* Absolute positioned controls to reclaim vertical space */}
             {canEditLayout && (
             <Box sx={{ position: { xs: 'static', sm: 'absolute' }, top: -16, right: 0, zIndex: 10, display: 'flex', justifyContent: 'flex-end', gap: 1, mb: { xs: 1, sm: 0 } }}>
@@ -603,9 +648,14 @@ export default function RigOverview() {
                 <Box sx={{ display: 'flex', bgcolor: '#1e293b', borderRadius: 1 }}>
                     <IconButton
                         size="small"
-                        onClick={() => setEditMode(!editMode)}
+                        onClick={() => {
+                            if (editMode) {
+                                saveLayout(gauges, bottomStats, visualizerLayout);
+                            }
+                            setEditMode(!editMode);
+                        }}
                         sx={{ color: editMode ? '#fbbf24' : '#94a3b8' }}
-                        title={editMode ? "Done Editing" : "Edit Layout"}
+                        title={editMode ? "Save Layout" : "Edit Layout"}
                     >
                         {editMode ? <Check size={18} /> : <Edit2 size={18} />}
                     </IconButton>
@@ -618,314 +668,133 @@ export default function RigOverview() {
             </Box>
             )}
 
-            <Grid container spacing={3} sx={{ alignItems: 'stretch' }}>
-                {/* Left Side: Rig Visualizer */}
-                <Grid item xs={12} md={3} sx={{ display: 'flex', flexDirection: 'column' }}>
-                    <RigVisualizer
-                        crownsaverOn={rigData.crownsaverOn}
-                        floorsaverOn={rigData.floorsaverOn}
-                        travellingUp={rigData.travelling_up}
-                        travellingDown={rigData.travelling_down}
-                    />
-                </Grid>
+            <Box sx={{ flexGrow: 1, position: 'relative' }}>
+                <ResponsiveGridLayout
+                    className="layout"
+                    layouts={{
+                        lg: [
+                            visualizerLayout,
+                            ...gauges.map(g => g.layout || { i: g.id, x: 0, y: 0, w: 4, h: 4 }),
+                            ...bottomStats.map(s => s.layout || { i: s.id, x: 0, y: 4, w: 3, h: 4 })
+                        ]
+                    }}
+                    breakpoints={{ lg: 1200, md: 996, sm: 768, xs: 480, xxs: 0 }}
+                    cols={{ lg: 12, md: 10, sm: 6, xs: 4, xxs: 2 }}
+                    rowHeight={50}
+                    margin={[16, 16]}
+                    isDraggable={editMode}
+                    isResizable={editMode}
+                    compactType="vertical"
+                    useCSSTransforms={true}
+                    onLayoutChange={(currentLayout) => {
+                        if (!editMode) return;
+                        
+                        const visL = currentLayout.find(item => item.i === 'rig-visualizer');
+                        if (visL) setVisualizerLayout({ i: 'rig-visualizer', x: visL.x, y: visL.y, w: visL.w, h: visL.h, minW: 2, minH: 4 });
 
-                {/* Right Side: Drilling Status Panel & Gauges */}
-                <Grid item xs={12} md={9} sx={{ display: 'flex', flexDirection: 'column' }}>
-                    {/* --- Drilling Status Panel (Dedicated Stat Panel) --- */}
-                    <Paper sx={{ p: 1.25, mb: 2, bgcolor: '#1e293b', color: 'white', display: 'grid', gridTemplateColumns: { xs: 'repeat(2, minmax(0, 1fr))', sm: 'repeat(4, minmax(0, 1fr))' }, gap: 1, alignItems: 'stretch', border: '1px solid #334155', height: 'auto' }}>
-                        {/* Rig Activity Indicator */}
-                        <Box sx={statusCellSx}>
-                            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 1, color: '#94a3b8' }}>
-                                <Typography variant="caption" sx={{ letterSpacing: 1, fontWeight: 'bold' }}>OP.MODE</Typography>
-                            </Box>
-                            <Box sx={{ mt: 'auto' }}>
-                                <Typography variant="h5" sx={{ ...statusValueSx, color: rigData.operation_mode === 1 ? '#4ade80' : '#38bdf8' }}>
-                                    {getOpModeLabel(rigData.operation_mode)}
-                                </Typography>
-                            </Box>
-                        </Box>
+                        const newGauges = gauges.map(g => {
+                            const l = currentLayout.find(item => item.i === g.id);
+                            return l ? { ...g, layout: { i: g.id, x: l.x, y: l.y, w: l.w, h: l.h, minW: 3, minH: 3 } } : g;
+                        });
 
-                        {/* ACS Status Indicator */}
-                        <Box sx={statusCellSx}>
-                            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 1, color: '#94a3b8' }}>
-                                <Typography variant="caption" sx={{ letterSpacing: 1, fontWeight: 'bold' }}>ACS</Typography>
-                            </Box>
-                            <Box sx={{ mt: 'auto' }}>
-                                <Typography variant="h5" sx={{ ...statusValueSx, color: rigData.acs_status === 1 ? '#4ade80' : (rigData.acs_status === 2 ? '#ef4444' : '#94a3b8') }}>
-                                    {getAcsStatusLabel(rigData.acs_status)}
-                                </Typography>
-                            </Box>
-                        </Box>
+                        const newStats = bottomStats.map(s => {
+                            const l = currentLayout.find(item => item.i === s.id);
+                            return l ? { ...s, layout: { i: s.id, x: l.x, y: l.y, w: l.w, h: l.h, minW: 2, minH: 3 } } : s;
+                        });
 
-                        {/* Hole Depth Stat */}
-                        <Box sx={statusCellSx}>
-                            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 1, color: '#94a3b8' }}>
-                                <Typography variant="caption" sx={{ letterSpacing: 1, fontWeight: 'bold' }}>TOTAL BIT DEPTH</Typography>
-                                {canCalibrate && (
-                                    <IconButton
-                                        size="small" sx={{ color: '#64748b', p: 0.5, '&:hover': { color: '#4ade80' } }}
-                                        onClick={() => {
-                                            setCalibrationValues({ ...calibrationValues, holeDepth: formatDepth(rigData.hole_depth), mode: 'depth' });
-                                            setIsDrillingControlsOpen(true);
-                                        }}
-                                    >
-                                        <Edit2 size={12} />
-                                    </IconButton>
-                                )}
-                            </Box>
-                            <Box sx={{ mt: 'auto' }}>
-                                <Typography variant="h5" sx={{ ...statusValueSx, color: '#4ade80' }}>
-                                    {formatDepth(rigData.hole_depth)}
-                                    <Button
-                                        variant="text" size="small"
-                                        sx={{ minWidth: 'auto', p: 0, ml: 0.5, color: '#64748b', fontSize: '11px', lineHeight: 1, minHeight: 0 }}
-                                        onClick={() => {
-                                            const next = units.depth === 'ft' ? 'm' : 'ft';
-                                            saveUnits({ ...units, depth: next });
-                                        }}
-                                    >
-                                        {units.depth}
-                                    </Button>
-                                </Typography>
-                            </Box>
-                        </Box>
-
-                        {/* Bit Position Stat */}
-                        <Box sx={statusCellSx}>
-                            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 1, color: '#94a3b8' }}>
-                                <Typography variant="caption" sx={{ letterSpacing: 1, fontWeight: 'bold' }}>BIT DEPTH</Typography>
-                                {canCalibrate && (
-                                    <IconButton
-                                        size="small" sx={{ color: '#64748b', p: 0.5, '&:hover': { color: '#38bdf8' } }}
-                                        onClick={() => {
-                                            setCalibrationValues({ ...calibrationValues, bitDepth: formatDepth(rigData.bit_depth), mode: 'depth' });
-                                            setIsDrillingControlsOpen(true);
-                                        }}
-                                    >
-                                        <Edit2 size={12} />
-                                    </IconButton>
-                                )}
-                            </Box>
-                            <Box sx={{ mt: 'auto' }}>
-                                <Typography variant="h5" sx={{ ...statusValueSx, color: '#38bdf8' }}>
-                                    {formatDepth(rigData.bit_depth)}
-                                    <Typography component="span" variant="caption" sx={{ ml: 0.5, color: '#64748b' }}>{units.depth}</Typography>
-                                </Typography>
-                            </Box>
-                        </Box>
-                    </Paper>
-
-                    {/* Gauges Grid */}
-                    <Grid container spacing={2} sx={{ mb: 0, alignItems: 'stretch' }}>
-                        {gauges.map((g, index) => (
-                            <Grid
-                                item
-                                xs={12} sm={6} md={g.gridWidth || 3}
-                                key={g.id}
-                                sx={{ display: 'flex' }}
+                        setGauges(newGauges);
+                        setBottomStats(newStats);
+                    }}
+                >
+                    <div key="rig-visualizer" style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+                        <div style={{ flexGrow: 1, position: 'relative', width: '100%', height: '100%' }}>
+                            <RigVisualizer
+                                blockPosition={rigData.block_position}
+                                slipsIn={rigData.slips_in}
+                            />
+                        </div>
+                    </div>
+                    {gauges.map((g) => (
+                        <div key={g.id} style={{ height: '100%' }}>
+                            <Paper
+                                sx={{
+                                    p: 2.5,
+                                    bgcolor: 'rgba(15, 23, 42, 0.6)',
+                                    backdropFilter: 'blur(12px)',
+                                    border: editMode ? '1px dashed #475569' : '1px solid rgba(56, 189, 248, 0.2)',
+                                    borderRadius: 3,
+                                    boxShadow: '0 8px 32px rgba(0,0,0,0.3)',
+                                    color: 'white',
+                                    display: 'flex',
+                                    flexDirection: 'column',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    position: 'relative',
+                                    height: '100%',
+                                    width: '100%',
+                                    transition: 'all 0.2s',
+                                    '&:hover': {
+                                        bgcolor: editMode ? '#1e293b' : 'rgba(15, 23, 42, 0.8)',
+                                        boxShadow: editMode ? '0 0 0 2px #334155' : '0 8px 32px rgba(0,0,0,0.4)'
+                                    }
+                                }}
                             >
-                                {/* Wrapper DIV for Drag Events */}
-                                <div
-                                    draggable={editMode}
-                                    onDragStart={(e) => editMode && handleDragStart(e, g.id)}
-                                    onDragOver={(e) => editMode && handleDragOver(e, index)}
-                                    onDrop={(e) => editMode && handleDrop(e, index)}
-                                    style={{
-                                        cursor: editMode ? 'grab' : 'default',
-                                        opacity: editMode && dragOverIndex === index ? 0.5 : 1,
-                                        transform: editMode && dragOverIndex === index ? 'scale(0.98)' : 'scale(1)',
-                                        transition: 'all 0.2s',
-                                        border: editMode && dragOverIndex === index ? '2px dashed #fbbf24' : '2px solid transparent',
-                                        borderRadius: 8,
-                                        height: '100%',
-                                        width: '100%'
-                                    }}
-                                >
-                                    <Paper
-                                        sx={{
-                                            p: 1,
-                                            bgcolor: editMode ? 'rgba(30, 41, 59, 0.5)' : 'transparent',
-                                            backgroundImage: 'none',
-                                            boxShadow: 'none',
-                                            color: 'white',
-                                            display: 'flex',
-                                            flexDirection: 'column',
-                                            alignItems: 'center',
-                                            justifyContent: 'center',
-                                            position: 'relative',
-                                            border: editMode ? '1px dashed #475569' : 'none',
-                                            height: '100%',
-                                            width: '100%',
-                                            minHeight: { xs: 280, md: 280, xl: 320 },
-                                            transition: 'all 0.2s',
-                                            '&:hover': {
-                                                bgcolor: editMode ? '#1e293b' : 'transparent',
-                                                boxShadow: editMode ? '0 0 0 2px #334155' : 'none'
-                                            }
-                                        }}
-                                    >
-                                        <AnalogGauge
-                                            value={Number(rigData[g.dataKey]) || 0}
-                                            max={Number(g.max)}
-                                            min={Number(g.min)}
-                                            label={g.label}
-                                            unit={g.unit}
-                                            size="fill"
-                                            minSize={150}
-                                            maxSize={Math.max(Number(g.size || 220), 320)}
-                                            color={g.color}
-                                            majorTicks={g.majorTicks || 5}
-                                            minorTicks={g.minorTicks || 4}
-                                            // Conditional Props for Hook Load, HTD RPM & PCT TORQUE
-                                            subValue={g.dataKey === 'hook_load' ? formatWOB(rigData.wob) : (g.dataKey === 'htd_rpm' ? Number(rigData.ahtd_torque || 0).toFixed(1) : (g.dataKey === 'pct_torque' ? Number(rigData.pct_last_torque || 0).toFixed(1) : undefined))}
-                                            subLabel={g.dataKey === 'hook_load' ? `WOB (${units.wob === 'tonnes' ? 'ton' : units.wob})` : (g.dataKey === 'htd_rpm' ? 'TORQUE (daN·m)' : (g.dataKey === 'pct_torque' ? 'LAST TORQUE (daN·m)' : undefined))}
-                                            subValueInside
-                                        />
+                                <AnalogGauge
+                                    value={(g.unit === 'psi' && g.dataKey === 'SPP-Bar') ? (Number(rigData[g.dataKey]) * 14.50377) || 0 : Number(rigData[g.dataKey]) || 0}
+                                    max={Number(g.max)}
+                                    min={Number(g.min)}
+                                    label={g.label}
+                                    unit={g.unit}
+                                    size="fill"
+                                    minSize={150}
+                                    maxSize={800}
+                                    color={g.color}
+                                    majorTicks={g.majorTicks || 5}
+                                    minorTicks={g.minorTicks || 4}
+                                    subValue={g.dataKey === 'hook_load' ? formatWOB(rigData.wob) : (g.dataKey === 'htd_rpm' ? Number(rigData.ahtd_torque || 0).toFixed(1) : (g.dataKey === 'pct_torque' ? Number(rigData.pct_last_torque || 0).toFixed(1) : undefined))}
+                                    subLabel={g.dataKey === 'hook_load' ? `WOB (${units.wob === 'tonnes' ? 'ton' : units.wob})` : (g.dataKey === 'htd_rpm' ? 'TORQUE (daN·m)' : (g.dataKey === 'pct_torque' ? 'LAST TORQUE (daN·m)' : undefined))}
+                                    subValueInside
+                                />
 
-                                        {editMode && (
-                                            <Box sx={{
-                                                position: 'absolute', top: 0, right: 0, p: 1,
-                                                display: 'flex', gap: 1, zIndex: 10
-                                            }}>
-                                                <IconButton
-                                                    size="small"
-                                                    onClick={(e) => { e.stopPropagation(); setEditingGauge({ ...g }); setIsDialogOpen(true); }}
-                                                    sx={{ bgcolor: '#fbbf24', color: 'black', '&:hover': { bgcolor: '#f59e0b' } }}
-                                                    title="Edit Settings"
-                                                >
-                                                    <Settings size={14} />
-                                                </IconButton>
-                                                <IconButton
-                                                    size="small"
-                                                    onClick={(e) => { e.stopPropagation(); handleRemoveGauge(g.id); }}
-                                                    sx={{ color: 'white', bgcolor: '#ef4444', '&:hover': { bgcolor: '#dc2626' } }}
-                                                    title="Remove"
-                                                >
-                                                    <Trash2 size={14} />
-                                                </IconButton>
-                                            </Box>
-                                        )}
-
-                                        {editMode && (
-                                            <Box sx={{ position: 'absolute', bottom: 5, left: '50%', transform: 'translateX(-50%)', color: '#64748b', pointerEvents: 'none' }}>
-                                                <Typography variant="caption" sx={{ fontSize: 10 }}>DRAG TO MOVE</Typography>
-                                            </Box>
-                                        )}
-                                    </Paper>
-                                </div>
-                            </Grid>
-                        ))}
-                    </Grid>
-                </Grid>
-
-                {/* Bottom Row: All 4 Multi-Parameter Panels */}
-                <Grid item xs={12}>
-                    <Grid container spacing={3}>
-                        {bottomStats.map((panel, index) => (
-                            <Grid item xs={12} md={3} key={panel.id || index}>
-                                <div
-                                    draggable={editMode}
-                                    onDragStart={(e) => editMode && handleStatDragStart(e, panel.id)}
-                                    onDragOver={(e) => editMode && handleStatDragOver(e, index)}
-                                    onDrop={(e) => editMode && handleStatDrop(e, index)}
-                                    style={{
-                                        cursor: editMode ? 'grab' : 'default',
-                                        opacity: editMode && statDragOverIndex === index ? 0.5 : 1,
-                                        transform: editMode && statDragOverIndex === index ? 'scale(0.98)' : 'scale(1)',
-                                        transition: 'all 0.2s',
-                                        border: editMode && statDragOverIndex === index ? '2px dashed #fbbf24' : '2px solid transparent',
-                                        borderRadius: 12,
-                                        height: '100%'
-                                    }}
-                                >
-                                    <Paper
-                                        sx={{
-                                            p: 2.5,
-                                            height: '100%',
-                                            bgcolor: 'rgba(15, 23, 42, 0.4)',
-                                            backdropFilter: 'blur(8px)',
-                                            border: '1px solid rgba(56, 189, 248, 0.1)',
-                                            borderRadius: 3,
-                                            boxShadow: '0 8px 32px rgba(0,0,0,0.2)',
-                                            position: 'relative',
-                                            overflow: 'hidden',
-                                            ...(editMode && {
-                                                '&::before': {
-                                                    content: '""',
-                                                    position: 'absolute',
-                                                    top: 0, left: 0, right: 0, height: '4px',
-                                                    bgcolor: '#fbbf24',
-                                                    opacity: 0.6
-                                                }
-                                            })
-                                        }}
-                                    >
-                                        <Typography
-                                            variant="subtitle2"
-                                            sx={{
-                                                color: '#38bdf8',
-                                                fontWeight: '800',
-                                                mb: 2.5,
-                                                letterSpacing: 1.5,
-                                                textAlign: 'center',
-                                                textShadow: '0 0 10px rgba(56, 189, 248, 0.3)',
-                                                display: 'flex',
-                                                alignItems: 'center',
-                                                justifyContent: 'center',
-                                                gap: 1
-                                            }}
+                                {editMode && (
+                                    <Box sx={{
+                                        position: 'absolute', top: 0, right: 0, p: 1,
+                                        display: 'flex', gap: 1, zIndex: 10
+                                    }}>
+                                        <IconButton
+                                            size="small"
+                                            onClick={(e) => { e.stopPropagation(); setEditingGauge({ ...g }); setIsDialogOpen(true); }}
+                                            sx={{ bgcolor: '#fbbf24', color: 'black', '&:hover': { bgcolor: '#f59e0b' } }}
+                                            title="Edit Settings"
                                         >
-                                            {panel.title}
-                                            {editMode && (
-                                                <IconButton
-                                                    size="small"
-                                                    onClick={() => setEditingBottomStat(panel)}
-                                                    sx={{ color: '#fbbf24', p: 0.5 }}
-                                                >
-                                                    <Edit2 size={14} />
-                                                </IconButton>
-                                            )}
-                                        </Typography>
+                                            <Settings size={14} />
+                                        </IconButton>
+                                        <IconButton
+                                            size="small"
+                                            onClick={(e) => { e.stopPropagation(); handleRemoveGauge(g.id); }}
+                                            sx={{ color: 'white', bgcolor: '#ef4444', '&:hover': { bgcolor: '#dc2626' } }}
+                                            title="Remove"
+                                        >
+                                            <Trash2 size={14} />
+                                        </IconButton>
+                                    </Box>
+                                )}
 
-                                        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
-                                            {panel.params.map((s, sIdx) => {
-                                                const status = getStatusLabel(s.dataKey, rigData[s.dataKey]);
-                                                return (
-                                                    <Box
-                                                        key={s.id || sIdx}
-                                                        sx={{
-                                                            p: 1.5,
-                                                            bgcolor: '#0f172a',
-                                                            borderRadius: 1,
-                                                            display: 'flex',
-                                                            justifyContent: 'space-between',
-                                                            alignItems: 'center'
-                                                        }}
-                                                    >
-                                                        <Typography variant="body2" sx={{ color: '#94a3b8', fontWeight: '500' }}>{s.label}</Typography>
-                                                        {status ? (
-                                                            <Typography sx={{ color: status.color, fontWeight: 'bold' }}>
-                                                                {status.label}
-                                                            </Typography>
-                                                        ) : (
-                                                            <Typography sx={{ color: '#38bdf8', fontWeight: 'bold' }}>
-                                                                {Number(rigData[s.dataKey] || 0).toFixed(s.dataKey === 'flow_in' || s.dataKey.includes('torque') ? 0 : 1)}
-                                                                <span style={{ color: '#64748b', fontSize: '0.75rem', fontWeight: 'normal', marginLeft: '4px' }}>
-                                                                    {s.unit}
-                                                                </span>
-                                                            </Typography>
-                                                        )}
-                                                    </Box>
-                                                );
-                                            })}
-                                        </Box>
-                                    </Paper>
-                                </div>
-                            </Grid>
-                        ))}
-                    </Grid>
-                </Grid>
-            </Grid>
+                                {editMode && (
+                                    <Box sx={{ position: 'absolute', bottom: 5, left: '50%', transform: 'translateX(-50%)', color: '#64748b', pointerEvents: 'none' }}>
+                                        <Typography variant="caption" sx={{ fontSize: 10 }}>DRAG TO MOVE</Typography>
+                                    </Box>
+                                )}
+                            </Paper>
+                        </div>
+                    ))}
+                    {bottomStats.map((panel, idx) => (
+                        <div key={panel.id} style={{ height: '100%' }}>
+                            {renderStatPanel(panel, idx)}
+                        </div>
+                    ))}
+                </ResponsiveGridLayout>
+            </Box>
 
             {/* Edit Dialog - Gauge Configuration */}
             <Dialog
@@ -946,7 +815,7 @@ export default function RigOverview() {
                             <MenuItem value="hook_load">Hook Load (WOH)</MenuItem>
                             <MenuItem value="wob">Weight on Bit (WOB)</MenuItem>
                             <MenuItem value="htd_rpm">HTD RPM</MenuItem>
-                            <MenuItem value="htd_torque">HTD Torque</MenuItem>
+                            <MenuItem value="SPP-Bar">SPP (Standpipe Pressure)</MenuItem>
                             <MenuItem value="pct_torque">PCT Torque</MenuItem>
                         </TextField>
 
@@ -1064,7 +933,7 @@ export default function RigOverview() {
                                         <MenuItem value="pump_pressure">SPP</MenuItem>
                                         <MenuItem value="torque">Torque</MenuItem>
                                         <MenuItem value="htd_rpm">HTD RPM</MenuItem>
-                                        <MenuItem value="htd_torque">HTD Torque</MenuItem>
+                                        <MenuItem value="SPP-Bar">SPP (Standpipe Pressure)</MenuItem>
                                         <MenuItem value="pct_torque">PCT Torque</MenuItem>
                                         <MenuItem value="hook_load">Hook Load</MenuItem>
                                         <MenuItem value="wob">WOB</MenuItem>

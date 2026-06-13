@@ -68,6 +68,31 @@ export default function Layout() {
     const [menuAnchor, setMenuAnchor] = useState(null);
     const [connected, setConnected] = useState(socket.connected);
 
+    // Live rig parameters for the top bar
+    const [liveParams, setLiveParams] = useState({ opMode: 0, acsStatus: 0, holeDepth: 0, bitDepth: 0 });
+
+    const getOpModeLabel = (code) => {
+        switch (Number(code)) {
+            case 1: return "DRILLING";
+            case 2: return "TRIP IN";
+            case 3: return "TRIP OUT";
+            case 4: return "CASING";
+            default: return "IDLE";
+        }
+    };
+
+    const getAcsStatusLabel = (code) => {
+        switch (Number(code)) {
+            case 1: return "ON";
+            case 2: return "OFF";
+            case 3: return "DISABLE";
+            default: return "UNKNOWN";
+        }
+    };
+
+    const getOpModeColor = (code) => Number(code) === 1 ? '#4ade80' : '#38bdf8';
+    const getAcsColor = (code) => Number(code) === 1 ? '#4ade80' : (Number(code) === 2 ? '#ef4444' : '#94a3b8');
+
     // Admin sees the Settings entry; everyone else does not.
     const navItems = user?.role === 'admin'
         ? [...menuItems, { text: 'Settings', icon: <Settings size={20} />, path: '/admin' }]
@@ -111,12 +136,24 @@ export default function Layout() {
         socket.on('connect_error', handleConnectError);
         setConnected(socket.connected);
 
+        // Live rig parameters for top bar
+        const handleRigData = (data) => {
+            setLiveParams({
+                opMode: data.drilling?.operation_mode || 0,
+                acsStatus: data.acs?.status || 0,
+                holeDepth: data.drilling?.hole_depth || 0,
+                bitDepth: data.drilling?.bit_depth || 0,
+            });
+        };
+        socket.on('rig_data', handleRigData);
+
         return () => {
             // Remove ONLY our own handlers; do NOT disconnect the shared socket here.
             socket.off('dashboard_layout_update', handleLayoutUpdate);
             socket.off('connect', handleConnect);
             socket.off('disconnect', handleDisconnect);
             socket.off('connect_error', handleConnectError);
+            socket.off('rig_data', handleRigData);
         };
     }, []);
 
@@ -267,10 +304,51 @@ export default function Layout() {
                         </List>
                     </Popover>
 
-                    <Box sx={{ flexGrow: 1, display: { xs: 'none', md: 'block' } }} />
+                    {/* Live Rig Parameters */}
+                    <Box sx={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: { xs: 0.5, xl: 2 },
+                        flexGrow: 1,
+                        ml: { xs: 1, md: 2 },
+                        mr: { xs: 1, md: 2 },
+                        flexWrap: 'nowrap',
+                        overflow: 'hidden',
+                    }}>
+                        {/* OP.MODE */}
+                        <Box sx={{ display: 'flex', flexDirection: 'column', justifyContent: 'center', textAlign: 'center', bgcolor: '#1e293b', px: { xs: 1, sm: 3 }, height: 60, borderRadius: 1, border: '1px solid #334155', minWidth: 100 }}>
+                            <Typography variant="caption" sx={{ color: '#94a3b8', fontWeight: 'bold', letterSpacing: 1, fontSize: 12, lineHeight: 1.2 }}>OP.MODE</Typography>
+                            <Typography variant="subtitle2" sx={{ color: getOpModeColor(liveParams.opMode), fontWeight: 'bold', fontSize: 16, lineHeight: 1.2 }}>
+                                {getOpModeLabel(liveParams.opMode)}
+                            </Typography>
+                        </Box>
+                        {/* ACS */}
+                        <Box sx={{ display: 'flex', flexDirection: 'column', justifyContent: 'center', textAlign: 'center', bgcolor: '#1e293b', px: { xs: 1, sm: 3 }, height: 60, borderRadius: 1, border: '1px solid #334155', minWidth: 90 }}>
+                            <Typography variant="caption" sx={{ color: '#94a3b8', fontWeight: 'bold', letterSpacing: 1, fontSize: 12, lineHeight: 1.2 }}>ACS</Typography>
+                            <Typography variant="subtitle2" sx={{ color: getAcsColor(liveParams.acsStatus), fontWeight: 'bold', fontSize: 16, lineHeight: 1.2 }}>
+                                {getAcsStatusLabel(liveParams.acsStatus)}
+                            </Typography>
+                        </Box>
+                        {/* TOTAL BIT DEPTH */}
+                        <Box sx={{ display: 'flex', flexDirection: 'column', justifyContent: 'center', textAlign: 'center', bgcolor: '#1e293b', px: { xs: 1, sm: 3 }, height: 60, borderRadius: 1, border: '1px solid #334155', minWidth: 110 }}>
+                            <Typography variant="caption" sx={{ color: '#94a3b8', fontWeight: 'bold', letterSpacing: 1, fontSize: 12, lineHeight: 1.2 }}>HOLE DEPTH</Typography>
+                            <Typography variant="subtitle2" sx={{ color: '#4ade80', fontWeight: 'bold', fontSize: 16, lineHeight: 1.2 }}>
+                                {Number(liveParams.holeDepth).toFixed(1)}
+                                <Typography component="span" variant="caption" sx={{ ml: 0.5, color: '#64748b', fontSize: 11 }}>m</Typography>
+                            </Typography>
+                        </Box>
+                        {/* BIT DEPTH */}
+                        <Box sx={{ display: 'flex', flexDirection: 'column', justifyContent: 'center', textAlign: 'center', bgcolor: '#1e293b', px: { xs: 1, sm: 3 }, height: 60, borderRadius: 1, border: '1px solid #334155', minWidth: 110 }}>
+                            <Typography variant="caption" sx={{ color: '#94a3b8', fontWeight: 'bold', letterSpacing: 1, fontSize: 12, lineHeight: 1.2 }}>BIT DEPTH</Typography>
+                            <Typography variant="subtitle2" sx={{ color: '#38bdf8', fontWeight: 'bold', fontSize: 16, lineHeight: 1.2 }}>
+                                {Number(liveParams.bitDepth).toFixed(1)}
+                                <Typography component="span" variant="caption" sx={{ ml: 0.5, color: '#64748b', fontSize: 11 }}>m</Typography>
+                            </Typography>
+                        </Box>
+                    </Box>
 
-                    {/* Persistent alarm banner — visible on every page. */}
-                    <AlarmBanner />
+
 
                     {/* Right side - Connection status, Rig/Well info & Logout */}
                     <Box sx={{
@@ -282,43 +360,32 @@ export default function Layout() {
                         flex: { xs: '1 1 auto', md: '0 0 auto' },
                         minWidth: 0
                     }}>
-                        {/* Live socket connection indicator */}
-                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, bgcolor: '#1e293b', px: { xs: 1, sm: 1.5 }, py: 1, borderRadius: 1 }}>
-                            <Box sx={{
-                                width: 10, height: 10, borderRadius: '50%',
-                                bgcolor: connected ? '#4ade80' : '#ef4444',
-                                boxShadow: connected ? '0 0 8px #4ade80' : '0 0 8px #ef4444',
-                                transition: 'all 0.3s'
-                            }} />
-                            <Typography variant="caption" sx={{ color: connected ? '#4ade80' : '#ef4444', fontWeight: 'bold', letterSpacing: 0.5 }}>
-                                {connected ? 'Connected' : 'Disconnected'}
-                            </Typography>
-                        </Box>
+                        {/* Rig / Well Info */}
                         <Box
                             onClick={user?.role === 'admin' ? handleEditClick : undefined}
                             title={user?.role === 'admin' ? 'Edit rig and well details' : undefined}
                             sx={{
                                 display: 'flex',
                                 alignItems: 'center',
-                                gap: { xs: 1, sm: 2 },
+                                gap: { xs: 1, sm: 3 },
                                 bgcolor: '#1e293b',
-                                px: { xs: 1, sm: 2 },
-                                py: 1,
+                                px: { xs: 1, sm: 3 },
+                                height: 60,
                                 borderRadius: 1,
                                 minWidth: 0,
                                 cursor: user?.role === 'admin' ? 'pointer' : 'default',
-                                border: user?.role === 'admin' ? '1px solid rgba(56, 189, 248, 0.18)' : '1px solid transparent',
-                                '&:hover': user?.role === 'admin' ? { borderColor: 'rgba(56, 189, 248, 0.45)' } : undefined
+                                border: user?.role === 'admin' ? '1px solid rgba(56, 189, 248, 0.4)' : '1px solid #334155',
+                                '&:hover': user?.role === 'admin' ? { borderColor: 'rgba(56, 189, 248, 0.8)' } : undefined
                             }}
                         >
-                            <Box>
-                                <Typography variant="body2" sx={{ color: '#94a3b8', lineHeight: 1 }}>Rig</Typography>
-                                <Typography variant="subtitle2" sx={{ color: '#38bdf8', fontWeight: 'bold' }}>{wellInfo.rig}</Typography>
+                            <Box sx={{ display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
+                                <Typography variant="caption" sx={{ color: '#94a3b8', fontWeight: 'bold', letterSpacing: 1, fontSize: 12, lineHeight: 1.2 }}>RIG</Typography>
+                                <Typography variant="subtitle2" sx={{ color: '#38bdf8', fontWeight: 'bold', fontSize: 16, lineHeight: 1.2 }}>{wellInfo.rig}</Typography>
                             </Box>
-                            <Box sx={{ width: '1px', height: '20px', bgcolor: '#334155' }} />
-                            <Box>
-                                <Typography variant="body2" sx={{ color: '#94a3b8', lineHeight: 1 }}>Well</Typography>
-                                <Typography variant="subtitle2" sx={{ color: '#38bdf8', fontWeight: 'bold' }}>{wellInfo.well}</Typography>
+                            <Box sx={{ width: '1px', height: '32px', bgcolor: '#334155' }} />
+                            <Box sx={{ display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
+                                <Typography variant="caption" sx={{ color: '#94a3b8', fontWeight: 'bold', letterSpacing: 1, fontSize: 12, lineHeight: 1.2 }}>WELL</Typography>
+                                <Typography variant="subtitle2" sx={{ color: '#38bdf8', fontWeight: 'bold', fontSize: 16, lineHeight: 1.2 }}>{wellInfo.well}</Typography>
                             </Box>
                             {user?.role === 'admin' && (
                                 <IconButton size="small" onClick={(event) => { event.stopPropagation(); handleEditClick(); }} sx={{ color: '#38bdf8', bgcolor: 'rgba(56, 189, 248, 0.1)', ml: { xs: 0, sm: 1 }, '&:hover': { bgcolor: 'rgba(56, 189, 248, 0.2)' } }}>
@@ -326,6 +393,7 @@ export default function Layout() {
                                 </IconButton>
                             )}
                         </Box>
+                        
                         <IconButton onClick={handleLogout} sx={{ color: '#ef4444', '&:hover': { bgcolor: 'rgba(239, 68, 68, 0.1)' } }} title="Logout">
                             <LogOut size={20} />
                         </IconButton>

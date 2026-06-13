@@ -28,3 +28,6 @@ logs/
 *.swp
 .idea/
 .vscode/
+# Offline images
+offline_images/
+

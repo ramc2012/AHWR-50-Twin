@@ -226,10 +226,11 @@ const AnalogGauge = ({
                         y={labelY}
                         textAnchor="middle"
                         dominantBaseline="middle"
-                        fill="#94a3b8"
-                        fontSize={labelFontSize}
-                        fontWeight="700"
-                        letterSpacing="0"
+                        fill={color}
+                        fontSize={labelFontSize * 1.3}
+                        fontWeight="900"
+                        letterSpacing="1"
+                        style={{ filter: `drop-shadow(0px 0px 4px ${color}60)` }}
                     >
                         {String(label || '').toUpperCase()}
                     </text>

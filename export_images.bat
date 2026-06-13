@@ -1,0 +1,16 @@
+@echo off
+echo =======================================================
+echo    Exporting Docker images for offline transfer...
+echo =======================================================
+mkdir images 2>nul
+echo Exporting Backend...
+docker save ahwr-50-twin-backend -o images\backend.tar
+echo Exporting Frontend...
+docker save ahwr-50-twin-frontend -o images\frontend.tar
+echo Exporting InfluxDB...
+docker save influxdb:2.7 -o images\influxdb.tar
+echo Exporting Telegraf...
+docker save telegraf:1.29 -o images\telegraf.tar
+echo.
+echo Done! You can now copy this entire folder to your pendrive.
+pause

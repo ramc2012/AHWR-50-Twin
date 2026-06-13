@@ -1,0 +1,112 @@
+[
+  {
+    "key": "hookload_hi",
+    "dataKey": "drawworks.hook_load",
+    "label": "Hook Load High",
+    "unit": "t",
+    "hi": 180,
+    "hiHi": 200,
+    "deadband": 2,
+    "onDelaySec": 2,
+    "priority": "P1",
+    "enabled": true
+  },
+  {
+    "key": "spp_hi",
+    "dataKey": "mudpump.pressure",
+    "label": "Pump / Standpipe Pressure High",
+    "unit": "bar",
+    "hi": 240,
+    "hiHi": 300,
+    "deadband": 5,
+    "onDelaySec": 2,
+    "priority": "P2",
+    "enabled": true
+  },
+  {
+    "key": "tubing_hi",
+    "dataKey": "wellhead.tubing_pressure",
+    "label": "Tubing Pressure High",
+    "unit": "bar",
+    "hi": 200,
+    "hiHi": 250,
+    "deadband": 5,
+    "onDelaySec": 2,
+    "priority": "P1",
+    "enabled": true
+  },
+  {
+    "key": "casing_hi",
+    "dataKey": "wellhead.casing_pressure",
+    "label": "Casing Pressure High",
+    "unit": "bar",
+    "hi": 150,
+    "hiHi": 200,
+    "deadband": 5,
+    "onDelaySec": 2,
+    "priority": "P1",
+    "enabled": true
+  },
+  {
+    "key": "accumulator_lo",
+    "dataKey": "well_control.accumulator_pressure",
+    "label": "BOP Accumulator Low",
+    "unit": "psi",
+    "lo": 2800,
+    "loLo": 2500,
+    "deadband": 25,
+    "onDelaySec": 3,
+    "priority": "P1",
+    "enabled": true
+  },
+  {
+    "key": "pit_gainloss",
+    "dataKey": "fluid.tank_gain_loss",
+    "label": "Pit Gain / Loss",
+    "unit": "m³",
+    "hi": 1.5,
+    "hiHi": 3,
+    "lo": -1.5,
+    "loLo": -3,
+    "deadband": 0.2,
+    "onDelaySec": 2,
+    "priority": "P1",
+    "enabled": true
+  },
+  {
+    "key": "hpu_oiltemp_hi",
+    "dataKey": "hpu.oil_temp",
+    "label": "HPU Oil Temperature High",
+    "unit": "°C",
+    "hi": 60,
+    "hiHi": 70,
+    "deadband": 1,
+    "onDelaySec": 5,
+    "priority": "P3",
+    "enabled": true
+  },
+  {
+    "key": "eng_oilpress_lo",
+    "dataKey": "cat_engine.oil_pressure",
+    "label": "Engine Oil Pressure Low",
+    "unit": "bar",
+    "lo": 30,
+    "loLo": 20,
+    "deadband": 1,
+    "onDelaySec": 3,
+    "priority": "P2",
+    "enabled": true
+  },
+  {
+    "key": "eng_coolant_hi",
+    "dataKey": "cat_engine.coolant_temp",
+    "label": "Engine Coolant Temp High",
+    "unit": "°C",
+    "hi": 100,
+    "hiHi": 110,
+    "deadband": 1,
+    "onDelaySec": 5,
+    "priority": "P2",
+    "enabled": true
+  }
+]

@@ -169,7 +169,7 @@ const StatsPanel = ({ rigData }) => {
             }
             if (key.includes('depth')) return val.toFixed(1);
             if (key === 'wob') return val.toFixed(1);
-            return val.toFixed(0);
+            return val.toFixed(1);
         }
         return val;
     };

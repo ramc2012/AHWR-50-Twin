@@ -66,7 +66,7 @@ export default function CatEngineDashboard() {
                         <StatusIndicator label="Source Cmd" value={data.source_cmd} mapping={sourceMapping} />
                         <Box sx={{ ml: 'auto', textAlign: 'right', pr: 2 }}>
                             <Typography variant="caption" sx={{ color: '#94a3b8', display: 'block' }}>TOTAL ENGINE HOURS</Typography>
-                            <Typography variant="h5" sx={{ color: '#38bdf8', fontWeight: 'bold' }}>{data.total_hours || 0} <span style={{ fontSize: '0.6em', color: '#64748b' }}>HRS</span></Typography>
+                            <Typography variant="h5" sx={{ color: '#38bdf8', fontWeight: 'bold' }}>{Number(data.total_hours || 0).toFixed(1)} <span style={{ fontSize: '0.6em', color: '#64748b' }}>HRS</span></Typography>
                         </Box>
                     </Paper>
                 </Grid>
@@ -135,7 +135,7 @@ export default function CatEngineDashboard() {
                 <Grid item xs={12} md={3}>
                     <Box sx={{ p: 2, bgcolor: '#1e293b', borderRadius: 2, border: '1px solid #334155' }}>
                         <Typography variant="caption" sx={{ color: '#94a3b8', display: 'block', mb: 1 }}>FUEL SYSTEM</Typography>
-                        <Typography variant="h4" sx={{ color: '#38bdf8', fontWeight: 'bold' }}>{data.fuel_pressure || 0} bar</Typography>
+                        <Typography variant="h4" sx={{ color: '#38bdf8', fontWeight: 'bold' }}>{Number(data.fuel_pressure || 0).toFixed(1)} bar</Typography>
                         <Divider sx={{ my: 1, bgcolor: '#334155' }} />
                         <Typography variant="caption" sx={{ color: '#64748b' }}>TEMP: {data.fuel_temp || 0} °C</Typography>
                     </Box>
@@ -144,7 +144,7 @@ export default function CatEngineDashboard() {
                 <Grid item xs={12} md={3}>
                     <Box sx={{ p: 2, bgcolor: '#1e293b', borderRadius: 2, border: '1px solid #334155' }}>
                         <Typography variant="caption" sx={{ color: '#94a3b8', display: 'block', mb: 1 }}>ELECTRICAL</Typography>
-                        <Typography variant="h4" sx={{ color: '#4ade80', fontWeight: 'bold' }}>{data.battery_voltage || 0} V</Typography>
+                        <Typography variant="h4" sx={{ color: '#4ade80', fontWeight: 'bold' }}>{Number(data.battery_voltage || 0).toFixed(1)} V</Typography>
                         <Divider sx={{ my: 1, bgcolor: '#334155' }} />
                         <Typography variant="caption" sx={{ color: '#64748b' }}>DC BUS POTENTIAL</Typography>
                     </Box>
@@ -153,7 +153,7 @@ export default function CatEngineDashboard() {
                 <Grid item xs={12} md={3}>
                     <Box sx={{ p: 2, bgcolor: '#1e293b', borderRadius: 2, border: '1px solid #334155' }}>
                         <Typography variant="caption" sx={{ color: '#94a3b8', display: 'block', mb: 1 }}>TOTAL FUEL USED</Typography>
-                        <Typography variant="h4" sx={{ color: '#a78bfa', fontWeight: 'bold' }}>{data.total_fuel || 0}</Typography>
+                        <Typography variant="h4" sx={{ color: '#a78bfa', fontWeight: 'bold' }}>{Number(data.total_fuel || 0).toFixed(0)}</Typography>
                         <Divider sx={{ my: 1, bgcolor: '#334155' }} />
                         <Typography variant="caption" sx={{ color: '#64748b' }}>LITERS (LIFETIME)</Typography>
                     </Box>
