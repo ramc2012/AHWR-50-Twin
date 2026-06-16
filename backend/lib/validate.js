@@ -98,6 +98,9 @@ function validatePlcConfig(config) {
                     if (!S7_ADDR_RE.test(String(f.address || ''))) {
                         throw new ValidationError(`Invalid S7 address: ${f.address}`);
                     }
+                    if (f.scale !== undefined && f.scale !== null && f.scale !== '' && !Number.isFinite(Number(f.scale))) {
+                        throw new ValidationError(`Invalid S7 scale: ${f.scale}`);
+                    }
                 }
                 if (m.tags && typeof m.tags === 'object') {
                     for (const [k, v] of Object.entries(m.tags)) {

@@ -156,7 +156,7 @@ export default function MudPumpDashboard() {
                     <Grid item xs={12} sm={6} md={3}>
                         <MetricCard
                             title="VOLUME GAIN/LOSS"
-                            value={fluidData.tank_gain_loss}
+                            value={Number(fluidData.tank_gain_loss || 0).toFixed(2)}
                             unit="m³"
                             icon={Activity}
                             color={fluidData.tank_gain_loss >= 0 ? "#22c55e" : "#ef4444"}

@@ -4,6 +4,11 @@ import { socket } from '../../socket';
 import AnalogGauge from '../Common/AnalogGauge';
 import GaugeCard from '../Common/GaugeCard';
 
+const formatReading = (value) => {
+    const numeric = Number(value);
+    return Number.isFinite(numeric) ? numeric.toFixed(2) : '0.00';
+};
+
 const StatusIndicator = ({ label, value, mapping }) => {
     const active = mapping[value] || { text: 'Unknown', color: '#64748b' };
     return (
@@ -125,7 +130,7 @@ export default function CwkDashboard() {
                         <StatusIndicator label="Source Cmd" value={data.source_cmd} mapping={sourceMapping} />
                         <Box sx={{ ml: 'auto', textAlign: 'right', pr: 2 }}>
                             <Typography variant="caption" sx={{ color: '#94a3b8', display: 'block' }}>CLAMP PRESSURE</Typography>
-                            <Typography variant="h5" sx={{ color: '#38bdf8', fontWeight: 'bold' }}>{data.clamp_pressure || 0} <span style={{ fontSize: '0.6em', color: '#64748b' }}>bar</span></Typography>
+                            <Typography variant="h5" sx={{ color: '#38bdf8', fontWeight: 'bold' }}>{formatReading(data.clamp_pressure)} <span style={{ fontSize: '0.6em', color: '#64748b' }}>bar</span></Typography>
                         </Box>
                     </Paper>
                 </Grid>
@@ -139,6 +144,7 @@ export default function CwkDashboard() {
                             unit="bar"
                             size="fill"
                             color="#38bdf8"
+                            valueDecimals={2}
                         />
                     </GaugeCard>
                 </Grid>
@@ -167,7 +173,7 @@ export default function CwkDashboard() {
                             <Box sx={{ p: 1.25, bgcolor: '#0f172a', borderRadius: 1, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                                 <Box>
                                     <Typography variant="caption" sx={{ color: '#94a3b8', display: 'block' }}>CLAMP PRESSURE</Typography>
-                                    <Typography sx={{ color: '#38bdf8', fontWeight: 'bold' }}>{data.clamp_pressure || 0} bar</Typography>
+                                    <Typography sx={{ color: '#38bdf8', fontWeight: 'bold' }}>{formatReading(data.clamp_pressure)} bar</Typography>
                                 </Box>
                                 <Box sx={{ textAlign: 'right' }}>
                                     <Typography variant="caption" sx={{ color: '#94a3b8', display: 'block' }}>STATUS</Typography>
@@ -179,7 +185,7 @@ export default function CwkDashboard() {
                             <Box sx={{ p: 1.25, bgcolor: '#0f172a', borderRadius: 1, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                                 <Box>
                                     <Typography variant="caption" sx={{ color: '#94a3b8', display: 'block' }}>CLAMP FORCE</Typography>
-                                    <Typography sx={{ color: '#a78bfa', fontWeight: 'bold' }}>{data.clamp_force || 0} daN</Typography>
+                                    <Typography sx={{ color: '#a78bfa', fontWeight: 'bold' }}>{formatReading(data.clamp_force)} daN</Typography>
                                 </Box>
                                 <Box sx={{ textAlign: 'right' }}>
                                     <Typography variant="caption" sx={{ color: '#94a3b8', display: 'block' }}>STATUS</Typography>

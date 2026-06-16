@@ -18,6 +18,7 @@ const AnalogGauge = ({
     subValue,
     subLabel,
     subValueInside = false,
+    valueDecimals = 0,
     minSize = 160,
     maxSize = 320
 }) => {
@@ -100,7 +101,8 @@ const AnalogGauge = ({
     };
 
     const hasWarn = warnLevel != null && criticalLevel != null && warnLevel < criticalLevel;
-    const formattedValue = hasNumericValue ? numericValue.toFixed(0) : value;
+    const safeValueDecimals = Math.max(0, Math.min(3, Number(valueDecimals) || 0));
+    const formattedValue = hasNumericValue ? numericValue.toFixed(safeValueDecimals) : value;
     const valueY = center + (gaugeSize * 0.13);
     const unitY = center + (gaugeSize * 0.22);
     const labelY = center - (gaugeSize * 0.16);

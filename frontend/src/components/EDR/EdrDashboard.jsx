@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
     Alert,
     Box,
@@ -25,6 +25,7 @@ import { ChevronDown, ChevronUp, ChevronsDown, ChevronsUp, Clock, Download, Hist
 import axios from '../../api';
 import { socket } from '../../socket';
 import { useAuth } from '../../context/AuthContext';
+import DataExportDialog from '../Common/DataExportDialog';
 import edrCatalog from '../../../../shared/edrMetrics.json';
 
 const AVAILABLE_METRICS = Object.fromEntries(
@@ -42,6 +43,13 @@ const METRIC_OPTIONS = edrCatalog.categories.flatMap(category => (
 ));
 const METRIC_LOOKUP = new Map(METRIC_OPTIONS.map(option => [option.value, option]));
 const METRIC_VALUES = new Set(METRIC_OPTIONS.map(option => option.value));
+const EXPORT_PARAMETERS = METRIC_OPTIONS.map(option => ({
+    key: option.value,
+    label: option.label,
+    group: option.categoryLabel,
+    unit: option.unit || '',
+    precision: option.precision ?? 1
+}));
 
 const PEN_COLORS = ['#38bdf8', '#fbbf24', '#4ade80', '#f472b6', '#a78bfa', '#fb7185', '#22d3ee', '#f97316'];
 const STRIP_OPTIONS = [1, 2, 3, 4, 5, 6];
@@ -106,7 +114,10 @@ const getRangeMs = (range) => {
     if (range === '-4h') return 4 * 60 * 60 * 1000;
     if (range === '-12h') return 12 * 60 * 60 * 1000;
     if (range === '-1d') return 24 * 60 * 60 * 1000;
-    if (range === '-5d') return 5 * 24 * 60 * 60 * 1000;
+    if (range === '-2d') return 2 * 24 * 60 * 60 * 1000;
+    if (range === '-3d') return 3 * 24 * 60 * 60 * 1000;
+    if (range === '-7d') return 7 * 24 * 60 * 60 * 1000;
+    if (range === '-30d') return 30 * 24 * 60 * 60 * 1000;
     return 15 * 60 * 1000;
 };
 
@@ -239,11 +250,13 @@ export default function EdrDashboard() {
     const [customRange, setCustomRange] = useState({ start: '', end: '' });
     const [isCustom, setIsCustom] = useState(false);
     const [showCustomDate, setShowCustomDate] = useState(false);
+    const [isExportOpen, setIsExportOpen] = useState(false);
     const [notice, setNotice] = useState({ open: false, severity: 'success', message: '' });
     const [selectedPresetId, setSelectedPresetId] = useState('default');
     const [presetName, setPresetName] = useState('');
     const [auditEvents, setAuditEvents] = useState([]);
     const [cursorTimestamp, setCursorTimestamp] = useState(null);
+    const historyRequestId = useRef(0);
 
     const depthLogStrip = useMemo(() => {
         const maxDepth = data.reduce((max, row) => {
@@ -315,22 +328,27 @@ export default function EdrDashboard() {
 
     const buildHistoryUrl = useCallback(() => {
         const params = new URLSearchParams();
-        if (customRange.start && customRange.end) {
+        if (isCustom && customRange.start && customRange.end) {
             params.set('start', new Date(customRange.start).toISOString());
             params.set('stop', new Date(customRange.end).toISOString());
         } else {
             params.set('range', timeRange);
         }
+        params.set('metrics', configuredMetrics.join(','));
         return `/api/history?${params.toString()}`;
-    }, [customRange.end, customRange.start, timeRange]);
+    }, [configuredMetrics, customRange.end, customRange.start, isCustom, timeRange]);
 
     const fetchHistory = useCallback(async () => {
+        const requestId = ++historyRequestId.current;
         try {
             const res = await axios.get(buildHistoryUrl());
+            if (requestId !== historyRequestId.current) return;
             setData(Array.isArray(res.data) ? res.data : []);
         } catch (err) {
+            if (requestId !== historyRequestId.current) return;
             console.error('Failed to fetch history', err);
             setData([]);
+            setNotice({ open: true, severity: 'error', message: err.response?.data?.error || 'Failed to load EDR history.' });
         }
     }, [buildHistoryUrl]);
 
@@ -448,7 +466,14 @@ export default function EdrDashboard() {
 
     const applyCustomRange = () => {
         if (customRange.start && customRange.end) {
+            const start = new Date(customRange.start).getTime();
+            const end = new Date(customRange.end).getTime();
+            if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) {
+                setNotice({ open: true, severity: 'warning', message: 'Custom range end time must be after the start time.' });
+                return;
+            }
             setIsCustom(true);
+            setCursorTimestamp(null);
         }
     };
 
@@ -655,37 +680,6 @@ export default function EdrDashboard() {
         }
     };
 
-    const escapeCsv = (value) => {
-        const text = value == null ? '' : String(value);
-        return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
-    };
-
-    const exportCsv = () => {
-        const metrics = Array.from(new Set(displayedStrips.flatMap(strip => strip.pens.map(pen => pen.metric))));
-        const headers = [
-            'Timestamp',
-            ...metrics.map(metric => `${metricLabel(metric)}${metricUnit(metric) ? ` (${metricUnit(metric)})` : ''}`)
-        ];
-        const rows = data.map(row => [
-            row.timestamp ? new Date(row.timestamp).toISOString() : row.name,
-            ...metrics.map(metric => {
-                const value = row[metric];
-                return Number.isFinite(Number(value)) ? Number(value).toFixed(metricPrecision(metric)) : '';
-            })
-        ]);
-        const csv = [headers, ...rows].map(row => row.map(escapeCsv).join(',')).join('\n');
-        const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
-        const url = URL.createObjectURL(blob);
-        const link = document.createElement('a');
-        link.href = url;
-        link.download = `edr-${new Date().toISOString().replace(/[:.]/g, '-')}.csv`;
-        document.body.appendChild(link);
-        link.click();
-        link.remove();
-        URL.revokeObjectURL(url);
-        setNotice({ open: true, severity: 'success', message: `Exported ${rows.length} EDR rows.` });
-    };
-
     const printEdr = () => {
         window.print();
     };
@@ -726,7 +720,7 @@ export default function EdrDashboard() {
                         variant="outlined"
                         size="small"
                         startIcon={<Download size={16} />}
-                        onClick={exportCsv}
+                        onClick={() => setIsExportOpen(true)}
                         sx={{ color: '#e5e7eb', borderColor: '#334155', bgcolor: '#111827' }}
                     >
                         Export
@@ -787,8 +781,11 @@ export default function EdrDashboard() {
                         { label: '2H', val: '-2h' },
                         { label: '4H', val: '-4h' },
                         { label: '12H', val: '-12h' },
-                        { label: '1D', val: '-1d' },
-                        { label: '5D', val: '-5d' }
+                        { label: '24H', val: '-1d' },
+                        { label: '2D', val: '-2d' },
+                        { label: '3D', val: '-3d' },
+                        { label: '7D', val: '-7d' },
+                        { label: '30D', val: '-30d' }
                     ].map((opt) => (
                         <Button
                             key={opt.val}
@@ -1185,6 +1182,16 @@ export default function EdrDashboard() {
                     </Button>
                 </DialogActions>
             </Dialog>
+
+            <DataExportDialog
+                open={isExportOpen}
+                onClose={() => setIsExportOpen(false)}
+                title="Electronic Drilling Recorder (EDR)"
+                filePrefix="AHWR-EDR"
+                parameters={EXPORT_PARAMETERS}
+                defaultSelected={configuredMetrics}
+                fallbackRows={data}
+            />
 
             <Snackbar
                 open={notice.open}

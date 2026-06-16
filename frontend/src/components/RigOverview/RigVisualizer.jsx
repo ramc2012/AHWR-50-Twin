@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import React from 'react';
 import { Box, Typography, Paper } from '@mui/material';
 
 const RigVisualizer = ({ blockPosition = 0, slipsIn = false, height = { xs: 520, md: 'clamp(500px, 52vh, 620px)' } }) => {
@@ -16,10 +16,9 @@ const RigVisualizer = ({ blockPosition = 0, slipsIn = false, height = { xs: 520,
     // Calculate percentage (0 = bottom, 1 = top)
     const percent = (clampedPos - minMm) / (maxMm - minMm);
     
-    // Convert percent to Y coordinate in the SVG viewBox (0 20 220 390)
-    // 0% (1400mm) -> blockY = 350 (purple markable area at bottom)
-    // 100% (14000mm) -> blockY = 120 (white markable area below red zone)
-    const blockY = 350 - (percent * (350 - 120));
+    // Use the full height of the tall ACS card while keeping the travelling
+    // block below the colored crown-saver zones.
+    const blockY = 490 - (percent * (490 - 180));
 
     // Saver conditions
     const showCrownSaver = rawPos >= 14700;
@@ -38,7 +37,7 @@ const RigVisualizer = ({ blockPosition = 0, slipsIn = false, height = { xs: 520,
                 boxShadow: '0 8px 32px rgba(0, 0, 0, 0.4)',
                 color: 'white',
                 height: height,
-                minHeight: { xs: 560, md: 560 },
+                minHeight: height === '100%' ? 0 : { xs: 560, md: 560 },
                 display: 'flex',
                 flexDirection: 'column',
                 alignItems: 'center',
@@ -79,7 +78,7 @@ const RigVisualizer = ({ blockPosition = 0, slipsIn = false, height = { xs: 520,
                 }}
             >
                 {/* SVG Schematic Layer */}
-                <svg width="100%" height="100%" viewBox="10 20 200 390" preserveAspectRatio="xMidYMid meet" style={{ flex: 1, maxHeight: '100%', minHeight: 200 }}>
+                <svg width="100%" height="100%" viewBox="10 20 200 540" preserveAspectRatio="xMidYMid meet" style={{ flex: 1, maxHeight: '100%', minHeight: 200 }}>
                     <defs>
                         <linearGradient id="derrick-bg" x1="0%" y1="0%" x2="0%" y2="100%">
                             <stop offset="0%" stopColor="#1e293b" />
@@ -88,22 +87,33 @@ const RigVisualizer = ({ blockPosition = 0, slipsIn = false, height = { xs: 520,
                     </defs>
 
                     {/* Derrick Silhouette Background */}
-                    <polygon points="70,40 150,40 190,400 30,400" fill="url(#derrick-bg)" />
-                    <polygon points="70,40 150,40 190,400 30,400" fill="none" stroke="#334155" strokeWidth="4" />
+                    <polygon points="70,40 150,40 190,540 30,540" fill="url(#derrick-bg)" />
+                    <polygon points="70,40 150,40 190,540 30,540" fill="none" stroke="#334155" strokeWidth="4" />
 
                     {/* Horizontal Bracing Lines */}
-                    <line x1="62" y1="120" x2="158" y2="120" stroke="#334155" strokeWidth="2" />
-                    <line x1="53" y1="200" x2="167" y2="200" stroke="#334155" strokeWidth="2" />
-                    <line x1="44" y1="280" x2="176" y2="280" stroke="#334155" strokeWidth="2" />
-                    <line x1="35" y1="360" x2="185" y2="360" stroke="#334155" strokeWidth="2" />
+                    <line x1="62" y1="150" x2="158" y2="150" stroke="#334155" strokeWidth="2" />
+                    <line x1="53" y1="270" x2="167" y2="270" stroke="#334155" strokeWidth="2" />
+                    <line x1="44" y1="390" x2="176" y2="390" stroke="#334155" strokeWidth="2" />
+                    <line x1="35" y1="510" x2="185" y2="510" stroke="#334155" strokeWidth="2" />
 
                     {/* Color Zones */}
                     {/* Top Red Zone */}
-                    <polygon points="73,40 147,40 140,120 80,120" fill="#ef4444" opacity="0.9" />
+                    <polygon points="73,40 147,40 140,130 80,130" fill="#ef4444" opacity="0.9" />
                     {/* Top Yellow Zone */}
-                    <polygon points="80,120 140,120 135,160 85,160" fill="#f59e0b" opacity="0.9" />
+                    <polygon points="80,130 140,130 135,175 85,175" fill="#f59e0b" opacity="0.9" />
                     {/* Bottom Yellow Zone */}
-                    <polygon points="35,360 185,360 188,390 32,390" fill="#f59e0b" opacity="0.9" />
+                    <polygon points="35,510 185,510 188,540 32,540" fill="#f59e0b" opacity="0.9" />
+                    <text
+                        x="110"
+                        y="530"
+                        textAnchor="middle"
+                        fill="#075985"
+                        fontSize="14"
+                        fontWeight="900"
+                        letterSpacing="1.4"
+                    >
+                        BLK POS
+                    </text>
 
                     {/* Crown Block */}
                     <rect x="70" y="25" width="80" height="15" fill="#334155" stroke="#475569" strokeWidth="2" rx="4" />
@@ -111,10 +121,10 @@ const RigVisualizer = ({ blockPosition = 0, slipsIn = false, height = { xs: 520,
                     <circle cx="125" cy="32" r="4" fill="#cbd5e1" />
 
                     {/* Floor Base */}
-                    <rect x="10" y="400" width="200" height="8" fill="#1e293b" rx="2" />
-                    {/* Static Ropes from Crown down to the floor position (y=350) */}
-                    <line x1="95" y1="35" x2="95" y2="350" stroke="#0f172a" strokeWidth="3" />
-                    <line x1="125" y1="35" x2="125" y2="350" stroke="#0f172a" strokeWidth="3" />
+                    <rect x="10" y="550" width="200" height="8" fill="#1e293b" rx="2" />
+                    {/* Static Ropes from Crown down to the lower travel position. */}
+                    <line x1="95" y1="35" x2="95" y2="490" stroke="#0f172a" strokeWidth="3" />
+                    <line x1="125" y1="35" x2="125" y2="490" stroke="#0f172a" strokeWidth="3" />
 
                     {/* ANIMATED TRAVELLING BLOCK inside main SVG */}
                     <g style={{ transform: `translate(75px, ${blockY}px)`, transition: 'transform 0.5s ease-out' }}>
@@ -123,17 +133,12 @@ const RigVisualizer = ({ blockPosition = 0, slipsIn = false, height = { xs: 520,
                         <line x1="50" y1="-3" x2="50" y2="3" stroke="#ffffff" strokeWidth="4" />
 
                         {/* Traveling Block Box */}
-                        <rect x="5" y="0" width="60" height="30" rx="4" fill="#f59e0b" stroke="#b45309" strokeWidth="2" />
-                        <rect x="12" y="5" width="46" height="20" rx="2" fill="#d97706" />
+                        <rect x="-29" y="-12" width="128" height="68" rx="8" fill="#f59e0b" stroke="#fbbf24" strokeWidth="3" />
+                        <rect x="-21" y="-4" width="112" height="52" rx="6" fill="#07111d" stroke="#38bdf8" strokeWidth="3" />
 
-                        {/* BLK POS Text ON the block */}
-                        <text x="35" y="19" textAnchor="middle" fill="#ffffff" fontSize="9" fontWeight="900" letterSpacing="0.5" style={{ filter: 'drop-shadow(0px 1px 1px rgba(0,0,0,0.8))' }}>
+                        <text x="35" y="34" textAnchor="middle" fill="#ffffff" fontSize="34" fontWeight="900" letterSpacing="0" style={{ filter: 'drop-shadow(0px 0px 7px rgba(56,189,248,1))' }}>
                             {rawPos.toFixed(0)}
                         </text>
-
-                        {/* Link / Hook underneath */}
-                        <line x1="25" y1="30" x2="25" y2="45" stroke="#64748b" strokeWidth="2.5" />
-                        <line x1="45" y1="30" x2="45" y2="45" stroke="#64748b" strokeWidth="2.5" />
                     </g>
                 </svg>
 

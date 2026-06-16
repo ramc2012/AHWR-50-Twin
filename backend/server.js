@@ -44,6 +44,7 @@ const INFLUX_URL = process.env.INFLUX_URL || 'http://influxdb:8086';
 const INFLUX_TOKEN = process.env.INFLUX_TOKEN;
 const INFLUX_ORG = process.env.INFLUX_ORG || 'romii_org';
 const INFLUX_BUCKET = process.env.INFLUX_BUCKET || 'romii_bucket';
+const INFLUX_QUERY_TIMEOUT_MS = Number(process.env.INFLUX_QUERY_TIMEOUT_MS || 60000);
 const DATA_SOURCE = process.env.DATA_SOURCE || 'plc';
 const MAX_WELL_DEPTH = Number(process.env.MAX_WELL_DEPTH_M || 15000); // sanity clamp (m)
 const FRESH_MS = Number(process.env.DATA_FRESH_MS || 5000);          // data older than this = stale
@@ -80,7 +81,11 @@ io.on('connection', (socket) => {
 });
 
 // InfluxDB Query Client
-const queryApi = new InfluxDB({ url: INFLUX_URL, token: INFLUX_TOKEN }).getQueryApi(INFLUX_ORG);
+const queryApi = new InfluxDB({
+    url: INFLUX_URL,
+    token: INFLUX_TOKEN,
+    timeout: INFLUX_QUERY_TIMEOUT_MS
+}).getQueryApi(INFLUX_ORG);
 
 // --- Atomic JSON persistence (temp file + rename; off the hot loop) -------
 const writeJsonAtomic = async (file, obj) => {
@@ -245,6 +250,30 @@ const DB_PATH = path.join(DATA_DIR, 'plc_config.json');
 
 const getModbusConfig = () => readJsonSync(DB_PATH, { slaves: [] });
 const saveModbusConfig = (config) => writeJsonAtomic(DB_PATH, config);
+const getS7ScaleMap = () => {
+    const scaleMap = new Map();
+    const config = getModbusConfig();
+    (config.slaves || []).forEach(slave => {
+        if ((slave.protocol || 'modbus') !== 's7comm') return;
+        (slave.metrics || []).forEach(metric => {
+            (metric.fields || []).forEach(field => {
+                const scale = field.scale === undefined || field.scale === null || field.scale === ''
+                    ? 1
+                    : Number(field.scale);
+                if (field.name && Number.isFinite(scale)) scaleMap.set(field.name, scale);
+            });
+        });
+    });
+    return scaleMap;
+};
+const applyS7Scale = (fieldName, value, scaleMap) => {
+    const scale = scaleMap.get(fieldName);
+    const numericValue = Number(value);
+    if (scale === undefined || scale === 1 || !Number.isFinite(scale) || !Number.isFinite(numericValue)) {
+        return value;
+    }
+    return numericValue * scale;
+};
 
 // Map Modbus fields to application categories
 // Map S7 field names to application categories
@@ -421,10 +450,75 @@ const FIELD_MAP = {
 // app-level measurements support mock/Modbus sources). Shared with /api/history.
 const LIVE_MEASUREMENTS = ['drawworks', 'engine', 'mudpump', 'wellcontrol', 'wellhead', 'modbus', 'AHWR', 'fluid', 'drilling', 'hpu', 'htd', 'acs', 'cat_engine', 'cwk', 'pct'];
 
+const HISTORY_METRICS = new Set(edrCatalog.categories.flatMap(category =>
+    category.fields.map(field => `${category.id}.${field.id}`)
+));
+
+const RAW_FIELDS_BY_METRIC = new Map();
+Object.entries(FIELD_MAP).forEach(([rawField, mapped]) => {
+    const metric = `${mapped.meas}.${mapped.field}`;
+    HISTORY_METRICS.add(metric);
+    if (!RAW_FIELDS_BY_METRIC.has(metric)) RAW_FIELDS_BY_METRIC.set(metric, []);
+    RAW_FIELDS_BY_METRIC.get(metric).push(rawField);
+});
+
+const fluxString = (value) => JSON.stringify(String(value));
+
+const getFluxDurationMs = (range) => {
+    const match = /^-(\d+)(ns|us|ms|s|m|h|d|w|mo|y)$/.exec(range || '');
+    if (!match) return null;
+    const value = Number(match[1]);
+    const unitMs = {
+        ns: 1 / 1e6,
+        us: 1 / 1e3,
+        ms: 1,
+        s: 1000,
+        m: 60 * 1000,
+        h: 60 * 60 * 1000,
+        d: 24 * 60 * 60 * 1000,
+        w: 7 * 24 * 60 * 60 * 1000,
+        mo: 30 * 24 * 60 * 60 * 1000,
+        y: 365 * 24 * 60 * 60 * 1000
+    };
+    return value * unitMs[match[2]];
+};
+
+const getHistoryWindowPeriod = (durationMs) => {
+    if (durationMs <= 60 * 1000) return '1s';
+    if (durationMs <= 5 * 60 * 1000) return '2s';
+    if (durationMs <= 15 * 60 * 1000) return '5s';
+    if (durationMs <= 30 * 60 * 1000) return '10s';
+    if (durationMs <= 60 * 60 * 1000) return '30s';
+    if (durationMs <= 2 * 60 * 60 * 1000) return '1m';
+    if (durationMs <= 4 * 60 * 60 * 1000) return '2m';
+    if (durationMs <= 12 * 60 * 60 * 1000) return '5m';
+    if (durationMs <= 24 * 60 * 60 * 1000) return '15m';
+    if (durationMs <= 3 * 24 * 60 * 60 * 1000) return '30m';
+    if (durationMs <= 7 * 24 * 60 * 60 * 1000) return '1h';
+    if (durationMs <= 30 * 24 * 60 * 60 * 1000) return '6h';
+    return '24h';
+};
+
+const buildHistoryMetricFilter = (metrics) => {
+    if (metrics.length === 0) return '';
+    const selectors = new Set();
+    metrics.forEach(metric => {
+        const separator = metric.indexOf('.');
+        const measurement = metric.slice(0, separator);
+        const field = metric.slice(separator + 1);
+        selectors.add(`(r["_measurement"] == ${fluxString(measurement)} and r["_field"] == ${fluxString(field)})`);
+        (RAW_FIELDS_BY_METRIC.get(metric) || []).forEach(rawField => {
+            selectors.add(`r["_field"] == ${fluxString(rawField)}`);
+        });
+    });
+    return `|> filter(fn: (r) => ${Array.from(selectors).join(' or ')})`;
+};
+
 let lastDataAt = 0; // epoch ms of the last tick that returned sensor data
 
 const queryData = async () => {
     const measurementFilter = LIVE_MEASUREMENTS.map(m => `r["_measurement"] == "${m}"`).join(' or ');
+    const s7ScaleMap = getS7ScaleMap();
     const fluxQuery = `
     from(bucket: "${INFLUX_BUCKET}")
       |> range(start: -10s)
@@ -440,9 +534,10 @@ const queryData = async () => {
                     const o = tableMeta.toObject(row);
                     let meas = o._measurement;
                     let f = o._field;
+                    const value = applyS7Scale(f, o._value, s7ScaleMap);
                     if (FIELD_MAP[f]) { meas = FIELD_MAP[f].meas; f = FIELD_MAP[f].field; }
                     if (!data[meas]) data[meas] = {};
-                    data[meas][f] = o._value;
+                    data[meas][f] = value;
                 },
                 error(error) { reject(error); },
                 complete() { resolve(); },
@@ -457,6 +552,12 @@ const queryData = async () => {
         if (hasSensorData) {
             const physicsData = updatePhysics(data);
             const plcWob = data.drilling ? data.drilling.wob : undefined;
+            if (data.drawworks?.block_position !== undefined) {
+                data.acs = {
+                    ...(data.acs || {}),
+                    block_position: data.drawworks.block_position
+                };
+            }
             // Depth always comes from the clamped physics state (which itself
             // prefers PLC depth). WOB prefers the real PLC measurement when present.
             data.drilling = {
@@ -550,7 +651,7 @@ const scheduleNextPoll = () => {
 // API: Get Historical Data
 // API: Get Historical Data
 app.get('/api/history', auth.requireAuth, async (req, res) => {
-    const { range, start, stop } = req.query;
+    const { range, start, stop, metrics } = req.query;
 
     // Validate time inputs before they are interpolated into the Flux query
     // (prevents Flux injection). Allow relative durations and RFC3339 instants only.
@@ -562,40 +663,29 @@ app.get('/api/history', auth.requireAuth, async (req, res) => {
         return res.status(400).json({ error: 'Invalid range (use a relative duration like -1h, -7d)' });
     }
 
+    const requestedMetrics = typeof metrics === 'string'
+        ? [...new Set(metrics.split(',').map(metric => metric.trim()).filter(Boolean))]
+        : [];
+    if (requestedMetrics.length > 64 || requestedMetrics.some(metric => !HISTORY_METRICS.has(metric))) {
+        return res.status(400).json({ error: 'Invalid history metrics' });
+    }
+
     // Build range filter
     let rangeFilter = '';
-    let windowPeriod = '5s';
+    let durationMs;
 
     if (start && stop) {
         rangeFilter = `|> range(start: ${start}, stop: ${stop})`;
-
-        // Calculate window dynamically based on duration
-        const durationMs = new Date(stop).getTime() - new Date(start).getTime();
-        const hours = durationMs / (1000 * 60 * 60);
-
-        if (hours > 24 * 30 * 6) windowPeriod = '24h';
-        else if (hours > 24 * 30) windowPeriod = '6h';
-        else if (hours > 24 * 7) windowPeriod = '1h';
-        else if (hours > 24) windowPeriod = '15m';
-        else if (hours > 1) windowPeriod = '1m';
+        durationMs = new Date(stop).getTime() - new Date(start).getTime();
+        if (!Number.isFinite(durationMs) || durationMs <= 0) {
+            return res.status(400).json({ error: 'History stop time must be after start time' });
+        }
     } else {
         rangeFilter = `|> range(start: ${range || '-30s'})`;
-
-        if (range?.includes('mo')) windowPeriod = '24h';
-        else if (range?.includes('30d')) windowPeriod = '6h';
-        else if (range?.includes('7d')) windowPeriod = '1h';
-        else if (range?.includes('5d')) windowPeriod = '30m';
-        else if (range?.includes('1d') || range?.includes('24h')) windowPeriod = '15m';
-        else if (range?.includes('12h')) windowPeriod = '5m';
-        else if (range?.includes('4h')) windowPeriod = '2m';
-        else if (range?.includes('2h')) windowPeriod = '1m';
-        else if (range?.includes('1h')) windowPeriod = '30s';
-        else if (range?.includes('30m')) windowPeriod = '10s';
-        else if (range?.includes('15m')) windowPeriod = '5s';
-        else if (range?.includes('10m')) windowPeriod = '5s';
-        else if (range?.includes('5m')) windowPeriod = '2s';
-        else if (range?.includes('1m')) windowPeriod = '1s';
+        durationMs = getFluxDurationMs(range || '-30s');
     }
+    const windowPeriod = getHistoryWindowPeriod(durationMs || 30 * 1000);
+    const metricFilter = buildHistoryMetricFilter(requestedMetrics);
 
     // Determine if we need date in the time label
     const needsDate = range?.includes('24h') || range?.includes('d') || range?.includes('mo') || (start && stop);
@@ -603,12 +693,14 @@ app.get('/api/history', auth.requireAuth, async (req, res) => {
     // Same measurement set as the live view (crucially includes "AHWR", under
     // which all S7comm/PLC fields are written) so equipment history isn't empty.
     const measurementFilter = LIVE_MEASUREMENTS.map(m => `r["_measurement"] == "${m}"`).join(' or ');
+    const s7ScaleMap = getS7ScaleMap();
 
     const fluxQuery = `
     import "types"
     from(bucket: "${INFLUX_BUCKET}")
       ${rangeFilter}
       |> filter(fn: (r) => ${measurementFilter})
+      ${metricFilter}
       |> filter(fn: (r) => types.isType(v: r._value, type: "float") or types.isType(v: r._value, type: "int") or types.isType(v: r._value, type: "uint"))
       |> aggregateWindow(every: ${windowPeriod}, fn: last, createEmpty: false)
       |> yield(name: "last")
@@ -622,6 +714,7 @@ app.get('/api/history', auth.requireAuth, async (req, res) => {
                     const o = tableMeta.toObject(row);
                     let meas = o._measurement;
                     let f = o._field;
+                    const value = applyS7Scale(f, o._value, s7ScaleMap);
 
                     if (FIELD_MAP[f]) {
                         meas = FIELD_MAP[f].meas;
@@ -632,7 +725,7 @@ app.get('/api/history', auth.requireAuth, async (req, res) => {
                         time: o._time,
                         measurement: meas,
                         field: f,
-                        value: o._value
+                        value
                     });
                 },
                 error(error) {

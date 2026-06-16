@@ -4,6 +4,11 @@ import { socket } from '../../socket';
 import AnalogGauge from '../Common/AnalogGauge';
 import GaugeCard from '../Common/GaugeCard';
 
+const formatReading = (value) => {
+    const numeric = Number(value);
+    return Number.isFinite(numeric) ? numeric.toFixed(2) : '0.00';
+};
+
 const StatusIndicator = ({ label, value, mapping }) => {
     const active = mapping[value] || { text: 'Unknown', color: '#64748b' };
     return (
@@ -67,7 +72,7 @@ export default function AcsDashboard() {
                         <Typography variant="subtitle2" sx={{ color: '#94a3b8', mb: 2 }}>BLOCK POSITION</Typography>
                         <Box sx={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', p: 3, bgcolor: '#0f172a', borderRadius: 2 }}>
                             <Typography sx={{ color: '#38bdf8', fontWeight: 'bold', fontSize: '3rem' }}>
-                                {Number(data.block_position || 0).toFixed(1)} <Typography component="span" variant="h5" sx={{ color: '#64748b' }}>mm</Typography>
+                                {formatReading(data.block_position)} <Typography component="span" variant="h5" sx={{ color: '#64748b' }}>mm</Typography>
                             </Typography>
                         </Box>
                     </Paper>

@@ -1,35 +1,69 @@
-Write-Host "=========================================="
-Write-Host "Importing ROM-II Digital Twin from Offline"
-Write-Host "=========================================="
-Write-Host ""
-Write-Host "This will load all necessary Docker images from the 'offline_images' folder."
-Write-Host "It may take a few minutes depending on your disk speed..."
-Write-Host ""
+$ErrorActionPreference = "Stop"
+$projectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 
-if (!(Test-Path "offline_images")) {
-    Write-Host "ERROR: 'offline_images' folder not found!"
-    Write-Host "Make sure you copied the entire Ahwr-50-Twin folder from the pendrive."
-    pause
-    exit
+function Run-Step {
+    param([string]$Message, [scriptblock]$Action)
+    Write-Host $Message -ForegroundColor Cyan
+    & $Action
+    if ($LASTEXITCODE -ne 0) {
+        throw "$Message failed with exit code $LASTEXITCODE"
+    }
 }
 
-Write-Host "[1/4] Loading InfluxDB image..."
-docker load -i offline_images/influxdb.tar
+Push-Location $projectRoot
+try {
+    $imagesArchive = Join-Path $projectRoot "docker_images\images.tar"
+    $backendBackup = Join-Path $projectRoot "volume_backups\backend_data.tar"
+    $influxBackup = Join-Path $projectRoot "volume_backups\influxdb_data.tar"
 
-Write-Host "[2/4] Loading Telegraf image..."
-docker load -i offline_images/telegraf.tar
+    foreach ($requiredFile in @($imagesArchive, $backendBackup, $influxBackup, (Join-Path $projectRoot ".env"))) {
+        if (!(Test-Path -LiteralPath $requiredFile)) {
+            throw "Required transfer file is missing: $requiredFile"
+        }
+    }
 
-Write-Host "[3/4] Loading ROM-II Backend image..."
-docker load -i offline_images/ahwr-50-twin-backend.tar
+    Write-Host "========================================================"
+    Write-Host " Restoring complete AHWR-50-Twin installation"
+    Write-Host "========================================================"
 
-Write-Host "[4/4] Loading ROM-II Frontend image..."
-docker load -i offline_images/ahwr-50-twin-frontend.tar
+    Run-Step "[1/6] Loading Docker images..." {
+        docker load -i $imagesArchive
+    }
 
-Write-Host ""
-Write-Host "=========================================="
-Write-Host "SUCCESS! All images loaded into Docker."
-Write-Host "=========================================="
-Write-Host "You can now start the application by running:"
-Write-Host "docker compose up -d"
-Write-Host "=========================================="
-pause
+    docker compose down
+
+    Run-Step "[2/6] Creating application volumes..." {
+        docker volume create ahwr-50-twin_backend_data
+        docker volume create ahwr-50-twin_influxdb_data
+    }
+
+    Run-Step "[3/6] Restoring users and application settings..." {
+        docker run --rm --user 0:0 --entrypoint sh `
+            -v ahwr-50-twin_backend_data:/target `
+            -v "${projectRoot}:/backup:ro" `
+            ahwr-50-twin-backend:latest `
+            -c "rm -rf /target/* /target/.[!.]* /target/..?* 2>/dev/null || true; cd /target && tar -xf /backup/volume_backups/backend_data.tar && chown -R 1000:1000 /target"
+    }
+
+    Run-Step "[4/6] Restoring InfluxDB historical data..." {
+        docker run --rm --user 0:0 --entrypoint sh `
+            -v ahwr-50-twin_influxdb_data:/target `
+            -v "${projectRoot}:/backup:ro" `
+            influxdb:2.7 `
+            -c "rm -rf /target/* /target/.[!.]* /target/..?* 2>/dev/null || true; cd /target && tar -xf /backup/volume_backups/influxdb_data.tar"
+    }
+
+    Run-Step "[5/6] Starting application..." {
+        docker compose up -d
+    }
+
+    Write-Host "[6/6] Checking containers..." -ForegroundColor Cyan
+    docker compose ps
+
+    Write-Host ""
+    Write-Host "SUCCESS: Code, images, users, settings and history were restored." -ForegroundColor Green
+    Write-Host "Open: http://localhost:8085"
+}
+finally {
+    Pop-Location
+}

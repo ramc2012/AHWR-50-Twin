@@ -1,33 +1,132 @@
-Write-Host "=========================================="
-Write-Host "Exporting ROM-II Digital Twin for Offline"
-Write-Host "=========================================="
-Write-Host ""
-Write-Host "This will save all necessary Docker images to .tar files."
-Write-Host "It may take a few minutes depending on your disk speed..."
-Write-Host ""
+param(
+    [string]$OutputFile = "AHWR-50-Twin_Full_Transfer.tar"
+)
 
-mkdir -Force offline_images | Out-Null
+$ErrorActionPreference = "Stop"
+$projectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+$archivePath = Join-Path $projectRoot $OutputFile
+$stageRoot = Join-Path $env:TEMP "AHWR-50-Twin_Full_Transfer"
+$packageRoot = Join-Path $stageRoot "AHWR-50-Twin"
 
-Write-Host "[1/4] Saving InfluxDB image..."
-docker save -o offline_images/influxdb.tar influxdb:2.7
+function Run-Step {
+    param([string]$Message, [scriptblock]$Action)
+    Write-Host $Message -ForegroundColor Cyan
+    & $Action
+    if ($LASTEXITCODE -ne 0) {
+        throw "$Message failed with exit code $LASTEXITCODE"
+    }
+}
 
-Write-Host "[2/4] Saving Telegraf image..."
-docker save -o offline_images/telegraf.tar telegraf:1.29
+Write-Host "========================================================"
+Write-Host " Creating complete AHWR-50-Twin transfer archive"
+Write-Host " Code + images + settings + users + history"
+Write-Host "========================================================"
 
-Write-Host "[3/4] Saving ROM-II Backend image..."
-docker save -o offline_images/ahwr-50-twin-backend.tar ahwr-50-twin-backend:latest
+Push-Location $projectRoot
+try {
+    Run-Step "[1/8] Building current application images..." {
+        docker compose build backend frontend
+    }
 
-Write-Host "[4/4] Saving ROM-II Frontend image..."
-docker save -o offline_images/ahwr-50-twin-frontend.tar ahwr-50-twin-frontend:latest
+    Run-Step "[2/8] Stopping application for a consistent backup..." {
+        docker compose stop
+    }
 
-Write-Host ""
-Write-Host "=========================================="
-Write-Host "SUCCESS! All images exported to 'offline_images' folder."
-Write-Host "=========================================="
-Write-Host "To transfer to another PC:"
-Write-Host "1. Copy this entire 'Ahwr-50-Twin' folder to your pendrive."
-Write-Host "2. On the offline PC, copy the folder to the hard drive."
-Write-Host "3. Run 'import_offline.ps1' on the new PC to load the images."
-Write-Host "4. Run 'docker compose up -d' to start the application."
-Write-Host "=========================================="
-pause
+    if (Test-Path $stageRoot) {
+        Remove-Item -LiteralPath $stageRoot -Recurse -Force
+    }
+    New-Item -ItemType Directory -Path $packageRoot | Out-Null
+    New-Item -ItemType Directory -Path (Join-Path $packageRoot "docker_images") | Out-Null
+    New-Item -ItemType Directory -Path (Join-Path $packageRoot "volume_backups") | Out-Null
+
+    Write-Host "[3/8] Copying project files..." -ForegroundColor Cyan
+    $excludeDirs = @(
+        ".git",
+        "node_modules",
+        "dist",
+        "offline_images",
+        "images",
+        "_full_transfer_stage"
+    )
+    $excludeFiles = @(
+        "*.tar",
+        "*.zip",
+        "*.tgz",
+        "*.gz"
+    )
+    $robocopyArgs = @(
+        $projectRoot,
+        $packageRoot,
+        "/E",
+        "/R:1",
+        "/W:1",
+        "/NFL",
+        "/NDL",
+        "/NJH",
+        "/NJS",
+        "/NP",
+        "/XD"
+    ) + $excludeDirs + @("/XF") + $excludeFiles
+    & robocopy @robocopyArgs | Out-Null
+    if ($LASTEXITCODE -ge 8) {
+        throw "Project copy failed with robocopy exit code $LASTEXITCODE"
+    }
+
+    Run-Step "[4/8] Exporting Docker images..." {
+        $imagesArchive = Join-Path $packageRoot "docker_images\images.tar"
+        docker save -o $imagesArchive `
+            influxdb:2.7 `
+            telegraf:1.29 `
+            ahwr-50-twin-backend:latest `
+            ahwr-50-twin-frontend:latest
+    }
+
+    Run-Step "[5/8] Backing up users and application settings..." {
+        docker run --rm --user 0:0 --entrypoint sh `
+            -v ahwr-50-twin_backend_data:/source:ro `
+            -v "${packageRoot}:/backup" `
+            ahwr-50-twin-backend:latest `
+            -c "cd /source && tar -cf /backup/volume_backups/backend_data.tar ."
+    }
+
+    Run-Step "[6/8] Backing up InfluxDB historical data..." {
+        docker run --rm --user 0:0 --entrypoint sh `
+            -v ahwr-50-twin_influxdb_data:/source:ro `
+            -v "${packageRoot}:/backup" `
+            influxdb:2.7 `
+            -c "cd /source && tar -cf /backup/volume_backups/influxdb_data.tar ."
+    }
+
+    if (Test-Path $archivePath) {
+        Remove-Item -LiteralPath $archivePath -Force
+    }
+
+    Run-Step "[7/8] Creating single transfer archive..." {
+        tar -cf $archivePath -C $stageRoot "AHWR-50-Twin"
+    }
+
+    $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $archivePath).Hash
+    Set-Content -LiteralPath "$archivePath.sha256" -Value "$hash  $OutputFile" -Encoding ASCII
+
+    Write-Host "[8/8] Restarting application..." -ForegroundColor Cyan
+    docker compose up -d
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warning "Backup succeeded, but the application could not be restarted automatically."
+    }
+
+    $sizeGb = [math]::Round((Get-Item -LiteralPath $archivePath).Length / 1GB, 2)
+    Write-Host ""
+    Write-Host "SUCCESS" -ForegroundColor Green
+    Write-Host "Archive: $archivePath"
+    Write-Host "Size:    $sizeGb GB"
+    Write-Host "SHA256:  $hash"
+    Write-Host ""
+    Write-Host "Copy the .tar and .sha256 files to the other PC."
+    Write-Host "Extract the tar, then run Restore_Full_Transfer.bat."
+}
+finally {
+    Pop-Location
+    if (Test-Path $stageRoot) {
+        Remove-Item -LiteralPath $stageRoot -Recurse -Force
+    }
+}

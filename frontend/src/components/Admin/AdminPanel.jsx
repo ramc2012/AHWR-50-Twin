@@ -35,9 +35,27 @@ export default function AdminPanel() {
     const [currentUser, setCurrentUser] = useState({ username: '', password: '', role: 'operator', status: 'active' });
     const [isEditingUser, setIsEditingUser] = useState(false);
 
+    const normalizeS7Scales = (plcConfig) => ({
+        ...plcConfig,
+        slaves: (plcConfig.slaves || []).map((slave) => {
+            if ((slave.protocol || 'modbus') !== 's7comm') return slave;
+            return {
+                ...slave,
+                metrics: (slave.metrics || []).map((metric) => ({
+                    ...metric,
+                    fields: (metric.fields || []).map((field) => ({
+                        ...field,
+                        scale: field.scale ?? 1
+                    }))
+                }))
+            };
+        })
+    });
+
     // --- S7-1500 Default Template ---
     const loadS7Defaults = (slaveIndex) => {
-        const s7Defaults = {
+        const s7Defaults = normalizeS7Scales({
+            slaves: [{
             protocol: 's7comm',
             ip: '192.168.0.13',
             port: 102,
@@ -119,7 +137,8 @@ export default function AdminPanel() {
                     ]
                 }
             ]
-        };
+            }]
+        }).slaves[0];
 
         const newSlaves = [...config.slaves];
         newSlaves[slaveIndex] = { ...newSlaves[slaveIndex], ...s7Defaults };
@@ -133,7 +152,7 @@ export default function AdminPanel() {
             setLoading(true);
             const res = await axios.get('/api/config/plc');
             const data = res.data.slaves ? res.data : { slaves: [] };
-            setConfig(data);
+            setConfig(normalizeS7Scales(data));
         } catch (err) {
             console.error(err);
             showNotification('Failed to load configuration', 'error');
@@ -277,17 +296,28 @@ export default function AdminPanel() {
     };
 
     const addS7Field = (slaveIndex, metricIndex) => {
-        const newField = { name: 'NEW_S7_TAG', address: 'DB1.R0' };
+        const newField = { name: 'NEW_S7_TAG', address: 'DB1.R0', scale: 1 };
         const newSlaves = [...config.slaves];
         newSlaves[slaveIndex].metrics[metricIndex].fields.push(newField);
+        setConfig({ ...config, slaves: newSlaves });
+    };
+
+    const updateS7Field = (slaveIndex, metricIndex, fieldIndex, field, val) => {
+        const newSlaves = [...config.slaves];
+        newSlaves[slaveIndex].metrics[metricIndex].fields[fieldIndex] = {
+            ...newSlaves[slaveIndex].metrics[metricIndex].fields[fieldIndex],
+            [field]: val
+        };
         setConfig({ ...config, slaves: newSlaves });
     };
 
     const saveConfiguration = async () => {
         try {
             setLoading(true);
-            const res = await axios.post('/api/config/plc', config);
+            const nextConfig = normalizeS7Scales(config);
+            const res = await axios.post('/api/config/plc', nextConfig);
             if (res.data.success) {
+                setConfig(nextConfig);
                 showNotification('Configuration saved and Telegraf restarted!');
             }
         } catch (err) {
@@ -312,7 +342,7 @@ export default function AdminPanel() {
                 <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 3 }}>
                     <Box>
                         <Typography variant="h5" sx={{ fontWeight: 'bold', mb: 0.5 }}>PLC & Siemens S7 Communication</Typography>
-                        <Typography variant="body2" sx={{ color: '#94a3b8' }}>Configure Siemens S7comm protocol data ingestion.</Typography>
+                        <Typography variant="body2" sx={{ color: '#94a3b8' }}>Configure Siemens S7comm protocol data ingestion and scaling.</Typography>
                     </Box>
                     <Box sx={{ display: 'flex', gap: 2 }}>
                         <Button variant="outlined" startIcon={<RefreshCw />} onClick={fetchConfig} sx={{ color: '#38bdf8', borderColor: '#334155' }}>
@@ -483,6 +513,9 @@ export default function AdminPanel() {
                         ) : (
                             <>
                                 <Typography variant="subtitle2" sx={{ mb: 1, color: '#FBBC24' }}>S7comm Metrics & Tags</Typography>
+                                <Typography variant="caption" sx={{ display: 'block', mb: 2, color: '#94a3b8' }}>
+                                    Scale factor multiplies the PLC value in live and history screens. Use 1 for no scaling.
+                                </Typography>
                                 {slave.metrics?.map((metric, mIndex) => (
                                     <Box key={mIndex} sx={{ mb: 2, p: 2, bgcolor: '#0f172a', borderRadius: 1, border: '1px solid #334155' }}>
                                         <Box sx={{ display: 'flex', gap: 2, mb: 1, alignItems: 'center' }}>
@@ -505,52 +538,59 @@ export default function AdminPanel() {
                                                 sx={{ input: { color: 'white' }, label: { color: '#94a3b8' }, '.MuiOutlinedInput-notchedOutline': { borderColor: '#334155' } }}
                                             />
                                         </Box>
-                                        <Table size="small">
-                                            <TableHead>
-                                                <TableRow>
-                                                    <TableCell sx={{ color: '#94a3b8' }}>Field Name</TableCell>
-                                                    <TableCell sx={{ color: '#94a3b8' }}>Address (DB#.Type#)</TableCell>
-                                                    <TableCell align="right"></TableCell>
-                                                </TableRow>
-                                            </TableHead>
-                                            <TableBody>
-                                                {metric.fields?.map((f, fIndex) => (
-                                                    <TableRow key={fIndex}>
-                                                        <TableCell>
-                                                            <TextField
-                                                                variant="standard" value={f.name} fullWidth size="small"
-                                                                InputProps={{ disableUnderline: true, sx: { color: 'white' } }}
-                                                                onChange={(e) => {
-                                                                    const newSlaves = [...config.slaves];
-                                                                    newSlaves[sIndex].metrics[mIndex].fields[fIndex].name = e.target.value;
-                                                                    setConfig({ ...config, slaves: newSlaves });
-                                                                }}
-                                                            />
-                                                        </TableCell>
-                                                        <TableCell>
-                                                            <TextField
-                                                                variant="standard" value={f.address} fullWidth size="small"
-                                                                InputProps={{ disableUnderline: true, sx: { color: 'white' } }}
-                                                                onChange={(e) => {
-                                                                    const newSlaves = [...config.slaves];
-                                                                    newSlaves[sIndex].metrics[mIndex].fields[fIndex].address = e.target.value;
-                                                                    setConfig({ ...config, slaves: newSlaves });
-                                                                }}
-                                                            />
-                                                        </TableCell>
-                                                        <TableCell align="right">
-                                                            <IconButton size="small" sx={{ color: '#64748b', '&:hover': { color: '#ef4444' } }} onClick={() => {
-                                                                const newSlaves = [...config.slaves];
-                                                                newSlaves[sIndex].metrics[mIndex].fields.splice(fIndex, 1);
-                                                                setConfig({ ...config, slaves: newSlaves });
-                                                            }}>
-                                                                <Trash2 size={14} />
-                                                            </IconButton>
-                                                        </TableCell>
+                                        <TableContainer sx={{ overflowX: 'auto' }}>
+                                            <Table size="small" sx={{ minWidth: 760 }}>
+                                                <TableHead>
+                                                    <TableRow>
+                                                        <TableCell sx={{ color: '#94a3b8' }}>Field Name</TableCell>
+                                                        <TableCell sx={{ color: '#94a3b8' }}>Address (DB#.Type#)</TableCell>
+                                                        <TableCell sx={{ color: '#94a3b8', width: 140 }}>Scale Factor</TableCell>
+                                                        <TableCell align="right"></TableCell>
                                                     </TableRow>
-                                                ))}
-                                            </TableBody>
-                                        </Table>
+                                                </TableHead>
+                                                <TableBody>
+                                                    {metric.fields?.map((f, fIndex) => (
+                                                        <TableRow key={fIndex}>
+                                                            <TableCell>
+                                                                <TextField
+                                                                    variant="standard" value={f.name} fullWidth size="small"
+                                                                    InputProps={{ disableUnderline: true, sx: { color: 'white' } }}
+                                                                    onChange={(e) => updateS7Field(sIndex, mIndex, fIndex, 'name', e.target.value)}
+                                                                />
+                                                            </TableCell>
+                                                            <TableCell>
+                                                                <TextField
+                                                                    variant="standard" value={f.address} fullWidth size="small"
+                                                                    InputProps={{ disableUnderline: true, sx: { color: 'white' } }}
+                                                                    onChange={(e) => updateS7Field(sIndex, mIndex, fIndex, 'address', e.target.value)}
+                                                                />
+                                                            </TableCell>
+                                                            <TableCell>
+                                                                <TextField
+                                                                    type="number"
+                                                                    variant="standard"
+                                                                    value={f.scale ?? 1}
+                                                                    fullWidth
+                                                                    size="small"
+                                                                    inputProps={{ step: 'any' }}
+                                                                    InputProps={{ disableUnderline: true, sx: { color: 'white' } }}
+                                                                    onChange={(e) => updateS7Field(sIndex, mIndex, fIndex, 'scale', e.target.value)}
+                                                                />
+                                                            </TableCell>
+                                                            <TableCell align="right">
+                                                                <IconButton size="small" sx={{ color: '#64748b', '&:hover': { color: '#ef4444' } }} onClick={() => {
+                                                                    const newSlaves = [...config.slaves];
+                                                                    newSlaves[sIndex].metrics[mIndex].fields.splice(fIndex, 1);
+                                                                    setConfig({ ...config, slaves: newSlaves });
+                                                                }}>
+                                                                    <Trash2 size={14} />
+                                                                </IconButton>
+                                                            </TableCell>
+                                                        </TableRow>
+                                                    ))}
+                                                </TableBody>
+                                            </Table>
+                                        </TableContainer>
                                         <Button size="small" startIcon={<Plus size={14} />} onClick={() => addS7Field(sIndex, mIndex)} sx={{ color: '#fbbf24', mt: 1, '&:hover': { bgcolor: 'rgba(251, 188, 36, 0.08)' } }}>
                                             Add S7 Tag
                                         </Button>

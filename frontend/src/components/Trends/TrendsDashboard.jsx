@@ -4,22 +4,67 @@ import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContai
 import { ChevronDown, RefreshCw, Download, Clock } from 'lucide-react';
 import { socket } from '../../socket';
 import axios from '../../api';
+import DataExportDialog from '../Common/DataExportDialog';
+import edrCatalog from '../../../../shared/edrMetrics.json';
 
 const AVAILABLE_METRICS = {
-    drilling: ['hook_load', 'wob', 'bit_depth', 'hole_depth', 'rop', 'rpm', 'torque', 'delta_torque'],
-    mudpump: ['spm', 'pressure', 'total_spm', 'flow_in', 'flow_out_percentage'],
+    drilling: ['wob', 'bit_depth', 'hole_depth', 'rop', 'rpm', 'torque', 'delta_torque'],
+    drawworks: ['hook_load', 'block_position'],
+    mudpump: ['spm', 'pressure', 'total_spm', 'flow_in', 'flow_out'],
     fluid: ['total_tank_volume', 'tank_gain_loss', 'trip_tank'],
     cat_engine: ['rpm', 'load', 'coolant_temp', 'fuel_pressure', 'oil_pressure', 'battery_voltage', 'fuel_rate'],
     htd: ['rpm', 'torque', 'inclination', 'vertical_speed'],
     hpu: ['aux_pressure', 'discharge_pressure', 'oil_temp', 'oil_level'],
     pct: ['makeup_torque', 'last_makeup_torque', 'clamp_up_pressure', 'clamp_low_pressure', 'clamp_up_force', 'clamp_low_force'],
     cwk: ['clamp_pressure', 'clamp_force'],
-    acs: ['block_position', 'crownsaver', 'floorsaver', 'bottomsaver', 'upper_tag', 'lower_tag']
+    acs: ['crownsaver', 'floorsaver', 'bottomsaver', 'upper_tag', 'lower_tag']
 };
 
 const COLORS = [
     '#38bdf8', '#a78bfa', '#34d399', '#fb7185', '#fbbf24', '#e879f9', '#22c55e', '#ef4444', '#f59e0b', '#60a5fa'
 ];
+
+const METRIC_ALIASES = {
+    'drilling.hook_load': 'drawworks.hook_load',
+    'mudpump.flow_out_percentage': 'mudpump.flow_out',
+    'acs.block_position': 'drawworks.block_position'
+};
+
+const catalogMetrics = new Map(edrCatalog.categories.flatMap(category => (
+    category.fields.map(field => [
+        `${category.id}.${field.id}`,
+        { ...field, group: category.label }
+    ])
+)));
+const categoryLabels = new Map(edrCatalog.categories.map(category => [category.id, category.label]));
+
+const EXPORT_META_ALIASES = {
+    'mudpump.flow_out': 'mudpump.flow_out_percentage'
+};
+
+const titleCase = value => value
+    .replace(/_/g, ' ')
+    .replace(/\b\w/g, character => character.toUpperCase());
+
+const TREND_EXPORT_PARAMETERS = Object.entries(AVAILABLE_METRICS).flatMap(([measurement, fields]) => (
+    fields.map(field => {
+        const key = `${measurement}.${field}`;
+        const metadata = catalogMetrics.get(EXPORT_META_ALIASES[key] || key);
+        return {
+            key,
+            label: metadata?.label || titleCase(field),
+            group: metadata?.group || categoryLabels.get(measurement) || titleCase(measurement),
+            unit: metadata?.unit || '',
+            precision: 2
+        };
+    })
+));
+
+const formatTrendValue = (value, fallback = '---') => {
+    if (value === null || value === undefined || value === '') return fallback;
+    const numericValue = Number(value);
+    return Number.isFinite(numericValue) ? numericValue.toFixed(2) : value;
+};
 
 export default function TrendsDashboard() {
     const [data, setData] = useState([]);
@@ -28,8 +73,9 @@ export default function TrendsDashboard() {
         if (saved) {
             try {
                 const parsed = JSON.parse(saved);
-                // Filter out any metrics that are no longer in AVAILABLE_METRICS
-                return parsed.filter(metric => {
+                const normalized = parsed.map(metric => METRIC_ALIASES[metric] || metric);
+                // Filter out any metrics that are no longer in AVAILABLE_METRICS.
+                return [...new Set(normalized)].filter(metric => {
                     const [meas, field] = metric.split('.');
                     return AVAILABLE_METRICS[meas]?.includes(field);
                 });
@@ -41,6 +87,7 @@ export default function TrendsDashboard() {
     });
     const [showParams, setShowParams] = useState(false);
     const [showCustomDate, setShowCustomDate] = useState(false);
+    const [isExportOpen, setIsExportOpen] = useState(false);
 
     const [timeRange, setTimeRange] = useState('-15m');
     const [customRange, setCustomRange] = useState({ start: '', end: '' });
@@ -178,33 +225,6 @@ export default function TrendsDashboard() {
         );
     };
 
-    const handleExport = () => {
-        if (!data || data.length === 0) {
-            alert("No data to export");
-            return;
-        }
-
-        const columns = ['Timestamp', ...selectedMetrics];
-        const escapeCsv = (value) => {
-            const text = value == null ? '' : String(value);
-            return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
-        };
-        const rows = data.map((row) => [
-            new Date(row.timestamp).toLocaleString(),
-            ...selectedMetrics.map((metric) => row[metric] ?? '')
-        ]);
-        const csv = [columns, ...rows].map((row) => row.map(escapeCsv).join(',')).join('\n');
-        const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-        const url = URL.createObjectURL(blob);
-        const link = document.createElement('a');
-        link.href = url;
-        link.download = `ROMII_Trends_${new Date().toISOString().replace(/[:.]/g, '-')}.csv`;
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-        URL.revokeObjectURL(url);
-    };
-
     return (
         <Box sx={{ height: 'calc(100vh - 100px)', display: 'flex', flexDirection: 'column' }}>
             <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 2, alignItems: 'center', flexWrap: 'wrap', gap: 2 }}>
@@ -316,8 +336,8 @@ export default function TrendsDashboard() {
                         </Button>
                     ))}
 
-                    <Button variant="outlined" startIcon={<Download />} onClick={handleExport} sx={{ color: '#fbbf24', borderColor: '#fbbf24', ml: 2, '&:hover': { bgcolor: 'rgba(251, 191, 36, 0.1)' } }}>
-                        Export CSV
+                    <Button variant="outlined" startIcon={<Download />} onClick={() => setIsExportOpen(true)} sx={{ color: '#fbbf24', borderColor: '#fbbf24', ml: 2, '&:hover': { bgcolor: 'rgba(251, 191, 36, 0.1)' } }}>
+                        Export
                     </Button>
 
                     <Button variant="outlined" startIcon={<RefreshCw />} onClick={fetchHistory} sx={{ color: '#38bdf8', borderColor: '#334155', ml: 1 }}>
@@ -352,7 +372,7 @@ export default function TrendsDashboard() {
                                                 {field.replace(/_/g, ' ').toUpperCase()}
                                             </Typography>
                                             <Typography variant="h5" sx={{ color: color, fontWeight: 'bold', textAlign: 'right', fontFamily: '"Orbitron", sans-serif' }}>
-                                                {typeof latestVal === 'number' ? latestVal.toFixed(1) : latestVal}
+                                                {formatTrendValue(latestVal)}
                                             </Typography>
                                         </Box>
                                     );
@@ -406,12 +426,13 @@ export default function TrendsDashboard() {
                                         minTickGap={30}
                                         fontSize={11}
                                     />
-                                    <YAxis stroke="#94a3b8" />
+                                    <YAxis stroke="#94a3b8" tickFormatter={(value) => formatTrendValue(value, '')} />
                                     <Tooltip
                                         labelFormatter={(unixTime) => {
                                             if (!unixTime || isNaN(unixTime)) return '';
                                             return new Date(unixTime).toLocaleString();
                                         }}
+                                        formatter={(value, name) => [formatTrendValue(value), name]}
                                         contentStyle={{ backgroundColor: '#0f172a', border: '1px solid #334155', borderRadius: 8 }}
                                         itemStyle={{ color: '#e2e8f0' }}
                                     />
@@ -435,6 +456,15 @@ export default function TrendsDashboard() {
                     </Paper>
                 </Grid>
             </Grid>
+            <DataExportDialog
+                open={isExportOpen}
+                onClose={() => setIsExportOpen(false)}
+                title="Live Parameter Trends"
+                filePrefix="AHWR-Live-Trends"
+                parameters={TREND_EXPORT_PARAMETERS}
+                defaultSelected={selectedMetrics}
+                fallbackRows={data}
+            />
         </Box>
     );
 }

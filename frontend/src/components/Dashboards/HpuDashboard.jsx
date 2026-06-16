@@ -135,7 +135,7 @@ export default function HpuDashboard() {
                         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
                             <Box sx={{ p: 1.5, bgcolor: '#0f172a', borderRadius: 1, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                                 <Typography variant="body2" sx={{ color: '#94a3b8', fontWeight: '500' }}>PILOT LS PRESSURE</Typography>
-                                <Typography sx={{ color: '#38bdf8', fontWeight: 'bold' }}>{data.pilot_pressure || 0} bar</Typography>
+                                <Typography sx={{ color: '#38bdf8', fontWeight: 'bold' }}>{Number(data.pilot_pressure || 0).toFixed(2)} bar</Typography>
                             </Box>
                             <Box sx={{ p: 1.5, bgcolor: '#0f172a', borderRadius: 1, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                                 <Typography variant="body2" sx={{ color: '#94a3b8', fontWeight: '500' }}>GATE VALVE</Typography>

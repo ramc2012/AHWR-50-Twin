@@ -52,7 +52,7 @@ const menuItems = [
     { text: 'Alarms', icon: <Bell size={20} />, path: '/alarms' },
     { text: 'Workover', icon: <Wrench size={20} />, path: '/workover' },
     { text: 'Well Control', icon: <ShieldAlert size={20} />, path: '/wellcontrol' },
-    { text: 'Fishing Ops', icon: <Anchor size={20} />, path: '/fishing' },
+    { text: 'Fishing Ops', icon: <Anchor size={20} />, path: '/fishing', hideCurrentLabel: true },
     { text: 'Live Trends', icon: <ChartIcon size={20} />, path: '/trends' },
     { text: 'Reports', icon: <FileText size={20} />, path: '/reports' },
     { text: 'Maintenance', icon: <HeartPulse size={20} />, path: '/maintenance' },
@@ -250,9 +250,11 @@ export default function Layout() {
                         }}
                     >
                         {currentPage?.icon}
-                        <Typography variant="body1" noWrap sx={{ fontWeight: 'bold', fontSize: { xs: 13, sm: 16 } }}>
-                            {currentPage?.text || 'Rig Overview'}
-                        </Typography>
+                        {!currentPage?.hideCurrentLabel && (
+                            <Typography variant="body1" noWrap sx={{ fontWeight: 'bold', fontSize: { xs: 13, sm: 16 } }}>
+                                {currentPage?.text || 'Rig Overview'}
+                            </Typography>
+                        )}
                         <ChevronDown size={16} style={{ transform: menuAnchor ? 'rotate(180deg)' : 'rotate(0deg)', transition: '0.2s' }} />
                     </Button>
 

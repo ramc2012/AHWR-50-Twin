@@ -30,4 +30,7 @@ logs/
 .vscode/
 # Offline images
 offline_images/
+images/
+*.tar
+*.tar.sha256
 
