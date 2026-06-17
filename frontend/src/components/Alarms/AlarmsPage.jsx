@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import {
     Box, Typography, Paper, Button, Tabs, Tab, Table, TableBody, TableCell,
-    TableContainer, TableHead, TableRow, TableSortLabel, Chip, Tooltip
+    TableContainer, TableHead, TableRow, TableSortLabel, Chip, Tooltip, useTheme
 } from '@mui/material';
 import { ShieldAlert, Check, History as HistoryIcon, Star } from 'lucide-react';
 import axios from '../../api';
@@ -9,6 +9,15 @@ import { socket } from '../../socket';
 import { useAuth } from '../../context/AuthContext';
 import { priorityColor, stateLabel, priorityRank } from '../../utils/alarms';
 import { formatDuration, formatClock, secondsSince } from '../../utils/format';
+
+// Semantic status colors (kept across all themes intentionally).
+const STATUS = { ok: '#4ade80', warn: '#f59e0b' };
+const HISTORY_TYPE_COLOR = {
+    RAISE: '#ef4444',
+    ACK: '#38bdf8',
+    RTN: '#4ade80',
+    RTN_UNACK: '#f59e0b',
+};
 
 function PriorityChip({ priority }) {
     const color = priorityColor(priority);
@@ -21,11 +30,11 @@ function PriorityChip({ priority }) {
     );
 }
 
-// Header cell text-color so dark theme stays readable.
-const headSx = { color: '#94a3b8', fontWeight: 'bold', borderColor: '#334155', whiteSpace: 'nowrap' };
-const cellSx = { color: 'white', borderColor: '#1e293b' };
-
 function ActiveTable({ rows, canWrite, onAck, onAckAll }) {
+    const theme = useTheme();
+    const headSx = { color: theme.palette.text.secondary, fontWeight: 'bold', borderColor: theme.palette.divider, whiteSpace: 'nowrap' };
+    const cellSx = { color: theme.palette.text.primary, borderColor: theme.palette.divider };
+
     const [orderBy, setOrderBy] = useState('priority');
     const [order, setOrder] = useState('asc');
     // Re-render every second so "time-in" counts up live.
@@ -75,18 +84,19 @@ function ActiveTable({ rows, canWrite, onAck, onAckAll }) {
     ];
 
     return (
-        <Paper sx={{ bgcolor: '#1e293b', border: '1px solid #334155' }}>
-            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', p: 2 }}>
-                <Typography variant="subtitle1" sx={{ fontWeight: 'bold', color: '#38bdf8' }}>
+        <Paper sx={{ bgcolor: theme.palette.background.paper, border: `1px solid ${theme.palette.divider}` }}>
+            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', px: 1.5, py: 1 }}>
+                <Typography variant="subtitle1" sx={{ fontWeight: 'bold', color: theme.palette.primary.main }}>
                     Active Alarms ({rows.length})
                 </Typography>
                 {canWrite && (
                     <Button
                         onClick={onAckAll}
                         variant="contained"
+                        size="small"
                         startIcon={<Check size={16} />}
                         disabled={rows.length === 0}
-                        sx={{ bgcolor: '#38bdf8', color: '#0f172a', textTransform: 'none', fontWeight: 'bold', '&:hover': { bgcolor: '#0ea5e9' } }}
+                        sx={{ textTransform: 'none', fontWeight: 'bold' }}
                     >
                         Ack all
                     </Button>
@@ -102,7 +112,7 @@ function ActiveTable({ rows, canWrite, onAck, onAckAll }) {
                                         active={orderBy === c.key}
                                         direction={orderBy === c.key ? order : 'asc'}
                                         onClick={() => handleSort(c.key)}
-                                        sx={{ color: '#94a3b8 !important', '& .MuiTableSortLabel-icon': { color: '#38bdf8 !important' } }}
+                                        sx={{ color: `${theme.palette.text.secondary} !important`, '& .MuiTableSortLabel-icon': { color: `${theme.palette.primary.main} !important` } }}
                                     >
                                         {c.label}
                                     </TableSortLabel>
@@ -120,8 +130,8 @@ function ActiveTable({ rows, canWrite, onAck, onAckAll }) {
                                     key={a.id}
                                     hover
                                     sx={{
-                                        bgcolor: a.firstOut ? 'rgba(56,189,248,0.08)' : 'transparent',
-                                        borderLeft: a.firstOut ? '3px solid #38bdf8' : '3px solid transparent',
+                                        bgcolor: a.firstOut ? `${theme.palette.primary.main}14` : 'transparent',
+                                        borderLeft: `3px solid ${a.firstOut ? theme.palette.primary.main : 'transparent'}`,
                                     }}
                                 >
                                     <TableCell sx={cellSx}>
@@ -129,7 +139,7 @@ function ActiveTable({ rows, canWrite, onAck, onAckAll }) {
                                             <PriorityChip priority={a.priority} />
                                             {a.firstOut && (
                                                 <Tooltip title="First-out (initiating alarm)">
-                                                    <Star size={14} color="#38bdf8" fill="#38bdf8" />
+                                                    <Star size={14} color={theme.palette.primary.main} fill={theme.palette.primary.main} />
                                                 </Tooltip>
                                             )}
                                         </Box>
@@ -137,7 +147,7 @@ function ActiveTable({ rows, canWrite, onAck, onAckAll }) {
                                     <TableCell sx={cellSx}>{formatDuration(secondsSince(a.raisedAt))}</TableCell>
                                     <TableCell sx={cellSx}>
                                         <Typography variant="body2" sx={{ fontWeight: 'bold' }}>{a.label}</Typography>
-                                        <Typography variant="caption" sx={{ color: '#64748b' }}>{a.dataKey}</Typography>
+                                        <Typography variant="caption" sx={{ color: theme.palette.text.secondary }}>{a.dataKey}</Typography>
                                     </TableCell>
                                     <TableCell sx={cellSx}>
                                         <Chip label={a.condition} size="small" variant="outlined"
@@ -145,13 +155,13 @@ function ActiveTable({ rows, canWrite, onAck, onAckAll }) {
                                     </TableCell>
                                     <TableCell sx={cellSx}>
                                         <span style={{ color, fontWeight: 'bold' }}>{a.value}</span>
-                                        <span style={{ color: '#64748b' }}> / {a.limit} {a.unit || ''}</span>
+                                        <span style={{ color: theme.palette.text.secondary }}> / {a.limit} {a.unit || ''}</span>
                                     </TableCell>
                                     <TableCell sx={cellSx}>
-                                        <Typography variant="body2" sx={{ color: isUnack ? color : '#94a3b8', fontWeight: isUnack ? 'bold' : 'normal' }}>
+                                        <Typography variant="body2" sx={{ color: isUnack ? color : theme.palette.text.secondary, fontWeight: isUnack ? 'bold' : 'normal' }}>
                                             {stateLabel(a.state)}
                                         </Typography>
-                                        {a.ackBy && <Typography variant="caption" sx={{ color: '#64748b' }}>by {a.ackBy}</Typography>}
+                                        {a.ackBy && <Typography variant="caption" sx={{ color: theme.palette.text.secondary }}>by {a.ackBy}</Typography>}
                                     </TableCell>
                                     {canWrite && (
                                         <TableCell sx={cellSx} align="right">
@@ -159,7 +169,7 @@ function ActiveTable({ rows, canWrite, onAck, onAckAll }) {
                                                 size="small"
                                                 onClick={() => onAck(a.id)}
                                                 disabled={!isUnack}
-                                                sx={{ textTransform: 'none', color: isUnack ? '#38bdf8' : '#475569', minWidth: 0 }}
+                                                sx={{ textTransform: 'none', color: isUnack ? theme.palette.primary.main : theme.palette.text.disabled, minWidth: 0 }}
                                             >
                                                 {isUnack ? 'Acknowledge' : 'Ack’d'}
                                             </Button>
@@ -170,7 +180,7 @@ function ActiveTable({ rows, canWrite, onAck, onAckAll }) {
                         })}
                         {rows.length === 0 && (
                             <TableRow>
-                                <TableCell colSpan={canWrite ? 7 : 6} align="center" sx={{ color: '#4ade80', py: 4, borderColor: '#1e293b' }}>
+                                <TableCell colSpan={canWrite ? 7 : 6} align="center" sx={{ color: STATUS.ok, py: 4, borderColor: theme.palette.divider }}>
                                     No active alarms — all clear.
                                 </TableCell>
                             </TableRow>
@@ -182,18 +192,14 @@ function ActiveTable({ rows, canWrite, onAck, onAckAll }) {
     );
 }
 
-const HISTORY_TYPE_COLOR = {
-    RAISE: '#ef4444',
-    ACK: '#38bdf8',
-    RTN: '#4ade80',
-    RTN_UNACK: '#f59e0b',
-};
-
 function HistoryTable({ rows }) {
+    const theme = useTheme();
+    const headSx = { color: theme.palette.text.secondary, fontWeight: 'bold', borderColor: theme.palette.divider, whiteSpace: 'nowrap' };
+    const cellSx = { color: theme.palette.text.primary, borderColor: theme.palette.divider };
     return (
-        <Paper sx={{ bgcolor: '#1e293b', border: '1px solid #334155' }}>
-            <Box sx={{ p: 2 }}>
-                <Typography variant="subtitle1" sx={{ fontWeight: 'bold', color: '#38bdf8' }}>
+        <Paper sx={{ bgcolor: theme.palette.background.paper, border: `1px solid ${theme.palette.divider}` }}>
+            <Box sx={{ px: 1.5, py: 1 }}>
+                <Typography variant="subtitle1" sx={{ fontWeight: 'bold', color: theme.palette.primary.main }}>
                     Alarm History (latest {rows.length})
                 </Typography>
             </Box>
@@ -216,20 +222,20 @@ function HistoryTable({ rows }) {
                                 <TableCell sx={cellSx}>{formatClock(e.ts)}</TableCell>
                                 <TableCell sx={cellSx}>
                                     <Chip label={e.type} size="small"
-                                        sx={{ bgcolor: `${HISTORY_TYPE_COLOR[e.type] || '#64748b'}22`, color: HISTORY_TYPE_COLOR[e.type] || '#94a3b8', height: 20, fontWeight: 'bold' }} />
+                                        sx={{ bgcolor: `${HISTORY_TYPE_COLOR[e.type] || '#64748b'}22`, color: HISTORY_TYPE_COLOR[e.type] || theme.palette.text.secondary, height: 20, fontWeight: 'bold' }} />
                                 </TableCell>
                                 <TableCell sx={cellSx}>{e.priority ? <PriorityChip priority={e.priority} /> : '--'}</TableCell>
                                 <TableCell sx={cellSx}>{e.label || e.key}</TableCell>
                                 <TableCell sx={cellSx}>{e.condition || '--'}</TableCell>
                                 <TableCell sx={cellSx}>
-                                    {e.value != null ? <>{e.value}{e.limit != null ? <span style={{ color: '#64748b' }}> / {e.limit}</span> : null}</> : '--'}
+                                    {e.value != null ? <>{e.value}{e.limit != null ? <span style={{ color: theme.palette.text.secondary }}> / {e.limit}</span> : null}</> : '--'}
                                 </TableCell>
                                 <TableCell sx={cellSx}>{e.by || '--'}</TableCell>
                             </TableRow>
                         ))}
                         {rows.length === 0 && (
                             <TableRow>
-                                <TableCell colSpan={7} align="center" sx={{ color: '#94a3b8', py: 4, borderColor: '#1e293b' }}>
+                                <TableCell colSpan={7} align="center" sx={{ color: theme.palette.text.secondary, py: 4, borderColor: theme.palette.divider }}>
                                     No history.
                                 </TableCell>
                             </TableRow>
@@ -242,6 +248,7 @@ function HistoryTable({ rows }) {
 }
 
 export default function AlarmsPage() {
+    const theme = useTheme();
     const { user } = useAuth();
     const canWrite = user?.role === 'admin' || user?.role === 'operator';
 
@@ -301,29 +308,31 @@ export default function AlarmsPage() {
     };
 
     return (
-        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-            <Typography variant="h6" sx={{ fontWeight: 'bold', color: '#38bdf8', display: 'flex', alignItems: 'center', gap: 1 }}>
-                <ShieldAlert size={22} /> Alarm Management
-            </Typography>
+        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 1.5 }}>
+                <Typography variant="h6" sx={{ fontWeight: 'bold', color: theme.palette.primary.main, display: 'flex', alignItems: 'center', gap: 1 }}>
+                    <ShieldAlert size={22} /> Alarm Management
+                </Typography>
 
-            {/* Priority count summary (text + color cue). */}
-            <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
-                {[['P1', counts.p1], ['P2', counts.p2], ['P3', counts.p3]].map(([p, n]) => (
-                    <Paper key={p} sx={{ px: 2, py: 1, bgcolor: '#1e293b', border: `1px solid ${priorityColor(p)}`, display: 'flex', alignItems: 'center', gap: 1 }}>
-                        <PriorityChip priority={p} />
-                        <Typography variant="h6" sx={{ color: 'white', fontWeight: 'bold' }}>{n || 0}</Typography>
+                {/* Priority count summary (text + color cue). */}
+                <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+                    {[['P1', counts.p1], ['P2', counts.p2], ['P3', counts.p3]].map(([p, n]) => (
+                        <Paper key={p} sx={{ px: 1.5, py: 0.75, bgcolor: theme.palette.background.paper, border: `1px solid ${priorityColor(p)}`, display: 'flex', alignItems: 'center', gap: 1 }}>
+                            <PriorityChip priority={p} />
+                            <Typography variant="h6" sx={{ color: theme.palette.text.primary, fontWeight: 'bold' }}>{n || 0}</Typography>
+                        </Paper>
+                    ))}
+                    <Paper sx={{ px: 1.5, py: 0.75, bgcolor: theme.palette.background.paper, border: `1px solid ${theme.palette.divider}`, display: 'flex', alignItems: 'center', gap: 1 }}>
+                        <Typography variant="caption" sx={{ color: theme.palette.text.secondary }}>UNACK</Typography>
+                        <Typography variant="h6" sx={{ color: counts.unack > 0 ? STATUS.warn : STATUS.ok, fontWeight: 'bold' }}>{counts.unack || 0}</Typography>
                     </Paper>
-                ))}
-                <Paper sx={{ px: 2, py: 1, bgcolor: '#1e293b', border: '1px solid #334155', display: 'flex', alignItems: 'center', gap: 1 }}>
-                    <Typography variant="caption" sx={{ color: '#94a3b8' }}>UNACK</Typography>
-                    <Typography variant="h6" sx={{ color: counts.unack > 0 ? '#f59e0b' : '#4ade80', fontWeight: 'bold' }}>{counts.unack || 0}</Typography>
-                </Paper>
+                </Box>
             </Box>
 
-            <Box sx={{ borderBottom: 1, borderColor: '#334155' }}>
+            <Box sx={{ borderBottom: 1, borderColor: theme.palette.divider }}>
                 <Tabs value={tab} onChange={(e, v) => { setTab(v); if (v === 1) loadHistory(); }} textColor="primary" indicatorColor="primary">
-                    <Tab icon={<ShieldAlert size={16} />} iconPosition="start" label="Active" sx={{ color: tab === 0 ? '#38bdf8' : '#94a3b8', textTransform: 'none' }} />
-                    <Tab icon={<HistoryIcon size={16} />} iconPosition="start" label="History" sx={{ color: tab === 1 ? '#38bdf8' : '#94a3b8', textTransform: 'none' }} />
+                    <Tab icon={<ShieldAlert size={16} />} iconPosition="start" label="Active" sx={{ color: tab === 0 ? theme.palette.primary.main : theme.palette.text.secondary, textTransform: 'none', minHeight: 44 }} />
+                    <Tab icon={<HistoryIcon size={16} />} iconPosition="start" label="History" sx={{ color: tab === 1 ? theme.palette.primary.main : theme.palette.text.secondary, textTransform: 'none', minHeight: 44 }} />
                 </Tabs>
             </Box>
 

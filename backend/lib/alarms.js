@@ -11,6 +11,9 @@ const PRIORITY_RANK = { P1: 1, P2: 2, P3: 3 };
 
 // Default workover alarm set. dataKey is a dotted path into the rig-data payload.
 const DEFAULT_CONFIG = [
+    // Safety status (read-only PLC inputs) — top-priority, no on-delay, no deadband.
+    { key: 'esd_active', dataKey: 'safety.esd_active', label: 'EMERGENCY SHUTDOWN ACTIVE', unit: '', hi: 1, deadband: 0, onDelaySec: 0, priority: 'P1', enabled: true },
+    { key: 'lockout_active', dataKey: 'safety.lockout_active', label: 'EQUIPMENT LOCKOUT ACTIVE', unit: '', hi: 1, deadband: 0, onDelaySec: 0, priority: 'P1', enabled: true },
     { key: 'hookload_hi', dataKey: 'drawworks.hook_load', label: 'Hook Load High', unit: 't', hi: 180, hiHi: 200, deadband: 2, onDelaySec: 2, priority: 'P1', enabled: true },
     { key: 'spp_hi', dataKey: 'mudpump.pressure', label: 'Pump / Standpipe Pressure High', unit: 'bar', hi: 240, hiHi: 300, deadband: 5, onDelaySec: 2, priority: 'P2', enabled: true },
     { key: 'tubing_hi', dataKey: 'wellhead.tubing_pressure', label: 'Tubing Pressure High', unit: 'bar', hi: 200, hiHi: 250, deadband: 5, onDelaySec: 2, priority: 'P1', enabled: true },
@@ -29,7 +32,16 @@ let events = [];
 
 function load() {
     config = readJson(CONFIG_FILE, null);
-    if (!Array.isArray(config)) { config = DEFAULT_CONFIG; writeJson(CONFIG_FILE, config).catch(() => {}); }
+    if (!Array.isArray(config)) {
+        config = DEFAULT_CONFIG;
+        writeJson(CONFIG_FILE, config).catch(() => {});
+    } else {
+        // Merge in any new built-in alarms added since the config was last persisted
+        // (e.g. ESD/lockout), without clobbering existing admin edits.
+        const have = new Set(config.map((c) => c.key));
+        const added = DEFAULT_CONFIG.filter((c) => !have.has(c.key));
+        if (added.length) { config = [...added, ...config]; writeJson(CONFIG_FILE, config).catch(() => {}); }
+    }
     events = readJson(EVENTS_FILE, []);
     if (!Array.isArray(events)) events = [];
 }

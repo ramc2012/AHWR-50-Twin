@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import {
     Box, Typography, Paper, Grid, Button, TextField, Table, TableBody,
     TableCell, TableContainer, TableHead, TableRow, Dialog, DialogTitle,
-    DialogContent, DialogActions, Snackbar, Alert, Chip
+    DialogContent, DialogActions, Snackbar, Alert, Chip, useTheme
 } from '@mui/material';
 import { FileText, Printer, Download, Edit2 } from 'lucide-react';
 import axios from '../../api';
@@ -10,8 +10,8 @@ import { useAuth } from '../../context/AuthContext';
 import { formatDuration, formatClock, todayISO } from '../../utils/format';
 import { priorityColor } from '../../utils/alarms';
 
-const headSx = { color: '#94a3b8', fontWeight: 'bold', borderColor: '#334155', whiteSpace: 'nowrap' };
-const cellSx = { color: 'white', borderColor: '#1e293b' };
+// Semantic status colors (kept across all themes intentionally).
+const STATUS = { prod: '#4ade80', npt: '#ef4444', warn: '#f59e0b', accent: '#38bdf8' };
 
 const HEADER_FIELDS = [
     { key: 'well', label: 'Well' },
@@ -87,18 +87,23 @@ function downloadCSV(report, date) {
     URL.revokeObjectURL(url);
 }
 
-function SummaryStat({ label, value, color = 'white' }) {
+function SummaryStat({ label, value, color, theme }) {
     return (
-        <Box sx={{ p: 2, bgcolor: '#0f172a', borderRadius: 1, border: '1px solid #334155', textAlign: 'center' }}>
-            <Typography variant="caption" sx={{ color: '#94a3b8', textTransform: 'uppercase', letterSpacing: 1 }}>{label}</Typography>
-            <Typography variant="h5" sx={{ color, fontWeight: 'bold' }}>{value}</Typography>
+        <Box sx={{ p: 1.5, bgcolor: theme.palette.background.default, borderRadius: 1, border: `1px solid ${theme.palette.divider}`, textAlign: 'center' }}>
+            <Typography variant="caption" sx={{ color: theme.palette.text.secondary, textTransform: 'uppercase', letterSpacing: 1 }}>{label}</Typography>
+            <Typography variant="h5" sx={{ color: color || theme.palette.text.primary, fontWeight: 'bold' }}>{value}</Typography>
         </Box>
     );
 }
 
 export default function ReportsPage() {
+    const theme = useTheme();
     const { user } = useAuth();
     const canWrite = user?.role === 'admin' || user?.role === 'operator';
+
+    const headSx = { color: theme.palette.text.secondary, fontWeight: 'bold', borderColor: theme.palette.divider, whiteSpace: 'nowrap' };
+    const cellSx = { color: theme.palette.text.primary, borderColor: theme.palette.divider };
+    const fieldSx = { bgcolor: theme.palette.background.default, input: { color: theme.palette.text.primary }, '.MuiOutlinedInput-notchedOutline': { borderColor: theme.palette.divider } };
 
     const [date, setDate] = useState(todayISO());
     const [report, setReport] = useState(null);
@@ -149,7 +154,7 @@ export default function ReportsPage() {
     const nptByReason = report?.nptByReason || {};
 
     return (
-        <Box className="report-root" sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+        <Box className="report-root" sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
             {/* Print-only stylesheet: hide app chrome and force a light, paper layout. */}
             <style>{`
                 @media print {
@@ -166,8 +171,8 @@ export default function ReportsPage() {
             `}</style>
 
             {/* Controls — excluded from print. */}
-            <Box className="report-no-print" sx={{ display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap' }}>
-                <Typography variant="h6" sx={{ fontWeight: 'bold', color: '#38bdf8', display: 'flex', alignItems: 'center', gap: 1 }}>
+            <Box className="report-no-print" sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap' }}>
+                <Typography variant="h6" sx={{ fontWeight: 'bold', color: theme.palette.primary.main, display: 'flex', alignItems: 'center', gap: 1 }}>
                     <FileText size={22} /> Daily Workover Report
                 </Typography>
                 <Box sx={{ flexGrow: 1 }} />
@@ -176,26 +181,26 @@ export default function ReportsPage() {
                     size="small"
                     value={date}
                     onChange={(e) => setDate(e.target.value)}
-                    sx={{ bgcolor: '#0f172a', input: { color: 'white' }, '.MuiOutlinedInput-notchedOutline': { borderColor: '#334155' } }}
+                    sx={fieldSx}
                 />
                 {canWrite && (
                     <Button variant="outlined" startIcon={<Edit2 size={16} />} onClick={openEdit}
-                        sx={{ color: '#38bdf8', borderColor: '#334155', textTransform: 'none' }}>
+                        sx={{ color: theme.palette.primary.main, borderColor: theme.palette.divider, textTransform: 'none' }}>
                         Edit Header
                     </Button>
                 )}
                 <Button variant="outlined" startIcon={<Download size={16} />} onClick={() => report && downloadCSV(report, date)} disabled={!report}
-                    sx={{ color: '#4ade80', borderColor: '#334155', textTransform: 'none' }}>
+                    sx={{ color: STATUS.prod, borderColor: theme.palette.divider, textTransform: 'none' }}>
                     CSV
                 </Button>
                 <Button variant="contained" startIcon={<Printer size={16} />} onClick={() => window.print()} disabled={!report}
-                    sx={{ bgcolor: '#38bdf8', color: '#0f172a', textTransform: 'none', fontWeight: 'bold', '&:hover': { bgcolor: '#0ea5e9' } }}>
+                    sx={{ textTransform: 'none', fontWeight: 'bold' }}>
                     Print / PDF
                 </Button>
             </Box>
 
             {!report && !loading && (
-                <Paper sx={{ p: 4, bgcolor: '#1e293b', border: '1px solid #334155', textAlign: 'center', color: '#94a3b8' }}>
+                <Paper sx={{ p: 4, bgcolor: theme.palette.background.paper, border: `1px solid ${theme.palette.divider}`, textAlign: 'center', color: theme.palette.text.secondary }}>
                     No report available for {date}.
                 </Paper>
             )}
@@ -203,43 +208,43 @@ export default function ReportsPage() {
             {report && (
                 <>
                     {/* Header block */}
-                    <Paper sx={{ p: 3, bgcolor: '#1e293b', border: '1px solid #334155' }}>
+                    <Paper sx={{ p: 2, bgcolor: theme.palette.background.paper, border: `1px solid ${theme.palette.divider}` }}>
                         <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 1 }}>
-                            <Typography variant="h5" sx={{ fontWeight: 'bold', color: 'white' }}>
+                            <Typography variant="h5" sx={{ fontWeight: 'bold', color: theme.palette.text.primary }}>
                                 Daily Workover Report — {report.date || date}
                             </Typography>
-                            <Typography variant="caption" sx={{ color: '#64748b' }}>
+                            <Typography variant="caption" sx={{ color: theme.palette.text.secondary }}>
                                 Generated {report.generatedAt ? formatClock(report.generatedAt) : '--'}
                             </Typography>
                         </Box>
                         <Grid container spacing={2} sx={{ mt: 0.5 }}>
                             {HEADER_FIELDS.map((f) => (
                                 <Grid item xs={6} sm={4} md={2} key={f.key}>
-                                    <Typography variant="caption" sx={{ color: '#94a3b8', textTransform: 'uppercase', letterSpacing: 0.5 }}>{f.label}</Typography>
-                                    <Typography variant="body1" sx={{ color: 'white', fontWeight: 'bold' }}>{header[f.key] || '--'}</Typography>
+                                    <Typography variant="caption" sx={{ color: theme.palette.text.secondary, textTransform: 'uppercase', letterSpacing: 0.5 }}>{f.label}</Typography>
+                                    <Typography variant="body1" sx={{ color: theme.palette.text.primary, fontWeight: 'bold' }}>{header[f.key] || '--'}</Typography>
                                 </Grid>
                             ))}
                         </Grid>
                     </Paper>
 
                     {/* Totals + Depth */}
-                    <Grid container spacing={2}>
+                    <Grid container spacing={1.5}>
                         <Grid item xs={12} md={8}>
-                            <Paper sx={{ p: 3, bgcolor: '#1e293b', border: '1px solid #334155', height: '100%' }}>
-                                <Typography variant="subtitle1" sx={{ fontWeight: 'bold', color: '#38bdf8', mb: 2 }}>Time Summary</Typography>
-                                <Grid container spacing={2}>
-                                    <Grid item xs={4}><SummaryStat label="Productive" value={formatDuration(totals.productiveSec)} color="#4ade80" /></Grid>
-                                    <Grid item xs={4}><SummaryStat label="NPT" value={formatDuration(totals.nptSec)} color="#ef4444" /></Grid>
-                                    <Grid item xs={4}><SummaryStat label="Total" value={formatDuration(totals.totalSec)} color="#38bdf8" /></Grid>
+                            <Paper sx={{ p: 2, bgcolor: theme.palette.background.paper, border: `1px solid ${theme.palette.divider}`, height: '100%' }}>
+                                <Typography variant="subtitle1" sx={{ fontWeight: 'bold', color: theme.palette.primary.main, mb: 1.5 }}>Time Summary</Typography>
+                                <Grid container spacing={1.5}>
+                                    <Grid item xs={4}><SummaryStat theme={theme} label="Productive" value={formatDuration(totals.productiveSec)} color={STATUS.prod} /></Grid>
+                                    <Grid item xs={4}><SummaryStat theme={theme} label="NPT" value={formatDuration(totals.nptSec)} color={STATUS.npt} /></Grid>
+                                    <Grid item xs={4}><SummaryStat theme={theme} label="Total" value={formatDuration(totals.totalSec)} color={STATUS.accent} /></Grid>
                                 </Grid>
                                 {Object.keys(nptByReason).length > 0 && (
-                                    <Box sx={{ mt: 2 }}>
-                                        <Typography variant="caption" sx={{ color: '#94a3b8', textTransform: 'uppercase', letterSpacing: 1 }}>NPT by Reason</Typography>
-                                        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5, mt: 1 }}>
+                                    <Box sx={{ mt: 1.5 }}>
+                                        <Typography variant="caption" sx={{ color: theme.palette.text.secondary, textTransform: 'uppercase', letterSpacing: 1 }}>NPT by Reason</Typography>
+                                        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5, mt: 0.5 }}>
                                             {Object.entries(nptByReason).map(([reason, sec]) => (
-                                                <Box key={reason} sx={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid #334155', py: 0.5 }}>
-                                                    <Typography variant="body2" sx={{ color: 'white' }}>{reason}</Typography>
-                                                    <Typography variant="body2" sx={{ color: '#ef4444', fontWeight: 'bold' }}>{formatDuration(sec)}</Typography>
+                                                <Box key={reason} sx={{ display: 'flex', justifyContent: 'space-between', borderBottom: `1px solid ${theme.palette.divider}`, py: 0.5 }}>
+                                                    <Typography variant="body2" sx={{ color: theme.palette.text.primary }}>{reason}</Typography>
+                                                    <Typography variant="body2" sx={{ color: STATUS.npt, fontWeight: 'bold' }}>{formatDuration(sec)}</Typography>
                                                 </Box>
                                             ))}
                                         </Box>
@@ -248,28 +253,28 @@ export default function ReportsPage() {
                             </Paper>
                         </Grid>
                         <Grid item xs={12} md={4}>
-                            <Paper sx={{ p: 3, bgcolor: '#1e293b', border: '1px solid #334155', height: '100%' }}>
-                                <Typography variant="subtitle1" sx={{ fontWeight: 'bold', color: '#38bdf8', mb: 2 }}>Depth Progress</Typography>
+                            <Paper sx={{ p: 2, bgcolor: theme.palette.background.paper, border: `1px solid ${theme.palette.divider}`, height: '100%' }}>
+                                <Typography variant="subtitle1" sx={{ fontWeight: 'bold', color: theme.palette.primary.main, mb: 1.5 }}>Depth Progress</Typography>
                                 <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-                                    <Row label="Start depth" value={depth.start != null ? `${depth.start} m` : '--'} />
-                                    <Row label="End depth" value={depth.end != null ? `${depth.end} m` : '--'} />
-                                    <Row label="Progress" value={depth.progress != null ? `${depth.progress} m` : '--'} color="#4ade80" />
+                                    <Row theme={theme} label="Start depth" value={depth.start != null ? `${depth.start} m` : '--'} />
+                                    <Row theme={theme} label="End depth" value={depth.end != null ? `${depth.end} m` : '--'} />
+                                    <Row theme={theme} label="Progress" value={depth.progress != null ? `${depth.progress} m` : '--'} color={STATUS.prod} />
                                 </Box>
-                                <Typography variant="subtitle1" sx={{ fontWeight: 'bold', color: '#38bdf8', mt: 3, mb: 1 }}>Connections</Typography>
+                                <Typography variant="subtitle1" sx={{ fontWeight: 'bold', color: theme.palette.primary.main, mt: 2, mb: 1 }}>Connections</Typography>
                                 <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
-                                    <Chip label={`Run ${connections.run ?? 0}`} size="small" sx={{ bgcolor: '#0f172a', color: '#94a3b8', border: '1px solid #334155' }} />
-                                    <Chip label={`Pass ${connections.pass ?? 0}`} size="small" sx={{ bgcolor: 'rgba(74,222,128,0.15)', color: '#4ade80' }} />
-                                    <Chip label={`Fail ${connections.fail ?? 0}`} size="small" sx={{ bgcolor: 'rgba(239,68,68,0.15)', color: '#ef4444' }} />
-                                    <Chip label={`Joint ${connections.jointCounter ?? 0}`} size="small" sx={{ bgcolor: 'rgba(56,189,248,0.15)', color: '#38bdf8' }} />
+                                    <Chip label={`Run ${connections.run ?? 0}`} size="small" sx={{ bgcolor: theme.palette.background.default, color: theme.palette.text.secondary, border: `1px solid ${theme.palette.divider}` }} />
+                                    <Chip label={`Pass ${connections.pass ?? 0}`} size="small" sx={{ bgcolor: `${STATUS.prod}26`, color: STATUS.prod }} />
+                                    <Chip label={`Fail ${connections.fail ?? 0}`} size="small" sx={{ bgcolor: `${STATUS.npt}26`, color: STATUS.npt }} />
+                                    <Chip label={`Joint ${connections.jointCounter ?? 0}`} size="small" sx={{ bgcolor: `${STATUS.accent}26`, color: STATUS.accent }} />
                                 </Box>
                             </Paper>
                         </Grid>
                     </Grid>
 
                     {/* Activity breakdown */}
-                    <Paper sx={{ bgcolor: '#1e293b', border: '1px solid #334155' }}>
-                        <Box sx={{ p: 2 }}>
-                            <Typography variant="subtitle1" sx={{ fontWeight: 'bold', color: '#38bdf8' }}>Activity Time Breakdown</Typography>
+                    <Paper sx={{ bgcolor: theme.palette.background.paper, border: `1px solid ${theme.palette.divider}` }}>
+                        <Box sx={{ px: 1.5, py: 1 }}>
+                            <Typography variant="subtitle1" sx={{ fontWeight: 'bold', color: theme.palette.primary.main }}>Activity Time Breakdown</Typography>
                         </Box>
                         <TableContainer>
                             <Table size="small">
@@ -283,7 +288,7 @@ export default function ReportsPage() {
                                 </TableHead>
                                 <TableBody>
                                     {(report.activitySummary || []).map((a, i) => {
-                                        const c = a.productive ? '#4ade80' : '#f59e0b';
+                                        const c = a.productive ? STATUS.prod : STATUS.warn;
                                         return (
                                             <TableRow key={`${a.code}-${i}`} hover>
                                                 <TableCell sx={cellSx}><span style={{ color: c, fontWeight: 'bold' }}>{a.code}</span></TableCell>
@@ -294,7 +299,7 @@ export default function ReportsPage() {
                                         );
                                     })}
                                     {(report.activitySummary || []).length === 0 && (
-                                        <TableRow><TableCell colSpan={4} align="center" sx={{ color: '#94a3b8', py: 3, borderColor: '#1e293b' }}>No activity recorded.</TableCell></TableRow>
+                                        <TableRow><TableCell colSpan={4} align="center" sx={{ color: theme.palette.text.secondary, py: 3, borderColor: theme.palette.divider }}>No activity recorded.</TableCell></TableRow>
                                     )}
                                 </TableBody>
                             </Table>
@@ -302,9 +307,9 @@ export default function ReportsPage() {
                     </Paper>
 
                     {/* Alarms logged */}
-                    <Paper sx={{ bgcolor: '#1e293b', border: '1px solid #334155' }}>
-                        <Box sx={{ p: 2 }}>
-                            <Typography variant="subtitle1" sx={{ fontWeight: 'bold', color: '#38bdf8' }}>Alarms Logged</Typography>
+                    <Paper sx={{ bgcolor: theme.palette.background.paper, border: `1px solid ${theme.palette.divider}` }}>
+                        <Box sx={{ px: 1.5, py: 1 }}>
+                            <Typography variant="subtitle1" sx={{ fontWeight: 'bold', color: theme.palette.primary.main }}>Alarms Logged</Typography>
                         </Box>
                         <TableContainer>
                             <Table size="small">
@@ -331,7 +336,7 @@ export default function ReportsPage() {
                                         );
                                     })}
                                     {(report.alarms || []).length === 0 && (
-                                        <TableRow><TableCell colSpan={4} align="center" sx={{ color: '#94a3b8', py: 3, borderColor: '#1e293b' }}>No alarms logged.</TableCell></TableRow>
+                                        <TableRow><TableCell colSpan={4} align="center" sx={{ color: theme.palette.text.secondary, py: 3, borderColor: theme.palette.divider }}>No alarms logged.</TableCell></TableRow>
                                     )}
                                 </TableBody>
                             </Table>
@@ -341,7 +346,7 @@ export default function ReportsPage() {
             )}
 
             {/* Edit header dialog */}
-            <Dialog open={editOpen} onClose={() => setEditOpen(false)} PaperProps={{ sx: { bgcolor: '#1e293b', color: 'white', minWidth: 420 } }}>
+            <Dialog open={editOpen} onClose={() => setEditOpen(false)} PaperProps={{ sx: { bgcolor: theme.palette.background.paper, color: theme.palette.text.primary, minWidth: 420 } }}>
                 <DialogTitle>Edit Report Header</DialogTitle>
                 <DialogContent>
                     <Grid container spacing={2} sx={{ mt: 0.5 }}>
@@ -353,15 +358,15 @@ export default function ReportsPage() {
                                     size="small"
                                     value={headerDraft[f.key] ?? ''}
                                     onChange={(e) => setHeaderDraft((d) => ({ ...d, [f.key]: e.target.value }))}
-                                    sx={{ bgcolor: '#0f172a', input: { color: 'white' }, label: { color: '#94a3b8' }, '.MuiOutlinedInput-notchedOutline': { borderColor: '#334155' } }}
+                                    sx={{ bgcolor: theme.palette.background.default, input: { color: theme.palette.text.primary }, label: { color: theme.palette.text.secondary }, '.MuiOutlinedInput-notchedOutline': { borderColor: theme.palette.divider } }}
                                 />
                             </Grid>
                         ))}
                     </Grid>
                 </DialogContent>
                 <DialogActions sx={{ px: 3, pb: 2 }}>
-                    <Button onClick={() => setEditOpen(false)} sx={{ color: '#94a3b8' }}>Cancel</Button>
-                    <Button onClick={saveHeader} variant="contained" sx={{ bgcolor: '#38bdf8', color: '#0f172a', '&:hover': { bgcolor: '#0ea5e9' } }}>Save</Button>
+                    <Button onClick={() => setEditOpen(false)} sx={{ color: theme.palette.text.secondary }}>Cancel</Button>
+                    <Button onClick={saveHeader} variant="contained">Save</Button>
                 </DialogActions>
             </Dialog>
 
@@ -372,11 +377,11 @@ export default function ReportsPage() {
     );
 }
 
-function Row({ label, value, color = 'white' }) {
+function Row({ label, value, color, theme }) {
     return (
         <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
-            <Typography variant="body2" sx={{ color: '#94a3b8' }}>{label}</Typography>
-            <Typography variant="body2" sx={{ color, fontWeight: 'bold' }}>{value}</Typography>
+            <Typography variant="body2" sx={{ color: theme.palette.text.secondary }}>{label}</Typography>
+            <Typography variant="body2" sx={{ color: color || theme.palette.text.primary, fontWeight: 'bold' }}>{value}</Typography>
         </Box>
     );
 }

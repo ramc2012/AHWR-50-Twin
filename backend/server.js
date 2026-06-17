@@ -16,6 +16,12 @@ const ldap = require('./lib/ldap');
 const alarms = require('./lib/alarms');
 const workover = require('./lib/workover');
 const maintenance = require('./lib/maintenance');
+const variables = require('./lib/variables');
+const sync = require('./lib/sync');
+const health = require('./lib/health');
+const witsml = require('./lib/witsml');
+const etp = require('./lib/etp');
+const efficiency = require('./lib/efficiency');
 const edrCatalog = require('../shared/edrMetrics.json');
 
 const PORT = Number(process.env.PORT || 5000);
@@ -78,7 +84,13 @@ io.on('connection', (socket) => {
     socket.emit('rig_data', latestRigData);            // prime newly-connected clients
     socket.emit('dashboard_layout_update', getDashboardConfig());
     socket.emit('alarms', alarms.snapshot());          // prime the alarm banner/list
+    socket.emit('sync_status', sync.getStatus());      // prime the edge-sync page
+    socket.emit('etp_status', etp.getStatus());
 });
+
+// Start the store-and-forward sync agent + ETP 2.0 publisher (outbound only).
+sync.start(io);
+etp.start(io);
 
 // InfluxDB Query Client
 const queryApi = new InfluxDB({
@@ -277,178 +289,11 @@ const applyS7Scale = (fieldName, value, scaleMap) => {
 
 // Map Modbus fields to application categories
 // Map S7 field names to application categories
-const FIELD_MAP = {
-    // DAS (Data Acquisition System)
-    "Total Active Tank Volume-m^3": { meas: "fluid", field: "total_tank_volume" },
-    "Active Tank Volume Gain/Loss -m^3": { meas: "fluid", field: "tank_gain_loss" },
-    "Trip Tank Active Mud Volume -m^3": { meas: "fluid", field: "trip_tank" },
-    "Active TripTank Volume Gain/Loss -%": { meas: "fluid", field: "trip_tank_percentage" },
-    "Mud Tank 1 Volume -m^3": { meas: "fluid", field: "tank_1" },
-    "Mud Tank 2 Volume -m^3": { meas: "fluid", field: "tank_2" },
-    "Mud Tank 3 Volume -m^3": { meas: "fluid", field: "tank_3" },
-    "Mud Tank 4 Volume -m^3": { meas: "fluid", field: "tank_4" },
-    "Mud Return Flow -%": { meas: "mudpump", field: "flow_out" },
-    "Mud Pump Inlet Flow-Lt/min": { meas: "mudpump", field: "flow_in" },
-    "Mud Pumps Total SPM-SPM": { meas: "mudpump", field: "spm" },
-    "Mud Pumps Totals Strokes-Count": { meas: "mudpump", field: "total_spm" },
-
-    // Drilling
-    "Weight on Hook -Ton": { meas: "drawworks", field: "hook_load" },
-    "WOB -Ton": { meas: "drilling", field: "wob" },
-    "Bit Depth-m": { meas: "drilling", field: "bit_depth" }, // meters
-    "TOTAL BIT Depth-m": { meas: "drilling", field: "hole_depth" }, // meters
-    "SPP-Bar": { meas: "mudpump", field: "pressure" },
-    "Delta SPP-Bar": { meas: "mudpump", field: "delta_pressure" },
-
-    // Wellhead / well-service pressures (workover)
-    "Tubing Pressure-Bar": { meas: "wellhead", field: "tubing_pressure" },
-    "Casing Pressure-Bar": { meas: "wellhead", field: "casing_pressure" },
-    "Wellhead Pressure-Bar": { meas: "wellhead", field: "wellhead_pressure" },
-    "ROP-m/h": { meas: "drilling", field: "rop" },
-    "Ropes Wear-ton/km": { meas: "drawworks", field: "rope_wear" },
-    "Delta Torque-daN*m": { meas: "drilling", field: "delta_torque" },
-    "Drill String Speed-RPM": { meas: "drilling", field: "rpm" },
-    "Drill String Torque-daN*m": { meas: "drilling", field: "torque" },
-    "Operation-1=DRILLING, 2=TRIP IN, 3=TRIP OUT, 4=CASING": { meas: "drilling", field: "operation_mode" },
-
-    // CAT (Caterpillar Engine)
-    "CAT status- -1=UNKNOWN, 0=READY, 1=IN PROGRESS, 2=STATUS DONE, 3=EMERGENCY NOT OK, 4=NOT READY, 5=FAULT, 6 = RUNNING + FAULT, 7=STOP FORCED ": { meas: "cat_engine", field: "status" },
-    "CAT Sourcecmd-0=NONE, 1=LOCAL, 2=REMOTE, 3=MANUAL, 4=AUTO, 5=DCC, 6=---": { meas: "cat_engine", field: "source_cmd" },
-    "CAT RunHours": { meas: "cat_engine", field: "run_hours" },
-    "CAT Engine speed RPM": { meas: "cat_engine", field: "rpm" },
-    "CAT Engine TorquePercentage": { meas: "cat_engine", field: "load" },
-    "CAT Engine TotalHoursOperation": { meas: "cat_engine", field: "total_hours" },
-    "CAT Engine TotalFuelUsed": { meas: "cat_engine", field: "total_fuel" },
-    "CAT Engine CoolantTemperature": { meas: "cat_engine", field: "coolant_temp" },
-    "CAT Engine FuelTemperature": { meas: "cat_engine", field: "fuel_temp" },
-    "CAT Engine FuelDeliveryPressure": { meas: "cat_engine", field: "fuel_pressure" },
-    "CAT Engine OilPressure": { meas: "cat_engine", field: "oil_pressure" },
-    "CAT Engine CoolantLevelPercentage": { meas: "cat_engine", field: "coolant_level" },
-    "CAT Engine FuelRate": { meas: "cat_engine", field: "fuel_rate" },
-    "CAT Engine ElectricalPotential": { meas: "cat_engine", field: "battery_voltage" },
-    "CAT Engine ACCELERATION PEDAL POSITION": { meas: "cat_engine", field: "pedal_position" },
-
-    // ACS (Automatic Control System)
-    "ACS status-0=UNKNONE, 1=ON, 2=OFF, 3=DISABLE ": { meas: "acs", field: "status" },
-    "ACS Actual Block Position": { meas: "drawworks", field: "block_position" },
-    "ACS Crownsaver in mm": { meas: "acs", field: "crownsaver" },
-    "ACS floorsaver in mm": { meas: "acs", field: "floorsaver" },
-    "ACS Bottomsaver in mm": { meas: "acs", field: "bottomsaver" },
-    "ACS Calibration status--1=UNKNOWN, 1=SEQ IN PROGRESS, 2=NOT CALIBRATED, 3=CALIBRATED,10=MOVE UP TO CROWN, 10=MOVE UP TO CROWN, 11=MOVE DOWN TO TAG LOW ": { meas: "acs", field: "calibration_status" },
-    "ACS UPPERTAG POSITION mm": { meas: "acs", field: "upper_tag" },
-    "ACS Lowertag position in mm": { meas: "acs", field: "lower_tag" },
-
-    // HPU (Hydraulic Power Unit)
-    "HPU status-0 = OFF, 1 = ON in IDLE, 2 = ON ": { meas: "hpu", field: "status" },
-    "HPU RUN HOURS": { meas: "hpu", field: "run_hours" },
-    "HPU Auxilary line pressure in bar": { meas: "hpu", field: "aux_pressure" },
-    "HPU Discharge line pressure in bar": { meas: "hpu", field: "discharge_pressure" },
-    "HPU Oprmode-0 = Unknown, 1 = Drilling 2 = RigUp": { meas: "hpu", field: "op_mode" },
-    "HPU Oil temp-0=Temp. OK, 1=Temp. Low, 2=Temp. High, 3=Temp. High-High": { meas: "hpu", field: "oil_temp_status" },
-    "HPU ActTemp in c": { meas: "hpu", field: "oil_temp" },
-    "HPU Oil level-0=Level OK, 1=Level Low, 2=Level Low-Low, 3=Level High, 4= Level High-High": { meas: "hpu", field: "oil_level_status" },
-    "HPU ActOil level in %": { meas: "hpu", field: "oil_level" },
-    "HPU Pilot status-0=OFF, 1=ON, 2=FAULT": { meas: "hpu", field: "pilot_status" },
-    "HPU Pilot ActLSPress bar": { meas: "hpu", field: "pilot_pressure" },
-    "HPU Gate valve-1=OPEN, 0=CLOSE": { meas: "hpu", field: "gate_valve" },
-
-    // HPU Additional Parameters requested
-    "HPU Oil filter:1-1=OK, 0=CLOGGED": { meas: "hpu", field: "oil_filter_1" },
-    "HPU Oil filter:2-1=OK, 0=CLOGGED": { meas: "hpu", field: "oil_filter_2" },
-    "HPU Oil filter:3-1=OK, 0=CLOGGED": { meas: "hpu", field: "oil_filter_3" },
-    "HPU Oil filter:4-1=OK, 0=CLOGGED": { meas: "hpu", field: "oil_filter_4" },
-    "HPU Oil filter:5-1=OK, 0=CLOGGED": { meas: "hpu", field: "oil_filter_5" },
-    "HPU Oil filter:6-1=OK, 0=CLOGGED": { meas: "hpu", field: "oil_filter_6" },
-    "HPU Oil filter:7-1=OK, 0=CLOGGED": { meas: "hpu", field: "oil_filter_7" },
-    "HPU Oil filter:8-1=OK, 0=CLOGGED": { meas: "hpu", field: "oil_filter_8" },
-
-    "HPU HydrPumpPDW status-0=NOT READY, 1=READY, 2=ENABLE": { meas: "hpu", field: "pdw_pump_status" },
-    "HPU HydrPumpPDW actual flow %": { meas: "hpu", field: "pdw_pump_flow" },
-    "HPU HydrPumpPDW Actual Press bar": { meas: "hpu", field: "pdw_pump_press" },
-
-    "HPU HydrPumpHTD pump1 status-0=NOT READY, 1=READY, 2=ENABLE": { meas: "hpu", field: "htd_pump1_status" },
-    "HPU HydrPumpHTD pump1 actual flow %": { meas: "hpu", field: "htd_pump1_flow" },
-    "HPU HydrPumpHTD pump1 Actual Press bar": { meas: "hpu", field: "htd_pump1_press" },
-
-    "HPU HydrPumpHTD pump2 status-0=NOT READY, 1=READY, 2=ENABLE": { meas: "hpu", field: "htd_pump2_status" },
-    "HPU HydrPumpHTD pump2 actual flow %": { meas: "hpu", field: "htd_pump2_flow" },
-    "HPU HydrPumpHTD pump2 Actual Press bar": { meas: "hpu", field: "htd_pump2_press" },
-
-    // HTD (Horizontal Top Drive)
-    "HTD status-0 = OFF, 1 = ON in IDLE, 2 = ON ": { meas: "htd", field: "status" },
-    "HTD workmode-0 = Unknown, 1 = Drill, 2 = Spin, 3 = Torque": { meas: "htd", field: "work_mode" },
-    "HTD opmode-0 = Unknown, 1 = Dolly 2 = Link": { meas: "htd", field: "op_mode" },
-    "HTD Rotation Status-0 = Stand still, 1 = Rotation FWD, 2 = Rotation BWD, 3 = Neutral": { meas: "htd", field: "rotation_status" },
-    "HTD rpm": { meas: "htd", field: "rpm" },
-    "HTD rpm Request": { meas: "htd", field: "rpm_request" },
-    "HTD rpm COMMAND": { meas: "htd", field: "rpm_command" },
-    "HTD torque Request": { meas: "htd", field: "torque_request" },
-    "HTD torque COMMAND": { meas: "htd", field: "torque_command" },
-    "HTD TORQUE DaNm": { meas: "htd", field: "torque" },
-    "HTD Lube Status-0=OFF, 1=CMD RUN, 2=RUNNING, 3 = FAULT": { meas: "htd", field: "lube_status" },
-    "HTD Brake Status-0=Unknown, 1 = Closing, 2 = Closed, 3 = Opening, 4 = Open, 5 = Fault": { meas: "htd", field: "brake_status" },
-    "HTD Elevator Status-0= Uncknown, 1 = Opening, 2 = Closing, 3 = Open, 4 = Close, 5 = Fault": { meas: "htd", field: "elevator_status" },
-    "HTD IBOP Status-0= Uncknown, 1 = Opening, 2 = Closing, 3 = Open, 4 = Close, 5 = Fault": { meas: "htd", field: "ibop_status" },
-    "HTD Link Tilt status-0 = None, 1 = Float ON, 2 = Vertical, 3 = Float OFF, 4 = Extend, 5 = Retract, 6 = Fault": { meas: "htd", field: "tilt_status" },
-    "HTD Inclination angle in %": { meas: "htd", field: "inclination" },
-    "HTD suspensions Status-0=none, 1= in push, 2= in pull": { meas: "htd", field: "suspension_status" },
-    "HTD vertical speed": { meas: "htd", field: "vertical_speed" },
-    "HTD WORKING HOURS": { meas: "htd", field: "working_hours" },
-    "HTD WORKING MINUTES": { meas: "htd", field: "working_minutes" },
-    "HTD Link rotation Status-0= Uncknown, 1 = Unlocking, 2 = Unlocked, 3 = Rot. Fwd, 4 = Rot. Bwd, 5 = Locking, 6 = Locked ,  7 = Fault": { meas: "htd", field: "link_rotation_status" },
-    "HTD Tilt status-1= Tilting IN, 2=Tilt IN, 3=Tilting OUT, 4=Tilt OUT, 5=Half Way, 6=Stand Still": { meas: "htd", field: "tilt_status_db65" },
-    "HTD Inclination status-1= Inclination IN in progress, 2=Inclination IN, 3=Inclination OUT in progress, 4=Inclinated OUT, 5=Half Way, 6=Stand Still, 7=Tilted In, 8=Tilted Out": { meas: "htd", field: "inclination_status" },
-    "HTD GEAR status--2=UNKNOWN, -1=FAULT, 1=GEAR 1, 2=GEAR 2, 3=GEAR 3, 4=GEAR 4. 5= GEAR 1 REGENERATIVE, 6= GEAR 2 REGENERATIVE, 7=GEAR 3 REGENERATIVE, 8= GEAR 4 REGENERATIVE": { meas: "htd", field: "gear_status" },
-
-    // CWK (Catwalk)
-    "CWK status-0= NOT IN PARK POSITION, 1=PARK POSITION ": { meas: "cwk", field: "status" },
-    "CWK Indexer DX-1=UP, 2=DOWN, 3=FAULT": { meas: "cwk", field: "indexer_dx" },
-    "CWK Indexer SX-1=UP, 2=DOWN, 3=FAULT": { meas: "cwk", field: "indexer_sx" },
-    "CWK Kickers DX-1=EXTEND, 2=RETRACT, 3=FAULT": { meas: "cwk", field: "kickers_dx" },
-    "CWK Kickers SX-1=EXTEND, 2=RETRACT, 3=FAULT": { meas: "cwk", field: "kickers_sx" },
-    "CWK Skate-1=IDLE, 2=PARKING POSITION, 3=FWD CMD, 4=BWD CMD, 5=FAULT": { meas: "cwk", field: "skate_status" },
-    "CWK Slide-1=IDLE, 2=PARKING POSITION, 3=FWD CMD, 4=BWD CMD, 5=FAULT": { meas: "cwk", field: "slide_status" },
-    "CWK Carrier-1= STOP, 2=PARKING POSITION, 3= WORK POSITION, 4= LIFTING, 5=LOWERING, 6=FAULT": { meas: "cwk", field: "carrier_status" },
-    "CWK Clamp-0=NONE, 1=OPENING, 2=CLOSING, 3=IS OPEN, 4=IS CLOSE, 5=FAULT": { meas: "cwk", field: "clamp_status" },
-    "CWK Clamp close pressure": { meas: "cwk", field: "clamp_pressure" },
-    "CWK Clamp close pressure OK": { meas: "cwk", field: "clamp_pressure_ok" },
-    "CWK Clamp Actcloseforce": { meas: "cwk", field: "clamp_force" },
-    "CWK Clamp Actcloeforce ok": { meas: "cwk", field: "clamp_force_ok" },
-    "CWK sourcecmd-0 = UNKNOWN, 1 = DCC, 2 = RADIOCONTROL": { meas: "cwk", field: "source_cmd" },
-
-    // PCT (Power Casing Tong)
-    "PCT Operation mode-0 = UNKNOWN, 1 = NORMAL, 2 = MANUAL": { meas: "pct", field: "op_mode" },
-    "PCT STATUS-0 = OFF, 1 = ON in IDLE, 2 = ON": { meas: "pct", field: "status" },
-    "PCT DOLLY UP DOWN-0=NO CMD ACTIVE, 1=MOVE UP, 2=MOVE DOWN": { meas: "pct", field: "dolly_direction" },
-    "PCT DollyWorkPark-0=NONE, 1=OUT PARK. POS, 2=MOVE WORK, 3=MOVE PARK, 4=IN PARK, 5=FAULT, 6=in work": { meas: "pct", field: "dolly_status" },
-    "PCT Spinner Rotation-0=NO CMD ACTIVE, 1=FULLY UP, 2=FULLY DOWN, 3=MAKE-UP, 4= BREAK-OUT. 10=SPINNER NOT MOUNTED": { meas: "pct", field: "spinner_rotation_status" },
-    "PCT SPINNER GRIPPER-0=NONE, 1=OPENING, 2=CLOSING, 3=OPEN, 4=CLOSE, 5=FAULT, 10=SPINNER NOT MOUNTED": { meas: "pct", field: "spinner_gripper_status" },
-    "PCT SPINNER FLOATING-0=OFF, 1=ON, 10=SPINNER NOT MOUNTED": { meas: "pct", field: "spinner_floating" },
-    "PCT SpinnerActMakeUpTorque-daN*m": { meas: "pct", field: "spinner_makeup_torque" },
-    "PCT SpinnerActBOutTorque-daN*m": { meas: "pct", field: "spinner_breakout_torque" },
-    "PCT ClampUp-0=NONE, 1=OPENING, 2=CLOSING, 3=IS OPEN, 4=IS CLOSE, 5=FAULT": { meas: "pct", field: "clamp_up_status" },
-    "PCT ROTATION ActMakeUpPress": { meas: "pct", field: "rotation_makeup_pressure" },
-    "PCT ROTATION ActBOutPress": { meas: "pct", field: "rotation_breakout_pressure" },
-    "PCT Clamp up close pressure": { meas: "pct", field: "clamp_up_pressure" },
-    "PCT Clamp up close pressure ok": { meas: "pct", field: "clamp_up_pressure_ok" },
-    "PCT Clamp up ActCloseForce": { meas: "pct", field: "clamp_up_force" },
-    "PCT Clamp up ActCloseForce ok": { meas: "pct", field: "clamp_up_force_ok" },
-    "PCT Clamp up open pressure ok": { meas: "pct", field: "clamp_up_open_ok" },
-    "PCT Clamplow-0=NONE, 1=OPENING, 2=CLOSING, 3=IS OPEN, 4=IS CLOSE, 5=FAULT": { meas: "pct", field: "clamp_low_status" },
-    "PCT Clamp low close pressure": { meas: "pct", field: "clamp_low_pressure" },
-    "PCT Clamp low close pressure ok": { meas: "pct", field: "clamp_low_pressure_ok" },
-    "PCT Clamp low ActCloseForce": { meas: "pct", field: "clamp_low_force" },
-    "PCT Clamp low ActCloseForce ok": { meas: "pct", field: "clamp_low_force_ok" },
-    "PCT Clamp low open pressure ok": { meas: "pct", field: "clamp_low_open_ok" },
-    "PCT Clamp Roatation-0=NONE, 1=NOT ALLIGNED, 2=ALLIGNED, 3=MAKE-UP, 4=BREAK-OUT, 5=FAULT": { meas: "pct", field: "clamp_rotation_status" },
-    "PCT Makeup Torque-daN*m": { meas: "pct", field: "makeup_torque" },
-    "PCT ClampLastMakeUpTorque-daN*m": { meas: "pct", field: "last_makeup_torque" },
-    "PCT Sequence-0=OFF, 1=MAKE-UP, 2=BREAK-OUT, 3=RESET, 4=FAULT": { meas: "pct", field: "sequence" },
-};
+const { FIELD_MAP } = require('./lib/fieldmap');
 
 // Measurements polled for the live view (S7comm writes under "AHWR";
 // app-level measurements support mock/Modbus sources). Shared with /api/history.
-const LIVE_MEASUREMENTS = ['drawworks', 'engine', 'mudpump', 'wellcontrol', 'wellhead', 'modbus', 'AHWR', 'fluid', 'drilling', 'hpu', 'htd', 'acs', 'cat_engine', 'cwk', 'pct'];
+const LIVE_MEASUREMENTS = ['drawworks', 'engine', 'mudpump', 'wellcontrol', 'wellhead', 'safety', 'opcua_demo', 'modbus', 'AHWR', 'fluid', 'drilling', 'hpu', 'htd', 'acs', 'cat_engine', 'cwk', 'pct'];
 
 const HISTORY_METRICS = new Set(edrCatalog.categories.flatMap(category =>
     category.fields.map(field => `${category.id}.${field.id}`)
@@ -616,9 +461,15 @@ const queryData = async () => {
             data._alarms = al.counts;
             if (al.changed) io.emit('alarms', al);
             maintenance.updateHours(data, now);
+            data._efficiency = efficiency.update(data, now, { jointMade: !!tt.connectionMade });
+            // Store-and-forward: queue telemetry + events for sync to central
+            sync.enqueueTelemetry(data, now);
+            if (al.changed) sync.enqueueEvent('alarm', al.counts, now);
+            if (tt.connectionMade) sync.enqueueEvent('connection', tt.connectionMade, now);
         } else {
             data._activity = workover.getCurrent();
             data._alarms = alarms.snapshot().counts;
+            data._efficiency = efficiency.compute(data);
         }
 
         latestRigData = data;
@@ -1275,169 +1126,6 @@ app.get('/api/dashboard/audit', auth.requireAuth, auth.requireRole('admin'), (re
     res.json({ events: filtered.slice(-limit).reverse() });
 });
 
-// --- Central / Fleet Baseline ---
-const CENTRAL_REGISTRY_FILE = path.join(DATA_DIR, 'central_rig_registry.json');
-const DEFAULT_CENTRAL_REGISTRY = {
-    roleMappings: {
-        admin: ['DGC', 'Corporate Digital', 'Rig Superintendent'],
-        operator: ['Rig Operator', 'Driller', 'Toolpusher'],
-        viewer: ['Asset Team', 'Planning', 'Maintenance']
-    },
-    rigs: [
-        {
-            id: 'local',
-            source: 'local',
-            rigName: 'RIG-ALPHA',
-            wellName: 'WELL-001',
-            assetType: 'Workover Rig',
-            basin: 'Local',
-            location: 'Current rig',
-            connectionMode: 'site-gateway',
-            offlineBufferCount: 0,
-            notes: 'Live rig served by this gateway'
-        }
-    ]
-};
-
-const sanitizeText = (value, fallback = '', max = 120) => (
-    typeof value === 'string' && value.trim() ? value.trim().slice(0, max) : fallback
-);
-
-const sanitizeCentralRig = (rig, index) => {
-    const source = rig && typeof rig === 'object' ? rig : {};
-    return {
-        id: sanitizeText(source.id, `rig-${index + 1}`, 60).replace(/[^A-Za-z0-9_-]/g, '-'),
-        source: source.source === 'local' ? 'local' : 'remote',
-        rigName: sanitizeText(source.rigName, `RIG-${index + 1}`, 80),
-        wellName: sanitizeText(source.wellName, '', 80),
-        assetType: sanitizeText(source.assetType, 'Workover Rig', 80),
-        basin: sanitizeText(source.basin, '', 80),
-        location: sanitizeText(source.location, '', 120),
-        connectionMode: sanitizeText(source.connectionMode, 'site-gateway', 80),
-        status: ['online', 'stale', 'offline', 'planned'].includes(source.status) ? source.status : 'planned',
-        syncStatus: ['healthy', 'stale', 'buffering', 'offline', 'not-configured'].includes(source.syncStatus) ? source.syncStatus : 'not-configured',
-        lastSyncAt: typeof source.lastSyncAt === 'string' ? source.lastSyncAt : null,
-        offlineBufferCount: Math.max(0, Number(source.offlineBufferCount) || 0),
-        syncLagSec: Math.max(0, Number(source.syncLagSec) || 0),
-        notes: sanitizeText(source.notes, '', 240)
-    };
-};
-
-const sanitizeRoleMappings = (roleMappings = {}) => {
-    const roles = ['admin', 'operator', 'viewer'];
-    return Object.fromEntries(roles.map(role => {
-        const values = Array.isArray(roleMappings[role]) ? roleMappings[role] : DEFAULT_CENTRAL_REGISTRY.roleMappings[role];
-        return [role, values.slice(0, 12).map(value => sanitizeText(value, '', 80)).filter(Boolean)];
-    }));
-};
-
-const getCentralRegistry = () => {
-    const stored = readJsonSync(CENTRAL_REGISTRY_FILE, null);
-    const source = stored && typeof stored === 'object' ? stored : DEFAULT_CENTRAL_REGISTRY;
-    const rigs = Array.isArray(source.rigs) ? source.rigs.map(sanitizeCentralRig) : DEFAULT_CENTRAL_REGISTRY.rigs;
-    if (!rigs.some(rig => rig.id === 'local')) {
-        rigs.unshift(sanitizeCentralRig(DEFAULT_CENTRAL_REGISTRY.rigs[0], 0));
-    }
-    return {
-        roleMappings: sanitizeRoleMappings(source.roleMappings),
-        rigs: rigs.slice(0, 100)
-    };
-};
-
-const saveCentralRegistry = async (registry) => writeJsonAtomic(CENTRAL_REGISTRY_FILE, registry);
-
-const enrichRig = (rig) => {
-    if (rig.source !== 'local') {
-        const lastSyncMs = rig.lastSyncAt ? Date.parse(rig.lastSyncAt) : NaN;
-        const lagSec = Number.isFinite(lastSyncMs) ? Math.max(0, Math.round((Date.now() - lastSyncMs) / 1000)) : rig.syncLagSec;
-        return {
-            ...rig,
-            syncLagSec: lagSec,
-            status: rig.status,
-            syncStatus: rig.offlineBufferCount > 0 ? 'buffering' : rig.syncStatus,
-            alarmCounts: { active: 0, unack: 0, p1: 0, p2: 0, p3: 0, highest: null },
-            currentActivity: null
-        };
-    }
-
-    const layout = getDashboardConfig();
-    const meta = latestRigData?._meta || {};
-    const alarmCounts = latestRigData?._alarms || alarms.snapshot().counts;
-    const connected = !!meta.connected && !meta.stale;
-    return {
-        ...rig,
-        rigName: layout.wellInfo?.rig || rig.rigName,
-        wellName: layout.wellInfo?.well || rig.wellName,
-        status: connected ? 'online' : (meta.stale ? 'stale' : 'offline'),
-        syncStatus: connected ? 'healthy' : (meta.stale ? 'stale' : 'offline'),
-        lastSyncAt: meta.ts || rig.lastSyncAt || null,
-        syncLagSec: Math.round((meta.age_ms || 0) / 1000),
-        offlineBufferCount: 0,
-        alarmCounts,
-        currentActivity: workover.getCurrent()
-    };
-};
-
-const getCentralSnapshot = () => {
-    const registry = getCentralRegistry();
-    const rigs = registry.rigs.map(enrichRig);
-    return {
-        generatedAt: new Date().toISOString(),
-        roleMappings: registry.roleMappings,
-        rigs,
-        summary: {
-            total: rigs.length,
-            online: rigs.filter(rig => rig.status === 'online').length,
-            stale: rigs.filter(rig => rig.status === 'stale').length,
-            offline: rigs.filter(rig => rig.status === 'offline').length,
-            buffering: rigs.filter(rig => rig.offlineBufferCount > 0).length,
-            activeAlarms: rigs.reduce((sum, rig) => sum + (rig.alarmCounts?.active || 0), 0),
-            unackedAlarms: rigs.reduce((sum, rig) => sum + (rig.alarmCounts?.unack || 0), 0)
-        }
-    };
-};
-
-app.get('/api/central/rigs', auth.requireAuth, (req, res) => res.json(getCentralSnapshot()));
-
-app.post('/api/central/rigs', auth.requireAuth, auth.requireRole('admin'), async (req, res) => {
-    const incoming = req.body && typeof req.body === 'object' ? req.body : {};
-    const registry = {
-        roleMappings: sanitizeRoleMappings(incoming.roleMappings),
-        rigs: Array.isArray(incoming.rigs) ? incoming.rigs.map(sanitizeCentralRig).slice(0, 100) : getCentralRegistry().rigs
-    };
-    if (!registry.rigs.some(rig => rig.id === 'local')) registry.rigs.unshift(sanitizeCentralRig(DEFAULT_CENTRAL_REGISTRY.rigs[0], 0));
-    await saveCentralRegistry(registry);
-    res.json({ success: true, ...getCentralSnapshot() });
-});
-
-app.get('/api/central/role-mapping', auth.requireAuth, (req, res) => {
-    res.json({ roleMappings: getCentralRegistry().roleMappings });
-});
-
-app.post('/api/central/role-mapping', auth.requireAuth, auth.requireRole('admin'), async (req, res) => {
-    const registry = getCentralRegistry();
-    registry.roleMappings = sanitizeRoleMappings(req.body?.roleMappings || req.body || {});
-    await saveCentralRegistry(registry);
-    res.json({ success: true, roleMappings: registry.roleMappings });
-});
-
-app.get('/api/central/sync-health', auth.requireAuth, (req, res) => {
-    const snapshot = getCentralSnapshot();
-    res.json({
-        generatedAt: snapshot.generatedAt,
-        summary: snapshot.summary,
-        rigs: snapshot.rigs.map(rig => ({
-            id: rig.id,
-            rigName: rig.rigName,
-            status: rig.status,
-            syncStatus: rig.syncStatus,
-            lastSyncAt: rig.lastSyncAt,
-            syncLagSec: rig.syncLagSec,
-            offlineBufferCount: rig.offlineBufferCount
-        }))
-    });
-});
-
 // --- Workover: Activity / NPT ---
 app.get('/api/activity/current', auth.requireAuth, (req, res) => res.json(workover.getCurrent() || {}));
 app.get('/api/activity/codes', auth.requireAuth, (req, res) => res.json(workover.getCodes()));
@@ -1477,6 +1165,61 @@ app.get('/api/report/daily', auth.requireAuth, (req, res) => res.json(workover.g
 app.get('/api/report/header', auth.requireAuth, (req, res) => res.json(workover.getHeader()));
 app.put('/api/report/header', auth.requireAuth, auth.requireRole('admin', 'operator'), async (req, res) => {
     res.json({ success: true, header: await workover.setHeader(req.body || {}) });
+});
+
+// --- Sync agent (store-and-forward, outbound only) ---
+app.get('/api/sync/status', auth.requireAuth, (req, res) => res.json(sync.getStatus()));
+app.get('/api/sync/config', auth.requireAuth, (req, res) => res.json(sync.getConfig()));
+app.put('/api/sync/config', auth.requireAuth, auth.requireRole('admin'), async (req, res) => {
+    try { res.json({ success: true, config: await sync.setConfig(req.body || {}) }); }
+    catch (e) { res.status(e.status || 400).json({ error: e.message }); }
+});
+app.post('/api/sync/flush', auth.requireAuth, auth.requireRole('admin'), async (req, res) => {
+    await sync.flush(); res.json({ success: true, status: sync.getStatus() });
+});
+
+// --- Edge health / data quality ---
+app.get('/api/health/edge', auth.requireAuth, (req, res) => res.json(health.getEdgeHealth(latestRigData, sync.getStatus())));
+
+// --- ETP 2.0 publisher (outbound only) ---
+app.get('/api/etp/status', auth.requireAuth, (req, res) => res.json(etp.getStatus()));
+app.put('/api/etp/config', auth.requireAuth, auth.requireRole('admin'), async (req, res) => {
+    try { res.json({ success: true, status: await etp.setConfig(req.body || {}) }); }
+    catch (e) { res.status(e.status || 400).json({ error: e.message }); }
+});
+
+// --- Hydraulic efficiency & energy (derived, read-only) ---
+app.get('/api/efficiency', auth.requireAuth, (req, res) => res.json(efficiency.getFull(latestRigData)));
+app.get('/api/efficiency/config', auth.requireAuth, (req, res) => res.json(efficiency.getConfig()));
+app.put('/api/efficiency/config', auth.requireAuth, auth.requireRole('admin'), async (req, res) => {
+    try { res.json({ success: true, config: await efficiency.setConfig(req.body || {}) }); }
+    catch (e) { res.status(e.status || 400).json({ error: e.message }); }
+});
+
+// --- WITSML 1.4.1 export (interoperability, export only) ---
+app.get('/api/witsml/well', auth.requireAuth, (req, res) => {
+    res.type('application/xml').send(witsml.wells(workover.getHeader()));
+});
+app.get('/api/witsml/log', auth.requireAuth, (req, res) => {
+    const minutes = Math.min(60, Math.max(1, Number(req.query.minutes) || 2));
+    res.type('application/xml').send(witsml.logs(workover.getHeader(), sync.getRecent(minutes * 60)));
+});
+
+// --- Variables mapping (protocol-aware sources) ---
+app.get('/api/variables', auth.requireAuth, (req, res) => res.json(variables.getVariables()));
+app.get('/api/variables/source-types', auth.requireAuth, (req, res) => res.json(variables.getSourceTypes()));
+app.get('/api/variables/collector-config', auth.requireAuth, (req, res) => res.json(variables.getCollectorConfig()));
+app.put('/api/variables', auth.requireAuth, auth.requireRole('admin'), async (req, res) => {
+    try { res.json({ success: true, variables: await variables.setVariables(req.body) }); }
+    catch (e) { res.status(e.status || 400).json({ error: e.message }); }
+});
+app.post('/api/variables', auth.requireAuth, auth.requireRole('admin'), async (req, res) => {
+    try { res.json({ success: true, variable: await variables.addVariable(req.body || {}) }); }
+    catch (e) { res.status(e.status || 400).json({ error: e.message }); }
+});
+app.delete('/api/variables/:id', auth.requireAuth, auth.requireRole('admin'), async (req, res) => {
+    try { res.json({ success: true, deleted: await variables.deleteVariable(req.params.id) }); }
+    catch (e) { res.status(e.status || 400).json({ error: e.message }); }
 });
 
 // --- Maintenance & asset health ---

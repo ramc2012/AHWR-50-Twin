@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Box, Paper, TextField, Button, Typography, Alert, Container } from '@mui/material';
+import { Box, Paper, TextField, Button, Typography, Alert, Container, ToggleButtonGroup, ToggleButton } from '@mui/material';
 import { User, Lock, Activity } from 'lucide-react';
 import axios from '../../api';
 import { useAuth } from '../../context/AuthContext';
@@ -10,12 +10,21 @@ const Login = () => {
     const [error, setError] = useState('');
     const [loading, setLoading] = useState(false);
     const navigate = useNavigate();
-    const { login } = useAuth();
+    const { login, user } = useAuth();
     const [authInfo, setAuthInfo] = useState(null);
+    const [provider, setProvider] = useState('local');   // 'local' | 'domain'
+
+    const domainMode = !!authInfo?.ldapEnabled && provider === 'domain';
+    const userLabel = domainMode ? `${authInfo?.domain || 'DOMAIN'}\\username` : 'User ID';
 
     useEffect(() => {
         axios.get('/api/auth/info').then((r) => setAuthInfo(r.data)).catch(() => {});
     }, []);
+
+    // Already authenticated -> skip the login form.
+    useEffect(() => {
+        if (user) navigate('/', { replace: true });
+    }, [user, navigate]);
 
     const handleChange = (e) => {
         setCredentials({ ...credentials, [e.target.name]: e.target.value });
@@ -29,7 +38,12 @@ const Login = () => {
         try {
             // Use relative path which will be proxied by Vite
             const API_URL = '';
-            const res = await axios.post(`${API_URL}/api/login`, credentials);
+            // In domain mode, qualify a bare username with the domain (DOMAIN\user).
+            let username = credentials.username;
+            if (domainMode && username && !username.includes('\\') && !username.includes('@') && authInfo?.domain) {
+                username = `${authInfo.domain}\\${username}`;
+            }
+            const res = await axios.post(`${API_URL}/api/login`, { ...credentials, username });
 
             if (res.data.success) {
                 login(res.data.user, res.data.token);
@@ -76,13 +90,31 @@ const Login = () => {
                         <Typography variant="subtitle2" sx={{ color: '#94a3b8' }}>
                             Digital Twin Access
                         </Typography>
-                        {authInfo?.ldapEnabled && (
-                            <Typography variant="caption" sx={{ color: '#64748b', mt: 0.5, textAlign: 'center' }}>
-                                Windows domain sign-in enabled — use{' '}
-                                {authInfo.domain ? `${authInfo.domain}\\username` : 'DOMAIN\\username'}
-                            </Typography>
-                        )}
                     </Box>
+
+                    {authInfo?.ldapEnabled && (
+                        <Box sx={{ width: '100%', mb: 1 }}>
+                            <ToggleButtonGroup
+                                value={provider}
+                                exclusive
+                                fullWidth
+                                size="small"
+                                onChange={(_e, v) => { if (v) setProvider(v); }}
+                                sx={{
+                                    '& .MuiToggleButton-root': { color: '#94a3b8', borderColor: '#475569', textTransform: 'none', py: 0.75 },
+                                    '& .Mui-selected': { color: '#fff !important', bgcolor: 'rgba(56,189,248,0.18) !important', borderColor: '#38bdf8 !important' }
+                                }}
+                            >
+                                <ToggleButton value="local">Local account</ToggleButton>
+                                <ToggleButton value="domain">Windows Domain</ToggleButton>
+                            </ToggleButtonGroup>
+                            {domainMode && (
+                                <Typography variant="caption" sx={{ display: 'block', color: '#64748b', mt: 0.5, textAlign: 'center' }}>
+                                    Sign in with your {authInfo.domain || 'domain'} account
+                                </Typography>
+                            )}
+                        </Box>
+                    )}
 
                     {error && (
                         <Alert severity="error" sx={{ width: '100%', mb: 2, bgcolor: 'rgba(239, 68, 68, 0.1)', color: '#fca5a5' }}>
@@ -96,7 +128,7 @@ const Login = () => {
                             required
                             fullWidth
                             id="username"
-                            label="User ID"
+                            label={userLabel}
                             name="username"
                             autoComplete="username"
                             autoFocus

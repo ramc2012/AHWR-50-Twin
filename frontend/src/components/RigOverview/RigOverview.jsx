@@ -1,5 +1,6 @@
-import React, { useState, useEffect, useMemo } from 'react';
-import { Grid, Paper, Typography, Box, IconButton, Dialog, DialogTitle, DialogContent, DialogActions, TextField, Button, MenuItem, Select, InputLabel, FormControl } from '@mui/material';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import { Grid, Paper, Typography, Box, IconButton, Dialog, DialogTitle, DialogContent, DialogActions, TextField, Button, MenuItem, Select, InputLabel, FormControl, useTheme, alpha } from '@mui/material';
+import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
 import { socket } from '../../socket';
 import AnalogGauge from '../Common/AnalogGauge';
 import RigVisualizer from './RigVisualizer';
@@ -83,8 +84,41 @@ const DEFAULT_BOTTOM_STATS = [
     }
 ];
 
+// --- Working-day mini-trend config -----------------------------------------
+// Standard rig tour/day boundary: 06:00 -> 06:00 next day (local time).
+const WORKING_DAY_START_HOUR = 6;
+
+// Compute the current rig working day window [dayStart, dayEnd].
+// dayStart = today @ 06:00 local; if now is before 06:00, roll back to yesterday @ 06:00.
+const computeWorkingDay = (now = new Date()) => {
+    const dayStart = new Date(now);
+    dayStart.setHours(WORKING_DAY_START_HOUR, 0, 0, 0);
+    if (now.getTime() < dayStart.getTime()) {
+        dayStart.setDate(dayStart.getDate() - 1);
+    }
+    const dayEnd = new Date(dayStart.getTime() + 24 * 60 * 60 * 1000);
+    return { dayStart: dayStart.getTime(), dayEnd: dayEnd.getTime() };
+};
+
+// Key drilling params surfaced as working-day sparklines.
+// `metric` matches the backend /api/history `measurement.field` keys (same set
+// TrendsDashboard/EdrView use); `live` reads from the flattened rigData object.
+const WORKING_DAY_TRENDS = [
+    { id: 'hook_load', label: 'HOOK LOAD', unit: 'ton', metric: 'drawworks.hook_load', live: 'hook_load', color: '#38bdf8', decimals: 1 },
+    { id: 'wob', label: 'WOB', unit: 'kips', metric: 'drilling.wob', live: 'wob', color: '#a855f7', decimals: 1 },
+    { id: 'spp', label: 'SPP', unit: 'Bar', metric: 'mudpump.pressure', live: 'pump_pressure', color: '#fbbf24', decimals: 1 },
+    { id: 'rop', label: 'ROP', unit: 'm/h', metric: 'drilling.rop', live: 'rop', color: '#4ade80', decimals: 1 },
+    { id: 'block_position', label: 'BLOCK POS', unit: 'mm', metric: 'drawworks.block_position', live: 'block_position', color: '#0ea5e9', decimals: 0 },
+    { id: 'total_active_volume', label: 'TOTAL TANK VOL', unit: 'm³', metric: 'fluid.total_tank_volume', live: 'total_active_volume', color: '#e879f9', decimals: 1 },
+];
+const WORKING_DAY_METRICS = WORKING_DAY_TRENDS.map(t => t.metric);
+// Cap live points kept per metric (history already decimates the bulk of the day
+// to ~15-min buckets; we only append recent live samples on top).
+const WORKING_DAY_MAX_POINTS = 1500;
+
 export default function RigOverview() {
     const { user } = useAuth();
+    const theme = useTheme();
     const canEditLayout = user?.role === 'admin';
 
     // --- State ---
@@ -101,6 +135,7 @@ export default function RigOverview() {
         crownsaver_threshold: 40000, floorsaver_threshold: 2000,
         crownsaverOn: false, floorsaverOn: false,
         travelling_up: false, travelling_down: false,
+        slips_in: false, // no dedicated slips sensor mapped on this rig; defined to avoid undefined access
         acs_status: 0,
         cat_load: 0,
         hpu_discharge_pressure: 0, hpu_aux_pressure: 0,
@@ -119,6 +154,16 @@ export default function RigOverview() {
 
     const prevBlockPosRef = React.useRef(0);
 
+    // --- Working-day (06:00 -> 06:00) trend window -------------------------
+    // The window is fixed for the whole tour; we re-evaluate it on a timer so the
+    // page rolls over to the next working day at 06:00 without a manual refresh.
+    const [workingDay, setWorkingDay] = useState(() => computeWorkingDay());
+    // Per-metric buffers of { t: epochMs, v: number }, seeded from history then
+    // extended with live points. Keyed by the WORKING_DAY_TRENDS id.
+    const [workingDayTrends, setWorkingDayTrends] = useState(() =>
+        Object.fromEntries(WORKING_DAY_TRENDS.map(t => [t.id, []]))
+    );
+
     useEffect(() => {
         setTrendData(prev => {
             const append = (key) => [...prev[key], Number(rigData[key]) || 0].slice(-48);
@@ -130,6 +175,86 @@ export default function RigOverview() {
             };
         });
     }, [rigData.hook_load, rigData.htd_rpm, rigData.cat_rpm, rigData.cat_load]);
+
+    // Re-evaluate the working-day window once a minute; reset buffers on rollover.
+    useEffect(() => {
+        const tick = () => {
+            const next = computeWorkingDay();
+            setWorkingDay(prev => {
+                if (prev.dayStart !== next.dayStart) {
+                    // New tour started — clear the seeded/live buffers.
+                    setWorkingDayTrends(Object.fromEntries(WORKING_DAY_TRENDS.map(t => [t.id, []])));
+                    return next;
+                }
+                return prev;
+            });
+        };
+        const interval = setInterval(tick, 60 * 1000);
+        return () => clearInterval(interval);
+    }, []);
+
+    // Seed each mini-graph from history for the working day so far.
+    // Backend aggregateWindow() decimates a 24h start/stop span to ~15-min
+    // buckets, so this stays light (~tens of points/metric) regardless of 1 Hz raw rate.
+    const seedWorkingDay = useCallback(async (dayStart) => {
+        try {
+            const startIso = new Date(dayStart).toISOString();
+            const stopIso = new Date().toISOString();
+            const params = new URLSearchParams();
+            params.set('start', startIso);
+            params.set('stop', stopIso);
+            params.set('metrics', WORKING_DAY_METRICS.join(','));
+            const { data: rows } = await axios.get(`/api/history?${params.toString()}`);
+            if (!Array.isArray(rows) || rows.length === 0) return;
+
+            setWorkingDayTrends(() => {
+                const next = Object.fromEntries(WORKING_DAY_TRENDS.map(t => [t.id, []]));
+                rows.forEach(row => {
+                    const t = Number(row.timestamp);
+                    if (!Number.isFinite(t)) return;
+                    WORKING_DAY_TRENDS.forEach(trend => {
+                        const v = row[trend.metric];
+                        if (v !== undefined && v !== null && Number.isFinite(Number(v))) {
+                            next[trend.id].push({ t, v: Number(v) });
+                        }
+                    });
+                });
+                return next;
+            });
+        } catch (err) {
+            console.error('Failed to seed working-day trends:', err);
+        }
+    }, []);
+
+    // (Re)seed whenever the working day rolls over.
+    useEffect(() => {
+        seedWorkingDay(workingDay.dayStart);
+    }, [workingDay.dayStart, seedWorkingDay]);
+
+    // Append the latest live sample to each working-day buffer.
+    useEffect(() => {
+        const now = Date.now();
+        if (now < workingDay.dayStart || now > workingDay.dayEnd) return;
+        setWorkingDayTrends(prev => {
+            const next = { ...prev };
+            WORKING_DAY_TRENDS.forEach(trend => {
+                const raw = rigData[trend.live];
+                if (raw === undefined || raw === null) return;
+                const v = Number(raw);
+                if (!Number.isFinite(v)) return;
+                const arr = prev[trend.id] || [];
+                const merged = [...arr, { t: now, v }];
+                next[trend.id] = merged.length > WORKING_DAY_MAX_POINTS
+                    ? merged.slice(merged.length - WORKING_DAY_MAX_POINTS)
+                    : merged;
+            });
+            return next;
+        });
+    }, [
+        rigData.hook_load, rigData.wob, rigData.pump_pressure,
+        rigData.rop, rigData.block_position, rigData.total_active_volume,
+        workingDay.dayStart, workingDay.dayEnd
+    ]);
 
     const [gauges, setGauges] = useState(DEFAULT_DASHBOARD_GAUGES);
     const [bottomStats, setBottomStats] = useState(DEFAULT_BOTTOM_STATS);
@@ -769,13 +894,177 @@ export default function RigOverview() {
         </Box>
     );
 
+    // --- Working-day mini-trend cards --------------------------------------
+    // Compact recharts sparkline with a FIXED X domain of [dayStart, dayEnd] so
+    // the trace fills in left-to-right across the tour as the day progresses.
+    const workingDayLabel = useMemo(() => {
+        const fmt = (ms) => new Date(ms).toLocaleDateString([], { month: 'short', day: 'numeric' });
+        return `Working day · 06:00–06:00 · ${fmt(workingDay.dayStart)}`;
+    }, [workingDay.dayStart]);
+
+    const WorkingDayTrendCard = ({ trend }) => {
+        const series = workingDayTrends[trend.id] || [];
+        const latest = Number(rigData[trend.live] ?? 0);
+        const gridStroke = alpha(theme.palette.text.primary, 0.10);
+        const axisStroke = alpha(theme.palette.text.secondary || theme.palette.text.primary, 0.55);
+        const gradientId = `wd-grad-${trend.id}`;
+        return (
+            <Paper
+                elevation={0}
+                sx={{
+                    p: 1,
+                    minWidth: 0,
+                    height: 118,
+                    bgcolor: 'background.paper',
+                    border: '1px solid',
+                    borderColor: alpha(trend.color, 0.35),
+                    borderRadius: 2,
+                    display: 'flex',
+                    flexDirection: 'column',
+                    overflow: 'hidden'
+                }}
+            >
+                <Box sx={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 1, minWidth: 0 }}>
+                    <Typography noWrap sx={{ color: trend.color, fontSize: 11, fontWeight: 900, letterSpacing: 0.4 }}>
+                        {trend.label}
+                    </Typography>
+                    <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 0.4, flexShrink: 0 }}>
+                        <Typography sx={{ color: 'text.primary', fontSize: 17, lineHeight: 1, fontWeight: 900 }}>
+                            {latest.toFixed(trend.decimals)}
+                        </Typography>
+                        <Typography component="span" sx={{ color: 'text.secondary', fontSize: 9, fontWeight: 700 }}>
+                            {trend.unit}
+                        </Typography>
+                    </Box>
+                </Box>
+                <Box sx={{ flex: 1, minHeight: 0, mt: 0.5 }}>
+                    <ResponsiveContainer width="100%" height="100%">
+                        <AreaChart data={series} margin={{ top: 2, right: 2, bottom: 0, left: 2 }}>
+                            <defs>
+                                <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
+                                    <stop offset="0%" stopColor={trend.color} stopOpacity={0.4} />
+                                    <stop offset="100%" stopColor={trend.color} stopOpacity={0.02} />
+                                </linearGradient>
+                            </defs>
+                            <XAxis
+                                dataKey="t"
+                                type="number"
+                                scale="time"
+                                domain={[workingDay.dayStart, workingDay.dayEnd]}
+                                hide
+                            />
+                            <YAxis hide domain={['auto', 'auto']} stroke={axisStroke} />
+                            <Tooltip
+                                isAnimationActive={false}
+                                labelFormatter={(t) => new Date(t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })}
+                                formatter={(v) => [`${Number(v).toFixed(trend.decimals)} ${trend.unit}`, trend.label]}
+                                contentStyle={{
+                                    backgroundColor: theme.palette.background.default,
+                                    border: `1px solid ${gridStroke}`,
+                                    borderRadius: 8,
+                                    fontSize: 11
+                                }}
+                                itemStyle={{ color: theme.palette.text.primary }}
+                                labelStyle={{ color: theme.palette.text.secondary }}
+                            />
+                            <Area
+                                type="monotone"
+                                dataKey="v"
+                                stroke={trend.color}
+                                strokeWidth={1.75}
+                                fill={`url(#${gradientId})`}
+                                dot={false}
+                                isAnimationActive={false}
+                                connectNulls
+                            />
+                        </AreaChart>
+                    </ResponsiveContainer>
+                </Box>
+            </Paper>
+        );
+    };
+
+    // --- Compact overview readouts (Task 2) --------------------------------
+    // A few more already-mapped, overview-relevant values surfaced densely.
+    // ACS crown/floor margins: distance (mm) of the block from the saver limits.
+    const blockMm = Number(rigData.block_position) || 0;
+    const crownMargin = (Number(rigData.crownsaver_threshold) || 0) - blockMm;
+    const floorMargin = blockMm - (Number(rigData.floorsaver_threshold) || 0);
+    const tankGainLoss = Number(rigData.total_active_volume) || 0;
+    const overviewReadouts = [
+        { label: 'OPERATION MODE', value: getOpModeLabel(rigData.operation_mode), color: theme.palette.primary.main },
+        { label: 'ACS', value: getAcsStatusLabel(rigData.acs_status), color: theme.palette.primary.main },
+        { label: 'CROWN MARGIN', value: `${crownMargin.toFixed(0)} mm`, color: crownMargin < 1000 ? '#ef4444' : '#22c55e' },
+        { label: 'FLOOR MARGIN', value: `${floorMargin.toFixed(0)} mm`, color: floorMargin < 500 ? '#ef4444' : '#22c55e' },
+        { label: 'HTD RPM', value: `${Number(rigData.htd_rpm || 0).toFixed(0)} RPM`, color: theme.palette.primary.main },
+        { label: 'HTD TORQUE', value: `${Number(rigData.ahtd_torque || 0).toFixed(1)} daN·m`, color: '#fbbf24' },
+        { label: 'FLOW IN / OUT', value: `${Number(rigData.flow_in || 0).toFixed(0)} / ${Number(rigData.flow_out || 0).toFixed(0)}`, color: '#38bdf8' },
+        { label: 'TOTAL TANK VOL', value: `${tankGainLoss.toFixed(1)} m³`, color: '#e879f9' },
+    ];
+
+    const overviewReadoutStrip = (
+        <Paper
+            elevation={0}
+            sx={{
+                p: 1,
+                mb: 1.5,
+                bgcolor: 'background.paper',
+                border: '1px solid',
+                borderColor: 'divider',
+                borderRadius: 2,
+                display: 'grid',
+                gridTemplateColumns: { xs: 'repeat(2, minmax(0, 1fr))', sm: 'repeat(4, minmax(0, 1fr))', lg: 'repeat(8, minmax(0, 1fr))' },
+                gap: 1
+            }}
+        >
+            {overviewReadouts.map((r) => (
+                <Box key={r.label} sx={{ px: 1, py: 0.6, minWidth: 0, borderRadius: 1, bgcolor: alpha(theme.palette.text.primary, 0.04) }}>
+                    <Typography noWrap sx={{ color: 'text.secondary', fontSize: 9, fontWeight: 800, letterSpacing: 0.4 }}>{r.label}</Typography>
+                    <Typography noWrap sx={{ color: r.color, fontSize: 14, fontWeight: 900, lineHeight: 1.2 }}>{r.value}</Typography>
+                </Box>
+            ))}
+        </Paper>
+    );
+
+    const workingDayRow = (
+        <Paper
+            elevation={0}
+            sx={{
+                p: 1.25,
+                mb: 1.5,
+                bgcolor: 'background.paper',
+                border: '1px solid',
+                borderColor: 'divider',
+                borderRadius: 2
+            }}
+        >
+            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1, gap: 1, flexWrap: 'wrap' }}>
+                <Typography sx={{ color: 'primary.main', fontSize: 13, fontWeight: 900, letterSpacing: 0.6 }}>
+                    WORKING-DAY TRENDS
+                </Typography>
+                <Typography sx={{ color: 'text.secondary', fontSize: 11, fontWeight: 700 }}>
+                    {workingDayLabel}
+                </Typography>
+            </Box>
+            <Box sx={{
+                display: 'grid',
+                gridTemplateColumns: { xs: 'repeat(2, minmax(0, 1fr))', sm: 'repeat(3, minmax(0, 1fr))', lg: 'repeat(6, minmax(0, 1fr))' },
+                gap: 1
+            }}>
+                {WORKING_DAY_TRENDS.map(trend => (
+                    <WorkingDayTrendCard key={trend.id} trend={trend} />
+                ))}
+            </Box>
+        </Paper>
+    );
+
     const renderGaugeCard = (g) => (
         <Paper
             key={g.id}
             sx={{
                 p: 1.25,
                 minWidth: 0,
-                height: { xs: 320, lg: 390 },
+                height: { xs: 300, lg: 340 },
                 bgcolor: 'rgba(3, 10, 20, 0.88)',
                 border: '1px solid #26384d',
                 borderRadius: 2,
@@ -789,7 +1078,7 @@ export default function RigOverview() {
                 boxShadow: 'inset 0 0 35px rgba(2, 132, 199, 0.04)'
             }}
         >
-            <Box sx={{ height: 276, minHeight: 0, display: 'flex', alignItems: 'flex-start', justifyContent: 'center' }}>
+            <Box sx={{ flex: 1, minHeight: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                 <AnalogGauge
                 value={g.dataKey === 'SPP-Bar'
                     ? (Number(rigData.pump_pressure) * 14.50377) || 0
@@ -814,12 +1103,6 @@ export default function RigOverview() {
                 subValueInside
                 />
             </Box>
-            {g.dataKey === 'hook_load' && (
-                <TrendStrip values={trendData.hook_load} color="#38bdf8" graphOnly />
-            )}
-            {g.dataKey === 'htd_rpm' && (
-                <TrendStrip values={trendData.htd_rpm} color="#4ade80" graphOnly />
-            )}
             {g.dataKey === 'SPP-Bar' && (
                 <Box sx={{
                     position: 'absolute',
@@ -946,6 +1229,10 @@ export default function RigOverview() {
                 </Box>
                 {primaryGauges.map(renderGaugeCard)}
             </Box>
+
+            {workingDayRow}
+
+            {overviewReadoutStrip}
 
             <Box sx={{
                 display: 'grid',

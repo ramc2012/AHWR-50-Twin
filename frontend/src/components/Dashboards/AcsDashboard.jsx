@@ -1,8 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Grid, Paper, Typography, Box, Divider } from '@mui/material';
 import { socket } from '../../socket';
-import AnalogGauge from '../Common/AnalogGauge';
-import GaugeCard from '../Common/GaugeCard';
 
 const formatReading = (value) => {
     const numeric = Number(value);

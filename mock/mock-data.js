@@ -57,6 +57,10 @@ function tick() {
     // periodic alarm excursions
     const tubingPressure = (pumping && wf.cycleIndex % 3 === 1) ? r(222 + noise(4)) : r(118 + noise(4));
     const tankGainLoss = (wf.phase === 'RIH' && wf.cycleIndex % 4 === 2 && wf.elapsed > 5) ? r(2.2 + noise(0.2)) : r(noise(0.5));
+    // Read-only safety status from the PLC (digital inputs) — surfaced as P1 alarms, never actuated.
+    // Simple periodic windows so the top alarm strip is demonstrable: ESD ~7s every 90s, lockout ~6s every 120s.
+    const esdActive = (t % 90 >= 40 && t % 90 < 47) ? 1 : 0;        // simulated floor E-stop press
+    const lockoutActive = (t % 120 >= 80 && t % 120 < 86) ? 1 : 0;  // simulated equipment lockout
     totalStrokes += Math.round(Math.abs(osc(95, 15, 40)));
     const rop = Math.max(0, osc(18, 8, 90) + noise(2)); // m/h
     holeDepth += (rop / 3600) * (interval / 1000);
@@ -84,7 +88,7 @@ function tick() {
     });
     P('mudpump', {
         spm: pumping ? r(osc(95, 12, 40)) : r(6 + noise(1)), total_spm: totalStrokes,
-        flow_in: pumping ? r(osc(2000, 150, 55)) : r(40 + noise(10)),
+        flow_in: pumping ? r(osc(900, 90, 55)) : r(40 + noise(10)),
         flow_out: pumping ? r(osc(95, 4, 55)) : r(3 + noise(1)),
         pressure: pumping ? r(osc(195, 30, 65)) : r(15 + noise(3)), delta_pressure: r(osc(5, 3, 30))
     });
@@ -107,7 +111,7 @@ function tick() {
         htd_pump2_flow: r(osc(64, 12, 62)), htd_pump2_press: r(osc(176, 15, 72)), gate_valve: 1
     });
     P('htd', {
-        status: 2, rpm: r(osc(85, 30, 50)), torque: r(osc(8000, 3000, 70)), work_mode: 1, op_mode: 1,
+        status: 2, rpm: r(osc(85, 30, 50)), torque: r(osc(900, 250, 70)), work_mode: 1, op_mode: 1,  // daN·m (workover top drive ~0.6-1.2 kdaN·m → ~65-115 kW mech)
         rotation_status: 1, brake_status: 4, elevator_status: 3, ibop_status: 3, tilt_status: 2,
         vertical_speed: r(osc(0, 0.3, 30)), inclination: r(osc(50, 5, 200)), working_hours: r(runHours * 0.6),
         gear_status: 2, lube_status: 2
@@ -142,6 +146,8 @@ function tick() {
         casing_pressure: r(88 + noise(4)),
         wellhead_pressure: r(108 + noise(4))
     });
+    // Safety status (read-only PLC digital inputs) — drive ESD/lockout alarms.
+    P('safety', { esd_active: esdActive, lockout_active: lockoutActive });
 
     try { writeApi.writePoints(points); } catch (e) { console.error('MOCK write error:', e.message); }
 }

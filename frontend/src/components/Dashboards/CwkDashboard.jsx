@@ -1,25 +1,55 @@
 import React, { useState, useEffect } from 'react';
-import { Grid, Paper, Typography, Box, Divider } from '@mui/material';
+import { Grid, Paper, Typography, Box, Divider, useTheme } from '@mui/material';
 import { socket } from '../../socket';
-import AnalogGauge from '../Common/AnalogGauge';
-import GaugeCard from '../Common/GaugeCard';
+import EdrView from '../EDR/EdrView';
 
-const formatReading = (value) => {
-    const numeric = Number(value);
-    return Number.isFinite(numeric) ? numeric.toFixed(2) : '0.00';
+// ---- Local reusable presentational helpers (flatter/denser than analog dials) ----
+
+const ValueTile = ({ label, value, unit, decimals = 0, color = 'primary.main', min = 0, max, warn, crit, sub, subColor }) => {
+    const num = Number(value);
+    const has = Number.isFinite(num);
+    const display = has ? num.toFixed(decimals) : '--';
+
+    let accent = color;
+    let ratio = null;
+    if (has && Number.isFinite(max) && max > min) {
+        ratio = Math.min(Math.max((num - min) / (max - min), 0), 1);
+        const wr = warn != null ? (warn - min) / (max - min) : null;
+        const cr = crit != null ? (crit - min) / (max - min) : null;
+        if (cr != null && ratio >= cr) accent = '#ef4444';
+        else if (wr != null && ratio >= wr) accent = '#fbbf24';
+    }
+
+    return (
+        <Paper sx={{ p: 1.5, bgcolor: 'background.paper', border: '1px solid', borderColor: 'divider', borderRadius: 2, height: '100%', display: 'flex', flexDirection: 'column' }}>
+            <Typography variant="caption" sx={{ color: 'text.secondary', fontWeight: 700, letterSpacing: 0.4, textTransform: 'uppercase', fontSize: '0.66rem' }} noWrap>{label}</Typography>
+            <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 0.5, mt: 0.25 }}>
+                <Typography sx={{ color: accent, fontWeight: 800, fontSize: '1.7rem', lineHeight: 1.05 }}>{display}</Typography>
+                {unit && <Typography sx={{ color: 'text.secondary', fontWeight: 600, fontSize: '0.78rem' }}>{unit}</Typography>}
+            </Box>
+            {ratio != null && (
+                <Box sx={{ mt: 'auto', pt: 1 }}>
+                    <Box sx={{ height: 5, borderRadius: 3, bgcolor: 'action.hover', overflow: 'hidden' }}>
+                        <Box sx={{ width: `${ratio * 100}%`, height: '100%', bgcolor: accent, borderRadius: 3, transition: 'width .4s ease' }} />
+                    </Box>
+                </Box>
+            )}
+            {sub && <Typography variant="caption" sx={{ color: subColor || 'text.secondary', mt: ratio != null ? 0.5 : 'auto', pt: ratio != null ? 0 : 1, fontSize: '0.64rem', fontWeight: 700 }} noWrap>{sub}</Typography>}
+        </Paper>
+    );
 };
 
-const StatusIndicator = ({ label, value, mapping }) => {
-    const active = mapping[value] || { text: 'Unknown', color: '#64748b' };
+const StatusChip = ({ label, value, mapping }) => {
+    const active = mapping[value] || { text: '---', color: '#64748b' };
     return (
-        <Box sx={{ textAlign: 'center', px: 2 }}>
-            <Typography variant="caption" sx={{ color: '#94a3b8', display: 'block', mb: 0.5 }}>{label.toUpperCase()}</Typography>
+        <Box sx={{ textAlign: 'center', px: 1 }}>
+            <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block', mb: 0.5, fontSize: '0.62rem', fontWeight: 700 }}>{label.toUpperCase()}</Typography>
             <Box sx={{
-                bgcolor: `${active.color}15`,
+                bgcolor: `${active.color}1f`,
                 color: active.color,
                 border: `1px solid ${active.color}`,
-                px: 2, py: 0.5, borderRadius: 1,
-                fontWeight: 'bold', fontSize: '0.875rem'
+                px: 1.25, py: 0.5, borderRadius: 1,
+                fontWeight: 'bold', fontSize: '0.78rem', whiteSpace: 'nowrap'
             }}>
                 {active.text}
             </Box>
@@ -27,17 +57,28 @@ const StatusIndicator = ({ label, value, mapping }) => {
     );
 };
 
-const GridStatus = ({ label, value, mapping }) => {
-    const active = mapping[value] || { text: 'Unknown', color: '#64748b' };
-    return (
-        <Paper sx={{ p: 2, bgcolor: '#0f172a', borderLeft: `4px solid ${active.color}` }}>
-            <Typography variant="caption" sx={{ color: '#94a3b8', display: 'block' }}>{label.toUpperCase()}</Typography>
-            <Typography sx={{ color: active.color, fontWeight: 'bold' }}>{active.text}</Typography>
-        </Paper>
-    );
-};
+const SectionTitle = ({ children }) => (
+    <Typography sx={{ color: 'text.secondary', fontSize: '0.7rem', fontWeight: 800, letterSpacing: 0.8, textTransform: 'uppercase', mb: 1 }}>{children}</Typography>
+);
+
+// EDR side-strip config — both catwalk analogs (clamp_pressure, clamp_force) are
+// catalogued in shared/edrMetrics.json. min/max are from the catalog defaults.
+const EDR_CHANNELS = ['cwk.clamp_pressure', 'cwk.clamp_force'];
+const EDR_STRIPS = [
+    {
+        title: 'CWK',
+        pens: [
+            { channelId: 'cwk.clamp_pressure', color: '#38bdf8', min: 0, max: 300, enabled: true },
+            { channelId: 'cwk.clamp_force', color: '#a78bfa', min: 0, max: 1000, enabled: true }
+        ]
+    }
+];
 
 export default function CwkDashboard() {
+    const theme = useTheme();
+    const surface = theme.palette.background.paper;
+    const inset = theme.palette.background.default;
+    const border = theme.palette.divider;
     const [data, setData] = useState({});
 
     useEffect(() => {
@@ -100,104 +141,98 @@ export default function CwkDashboard() {
     const getStatusColor = (value, mapping) => mapping[value]?.color || '#64748b';
 
     const MechanicalItem = ({ label, value, mapping }) => {
-        const text = getStatusText(value, mapping);
-        const color = getStatusColor(value, mapping);
+        const active = mapping[value] || { text: '---', color: '#64748b' };
         return (
-            <Box sx={{ p: 1.5, bgcolor: '#0f172a', borderRadius: 1, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <Typography variant="caption" sx={{ color: '#94a3b8' }}>{label}</Typography>
-                <Box sx={{
-                    bgcolor: `${color}15`,
-                    color: color,
-                    border: `1px solid ${color}`,
-                    px: 1.5, py: 0.25, borderRadius: 1,
-                    fontWeight: 'bold', fontSize: '0.75rem',
-                    minWidth: '80px', textAlign: 'center'
-                }}>
-                    {text}
-                </Box>
+            <Box sx={{ p: 1, bgcolor: inset, borderRadius: 1, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <Typography variant="caption" sx={{ color: 'text.secondary', fontWeight: 600 }}>{label}</Typography>
+                <Box sx={{ bgcolor: `${active.color}1f`, color: active.color, border: `1px solid ${active.color}`, px: 1, py: 0.2, borderRadius: 1, fontWeight: 'bold', fontSize: '0.72rem', minWidth: 84, textAlign: 'center' }}>{active.text}</Box>
             </Box>
         );
     };
 
+    const panelSx = { p: 1.75, bgcolor: surface, height: '100%', border: `1px solid ${border}`, borderRadius: 2 };
+
     return (
-        <Box>
+        <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'stretch', gap: 2 }}>
+            {/* Main content */}
+            <Box sx={{ flex: '1 1 560px', minWidth: 0 }}>
+                <Grid container spacing={2}>
+                    {/* Status header */}
+                    <Grid item xs={12}>
+                        <Paper sx={{ p: 1.75, bgcolor: surface, border: `1px solid ${border}`, display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 2 }}>
+                            <StatusChip label="Global Status" value={data.status} mapping={statusMapping} />
+                            <Divider orientation="vertical" flexItem sx={{ borderColor: border }} />
+                            <StatusChip label="Source Cmd" value={data.source_cmd} mapping={sourceMapping} />
+                            <Divider orientation="vertical" flexItem sx={{ borderColor: border }} />
+                            <StatusChip label="Clamp" value={data.clamp_status} mapping={clampMapping} />
+                            <Divider orientation="vertical" flexItem sx={{ borderColor: border }} />
+                            <StatusChip label="Carrier" value={data.carrier_status} mapping={carrierMapping} />
+                        </Paper>
+                    </Grid>
 
-            <Grid container spacing={3}>
-                <Grid item xs={12}>
-                    <Paper sx={{ p: 2, bgcolor: '#1e293b', display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 2 }}>
-                        <StatusIndicator label="Global Status" value={data.status} mapping={statusMapping} />
-                        <Divider orientation="vertical" flexItem sx={{ bgcolor: '#334155' }} />
-                        <StatusIndicator label="Source Cmd" value={data.source_cmd} mapping={sourceMapping} />
-                        <Box sx={{ ml: 'auto', textAlign: 'right', pr: 2 }}>
-                            <Typography variant="caption" sx={{ color: '#94a3b8', display: 'block' }}>CLAMP PRESSURE</Typography>
-                            <Typography variant="h5" sx={{ color: '#38bdf8', fontWeight: 'bold' }}>{formatReading(data.clamp_pressure)} <span style={{ fontSize: '0.6em', color: '#64748b' }}>bar</span></Typography>
-                        </Box>
-                    </Paper>
-                </Grid>
+                    {/* CLAMP MEASUREMENTS */}
+                    <Grid item xs={12}>
+                        <SectionTitle>Clamp Measurements</SectionTitle>
+                        <Grid container spacing={1.5}>
+                            <Grid item xs={6} sm={4} md={3}>
+                                <ValueTile label="Clamp Pressure" value={data.clamp_pressure} unit="bar" decimals={2} color="#38bdf8" min={0} max={250} warn={200} crit={230}
+                                    sub={getStatusText(data.clamp_pressure_ok, okMapping)} subColor={getStatusColor(data.clamp_pressure_ok, okMapping)} />
+                            </Grid>
+                            <Grid item xs={6} sm={4} md={3}>
+                                <ValueTile label="Clamp Force" value={data.clamp_force} unit="daN" decimals={2} color="#a78bfa" min={0} max={1000} warn={850} crit={950}
+                                    sub={getStatusText(data.clamp_force_ok, okMapping)} subColor={getStatusColor(data.clamp_force_ok, okMapping)} />
+                            </Grid>
+                        </Grid>
+                    </Grid>
 
-                <Grid item xs={12} md={4}>
-                    <GaugeCard>
-                        <AnalogGauge
-                            value={data.clamp_pressure || 0}
-                            max={250}
-                            label="CLAMP PRESSURE"
-                            unit="bar"
-                            size="fill"
-                            color="#38bdf8"
-                            valueDecimals={2}
-                        />
-                    </GaugeCard>
-                </Grid>
-
-                <Grid item xs={12} md={4}>
-                    <Paper sx={{ p: 2, bgcolor: '#1e293b', height: '100%' }}>
-                        <Typography variant="subtitle2" sx={{ color: '#94a3b8', mb: 2 }}>COMPONENTS</Typography>
-                        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
-                            <MechanicalItem label="INDEXER DX" value={data.indexer_dx} mapping={binaryMapping('UP', 'DOWN')} />
-                            <MechanicalItem label="INDEXER SX" value={data.indexer_sx} mapping={binaryMapping('UP', 'DOWN')} />
-                            <MechanicalItem label="KICKERS DX" value={data.kickers_dx} mapping={binaryMapping('EXTEND', 'RETRACT')} />
-                            <MechanicalItem label="KICKERS SX" value={data.kickers_sx} mapping={binaryMapping('EXTEND', 'RETRACT')} />
-                            <MechanicalItem label="SKATE" value={data.skate_status} mapping={mechanicalMapping} />
-                            <MechanicalItem label="SLIDE" value={data.slide_status} mapping={mechanicalMapping} />
-                        </Box>
-                    </Paper>
-                </Grid>
-
-                <Grid item xs={12} md={4}>
-                    <Paper sx={{ p: 2, bgcolor: '#1e293b', height: '100%' }}>
-                        <Typography variant="subtitle2" sx={{ color: '#94a3b8', mb: 2 }}>CLAMP & CARRIER</Typography>
-                        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
-                            <MechanicalItem label="CARRIER" value={data.carrier_status} mapping={carrierMapping} />
-                            <MechanicalItem label="CLAMP STATUS" value={data.clamp_status} mapping={clampMapping} />
-                            <Divider sx={{ bgcolor: '#334155', my: 1 }} />
-                            <Box sx={{ p: 1.25, bgcolor: '#0f172a', borderRadius: 1, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                <Box>
-                                    <Typography variant="caption" sx={{ color: '#94a3b8', display: 'block' }}>CLAMP PRESSURE</Typography>
-                                    <Typography sx={{ color: '#38bdf8', fontWeight: 'bold' }}>{formatReading(data.clamp_pressure)} bar</Typography>
-                                </Box>
-                                <Box sx={{ textAlign: 'right' }}>
-                                    <Typography variant="caption" sx={{ color: '#94a3b8', display: 'block' }}>STATUS</Typography>
-                                    <Typography sx={{ color: getStatusColor(data.clamp_pressure_ok, okMapping), fontWeight: 'bold', fontSize: '0.75rem' }}>
-                                        {getStatusText(data.clamp_pressure_ok, okMapping)}
-                                    </Typography>
-                                </Box>
+                    {/* COMPONENTS */}
+                    <Grid item xs={12} sm={6} md={6}>
+                        <Paper sx={panelSx}>
+                            <SectionTitle>Indexers & Kickers</SectionTitle>
+                            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.9 }}>
+                                <MechanicalItem label="INDEXER DX" value={data.indexer_dx} mapping={binaryMapping('UP', 'DOWN')} />
+                                <MechanicalItem label="INDEXER SX" value={data.indexer_sx} mapping={binaryMapping('UP', 'DOWN')} />
+                                <MechanicalItem label="KICKERS DX" value={data.kickers_dx} mapping={binaryMapping('EXTEND', 'RETRACT')} />
+                                <MechanicalItem label="KICKERS SX" value={data.kickers_sx} mapping={binaryMapping('EXTEND', 'RETRACT')} />
                             </Box>
-                            <Box sx={{ p: 1.25, bgcolor: '#0f172a', borderRadius: 1, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                <Box>
-                                    <Typography variant="caption" sx={{ color: '#94a3b8', display: 'block' }}>CLAMP FORCE</Typography>
-                                    <Typography sx={{ color: '#a78bfa', fontWeight: 'bold' }}>{formatReading(data.clamp_force)} daN</Typography>
-                                </Box>
-                                <Box sx={{ textAlign: 'right' }}>
-                                    <Typography variant="caption" sx={{ color: '#94a3b8', display: 'block' }}>STATUS</Typography>
-                                    <Typography sx={{ color: getStatusColor(data.clamp_force_ok, okMapping), fontWeight: 'bold', fontSize: '0.75rem' }}>
-                                        {getStatusText(data.clamp_force_ok, okMapping)}
-                                    </Typography>
-                                </Box>
+                        </Paper>
+                    </Grid>
+
+                    {/* SKATE / SLIDE / CARRIER / CLAMP */}
+                    <Grid item xs={12} sm={6} md={6}>
+                        <Paper sx={panelSx}>
+                            <SectionTitle>Motion & Handling</SectionTitle>
+                            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.9 }}>
+                                <MechanicalItem label="SKATE" value={data.skate_status} mapping={mechanicalMapping} />
+                                <MechanicalItem label="SLIDE" value={data.slide_status} mapping={mechanicalMapping} />
+                                <MechanicalItem label="CARRIER" value={data.carrier_status} mapping={carrierMapping} />
+                                <MechanicalItem label="CLAMP STATUS" value={data.clamp_status} mapping={clampMapping} />
                             </Box>
-                        </Box>
-                    </Paper>
+                        </Paper>
+                    </Grid>
                 </Grid>
-            </Grid>
+            </Box>
+
+            {/* Persistent EDR side strip */}
+            <Box
+                sx={{
+                    flex: { xs: '1 1 100%', lg: '0 0 400px' },
+                    width: { xs: '100%', lg: 400 },
+                    minHeight: { xs: 420, lg: 560 },
+                    height: { lg: 'calc(100vh - 220px)' },
+                    display: 'flex',
+                    flexDirection: 'column'
+                }}
+            >
+                <Paper sx={{ flex: 1, minHeight: 0, p: 1.25, bgcolor: surface, border: `1px solid ${border}`, borderRadius: 2, display: 'flex', flexDirection: 'column' }}>
+                    <Typography sx={{ color: 'text.secondary', fontSize: '0.72rem', fontWeight: 800, letterSpacing: 0.6, textTransform: 'uppercase', mb: 0.75 }}>
+                        Catwalk Trends
+                    </Typography>
+                    <Box sx={{ flex: 1, minHeight: 0 }}>
+                        <EdrView mode="compact" storageKey="edr-cwk-1" defaultStrips={EDR_STRIPS} channels={EDR_CHANNELS} />
+                    </Box>
+                </Paper>
+            </Box>
         </Box>
     );
 }

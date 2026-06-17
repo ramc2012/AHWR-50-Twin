@@ -1,20 +1,55 @@
 import React, { useState, useEffect } from 'react';
-import { Grid, Paper, Typography, Box, Divider } from '@mui/material';
+import { Grid, Paper, Typography, Box, Divider, useTheme } from '@mui/material';
 import { socket } from '../../socket';
-import AnalogGauge from '../Common/AnalogGauge';
-import GaugeCard from '../Common/GaugeCard';
+import EdrView from '../EDR/EdrView';
 
-const StatusIndicator = ({ label, value, mapping }) => {
-    const active = mapping[value] || { text: 'Unknown', color: '#64748b' };
+// ---- Local reusable presentational helpers (flatter/denser than analog dials) ----
+
+const ValueTile = ({ label, value, unit, decimals = 0, color = 'primary.main', min = 0, max, warn, crit, sub }) => {
+    const num = Number(value);
+    const has = Number.isFinite(num);
+    const display = has ? num.toFixed(decimals) : '--';
+
+    let accent = color;
+    let ratio = null;
+    if (has && Number.isFinite(max) && max > min) {
+        ratio = Math.min(Math.max((num - min) / (max - min), 0), 1);
+        const wr = warn != null ? (warn - min) / (max - min) : null;
+        const cr = crit != null ? (crit - min) / (max - min) : null;
+        if (cr != null && ratio >= cr) accent = '#ef4444';
+        else if (wr != null && ratio >= wr) accent = '#fbbf24';
+    }
+
     return (
-        <Box sx={{ textAlign: 'center', px: 2 }}>
-            <Typography variant="caption" sx={{ color: '#94a3b8', display: 'block', mb: 0.5 }}>{label.toUpperCase()}</Typography>
+        <Paper sx={{ p: 1.5, bgcolor: 'background.paper', border: '1px solid', borderColor: 'divider', borderRadius: 2, height: '100%', display: 'flex', flexDirection: 'column' }}>
+            <Typography variant="caption" sx={{ color: 'text.secondary', fontWeight: 700, letterSpacing: 0.4, textTransform: 'uppercase', fontSize: '0.66rem' }} noWrap>{label}</Typography>
+            <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 0.5, mt: 0.25 }}>
+                <Typography sx={{ color: accent, fontWeight: 800, fontSize: '1.7rem', lineHeight: 1.05 }}>{display}</Typography>
+                {unit && <Typography sx={{ color: 'text.secondary', fontWeight: 600, fontSize: '0.78rem' }}>{unit}</Typography>}
+            </Box>
+            {ratio != null && (
+                <Box sx={{ mt: 'auto', pt: 1 }}>
+                    <Box sx={{ height: 5, borderRadius: 3, bgcolor: 'action.hover', overflow: 'hidden' }}>
+                        <Box sx={{ width: `${ratio * 100}%`, height: '100%', bgcolor: accent, borderRadius: 3, transition: 'width .4s ease' }} />
+                    </Box>
+                </Box>
+            )}
+            {sub && <Typography variant="caption" sx={{ color: 'text.secondary', mt: ratio != null ? 0.5 : 'auto', pt: ratio != null ? 0 : 1, fontSize: '0.62rem' }} noWrap>{sub}</Typography>}
+        </Paper>
+    );
+};
+
+const StatusChip = ({ label, value, mapping, dense = false }) => {
+    const active = mapping[value] || { text: '---', color: '#64748b' };
+    return (
+        <Box sx={{ textAlign: 'center', px: dense ? 0 : 1 }}>
+            <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block', mb: 0.5, fontSize: '0.62rem', fontWeight: 700 }}>{label.toUpperCase()}</Typography>
             <Box sx={{
-                bgcolor: `${active.color}15`,
+                bgcolor: `${active.color}1f`,
                 color: active.color,
                 border: `1px solid ${active.color}`,
-                px: 2, py: 0.5, borderRadius: 1,
-                fontWeight: 'bold', fontSize: '0.875rem'
+                px: 1.25, py: 0.5, borderRadius: 1,
+                fontWeight: 'bold', fontSize: dense ? '0.7rem' : '0.8rem', whiteSpace: 'nowrap'
             }}>
                 {active.text}
             </Box>
@@ -22,7 +57,32 @@ const StatusIndicator = ({ label, value, mapping }) => {
     );
 };
 
+const SectionTitle = ({ children }) => (
+    <Typography sx={{ color: 'text.secondary', fontSize: '0.7rem', fontWeight: 800, letterSpacing: 0.8, textTransform: 'uppercase', mb: 1 }}>{children}</Typography>
+);
+
+// EDR side-strip config. Catalog (shared/edrMetrics.json) only exposes the four
+// hpu.* analogs below; pilot/pump-flow tags are not catalogued, so `channels` is
+// restricted to these. min/max come from the catalog defaults.
+const EDR_CHANNELS = [
+    'hpu.discharge_pressure', 'hpu.aux_pressure', 'hpu.oil_temp', 'hpu.oil_level'
+];
+const EDR_STRIPS = [
+    {
+        title: 'HPU',
+        pens: [
+            { channelId: 'hpu.discharge_pressure', color: '#38bdf8', min: 0, max: 300, enabled: true },
+            { channelId: 'hpu.oil_temp', color: '#f97316', min: 0, max: 120, enabled: true },
+            { channelId: 'hpu.oil_level', color: '#22d3ee', min: 0, max: 100, enabled: true }
+        ]
+    }
+];
+
 export default function HpuDashboard() {
+    const theme = useTheme();
+    const surface = theme.palette.background.paper;
+    const inset = theme.palette.background.default;
+    const border = theme.palette.divider;
     const [data, setData] = useState({});
 
     useEffect(() => {
@@ -59,167 +119,160 @@ export default function HpuDashboard() {
         4: { text: 'HH/CRIT', color: '#ef4444' }
     };
 
+    const pumpStatusMapping = {
+        0: { text: 'NOT READY', color: '#f97316' },
+        1: { text: 'READY', color: '#4ade80' },
+        2: { text: 'ENABLE', color: '#38bdf8' }
+    };
+
+    const gateMapping = {
+        0: { text: 'CLOSED', color: '#ef4444' },
+        1: { text: 'OPEN', color: '#4ade80' }
+    };
+
+    const panelSx = { p: 1.75, bgcolor: surface, height: '100%', borderRadius: 2, border: `1px solid ${border}` };
+
+    // Hydraulic pump rendered as a compact mini-card (status chip + flow/press tile-row).
+    const PumpCard = ({ title, statusKey, flowKey, pressKey }) => {
+        const active = pumpStatusMapping[data[statusKey]] || { text: '---', color: '#64748b' };
+        return (
+            <Box sx={{ p: 1.25, bgcolor: inset, borderRadius: 1.5, border: `1px solid ${border}` }}>
+                <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
+                    <Typography variant="caption" sx={{ color: 'text.primary', fontWeight: 800, letterSpacing: 0.4 }}>{title}</Typography>
+                    <Box sx={{ bgcolor: `${active.color}1f`, color: active.color, border: `1px solid ${active.color}`, px: 1, py: 0.2, borderRadius: 1, fontWeight: 'bold', fontSize: '0.68rem' }}>{active.text}</Box>
+                </Box>
+                <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <Box>
+                        <Typography variant="caption" sx={{ color: '#64748b', fontSize: '0.6rem', display: 'block' }}>FLOW</Typography>
+                        <Typography sx={{ color: 'text.primary', fontWeight: 700, fontSize: '0.9rem' }}>{Number(data[flowKey] || 0).toFixed(1)} %</Typography>
+                    </Box>
+                    <Box sx={{ textAlign: 'right' }}>
+                        <Typography variant="caption" sx={{ color: '#64748b', fontSize: '0.6rem', display: 'block' }}>PRESS</Typography>
+                        <Typography sx={{ color: 'text.primary', fontWeight: 700, fontSize: '0.9rem' }}>{Number(data[pressKey] || 0).toFixed(1)} bar</Typography>
+                    </Box>
+                </Box>
+            </Box>
+        );
+    };
+
     return (
-        <Box>
-
-            <Grid container spacing={3}>
-                <Grid item xs={12}>
-                    <Paper sx={{ p: 2, bgcolor: '#1e293b', display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 2 }}>
-                        <StatusIndicator label="System Status" value={data.status} mapping={statusMapping} />
-                        <Divider orientation="vertical" flexItem sx={{ bgcolor: '#334155' }} />
-                        <StatusIndicator label="Operating Mode" value={data.op_mode} mapping={opModeMapping} />
-                        <Divider orientation="vertical" flexItem sx={{ bgcolor: '#334155' }} />
-                        <StatusIndicator label="Pilot Status" value={data.pilot_status} mapping={pilotMapping} />
-                        <Divider orientation="vertical" flexItem sx={{ bgcolor: '#334155' }} />
-                        <StatusIndicator label="Temp Status" value={data.oil_temp_status} mapping={oilStatusMapping} />
-                        <Divider orientation="vertical" flexItem sx={{ bgcolor: '#334155' }} />
-                        <StatusIndicator label="Level Status" value={data.oil_level_status} mapping={oilStatusMapping} />
-                    </Paper>
-                </Grid>
-
-                <Grid item xs={12} md={3}>
-                    <GaugeCard>
-                        <AnalogGauge
-                            value={data.discharge_pressure || 0}
-                            max={350}
-                            label="DISCHARGE PRESS"
-                            unit="bar"
-                            size="fill"
-                            color="#38bdf8"
-                        />
-                    </GaugeCard>
-                </Grid>
-
-                <Grid item xs={12} md={3}>
-                    <GaugeCard>
-                        <AnalogGauge
-                            value={data.aux_pressure || 0}
-                            max={250}
-                            label="AUX PRESSURE"
-                            unit="bar"
-                            size="fill"
-                            color="#a78bfa"
-                        />
-                    </GaugeCard>
-                </Grid>
-
-                <Grid item xs={12} md={3}>
-                    <GaugeCard>
-                        <AnalogGauge
-                            value={data.oil_temp || 0}
-                            max={100}
-                            label="OIL TEMP"
-                            unit="°C"
-                            size="fill"
-                            color="#f97316"
-                        />
-                    </GaugeCard>
-                </Grid>
-
-                <Grid item xs={12} md={3}>
-                    <GaugeCard>
-                        <AnalogGauge
-                            value={data.oil_level || 0}
-                            max={100}
-                            label="OIL LEVEL"
-                            unit="%"
-                            size="fill"
-                            color="#22d3ee"
-                        />
-                    </GaugeCard>
-                </Grid>
-
-                <Grid item xs={12} md={4}>
-                    <Paper sx={{ p: 2, bgcolor: '#1e293b', height: '100%', borderRadius: 2 }}>
-                        <Typography variant="subtitle2" sx={{ color: '#94a3b8', mb: 2, letterSpacing: 1, fontWeight: 'bold' }}>PILOT & VALVES</Typography>
-                        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
-                            <Box sx={{ p: 1.5, bgcolor: '#0f172a', borderRadius: 1, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                <Typography variant="body2" sx={{ color: '#94a3b8', fontWeight: '500' }}>PILOT LS PRESSURE</Typography>
-                                <Typography sx={{ color: '#38bdf8', fontWeight: 'bold' }}>{Number(data.pilot_pressure || 0).toFixed(2)} bar</Typography>
+        <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'stretch', gap: 2 }}>
+            {/* Main content */}
+            <Box sx={{ flex: '1 1 560px', minWidth: 0 }}>
+                <Grid container spacing={2}>
+                    {/* Status header */}
+                    <Grid item xs={12}>
+                        <Paper sx={{ p: 1.75, bgcolor: surface, border: `1px solid ${border}`, display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 2 }}>
+                            <StatusChip label="System Status" value={data.status} mapping={statusMapping} />
+                            <Divider orientation="vertical" flexItem sx={{ borderColor: border }} />
+                            <StatusChip label="Operating Mode" value={data.op_mode} mapping={opModeMapping} />
+                            <Divider orientation="vertical" flexItem sx={{ borderColor: border }} />
+                            <StatusChip label="Pilot Status" value={data.pilot_status} mapping={pilotMapping} />
+                            <Divider orientation="vertical" flexItem sx={{ borderColor: border }} />
+                            <StatusChip label="Gate Valve" value={data.gate_valve} mapping={gateMapping} />
+                            <Box sx={{ ml: 'auto', textAlign: 'right', pr: 1 }}>
+                                <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block', fontSize: '0.62rem', fontWeight: 700 }}>RUN HOURS</Typography>
+                                <Typography variant="h6" sx={{ color: 'primary.main', fontWeight: 'bold' }}>{Number(data.run_hours || 0).toFixed(1)} <span style={{ fontSize: '0.55em', color: '#64748b' }}>HRS</span></Typography>
                             </Box>
-                            <Box sx={{ p: 1.5, bgcolor: '#0f172a', borderRadius: 1, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                <Typography variant="body2" sx={{ color: '#94a3b8', fontWeight: '500' }}>GATE VALVE</Typography>
-                                <Typography sx={{ color: data.gate_valve ? '#4ade80' : '#ef4444', fontWeight: 'bold' }}>{data.gate_valve ? 'OPEN' : 'CLOSED'}</Typography>
-                            </Box>
-                            <Box sx={{ p: 1.5, bgcolor: '#0f172a', borderRadius: 1, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                <Typography variant="body2" sx={{ color: '#94a3b8', fontWeight: '500' }}>RUN HOURS</Typography>
-                                <Typography sx={{ color: 'white', fontWeight: 'bold' }}>{data.run_hours || 0} HRS</Typography>
-                            </Box>
-                        </Box>
-                    </Paper>
-                </Grid>
+                        </Paper>
+                    </Grid>
 
-                {/* OIL FILTERS */}
-                <Grid item xs={12} md={4}>
-                    <Paper sx={{ p: 2, bgcolor: '#1e293b', height: '100%', borderRadius: 2 }}>
-                        <Typography variant="subtitle2" sx={{ color: '#94a3b8', mb: 2, letterSpacing: 1, fontWeight: 'bold' }}>OIL FILTERS</Typography>
+                    {/* PRESSURES */}
+                    <Grid item xs={12}>
+                        <SectionTitle>Pressures</SectionTitle>
                         <Grid container spacing={1.5}>
-                            {[1, 2, 3, 4, 5, 6, 7, 8].map(num => (
-                                <Grid item xs={6} key={`filter-${num}`}>
-                                    <Box sx={{ p: 1.25, bgcolor: '#0f172a', borderRadius: 1, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                        <Typography variant="caption" sx={{ color: '#94a3b8', fontWeight: '500' }}>FILTER {num}</Typography>
-                                        <Typography sx={{
-                                            color: data[`oil_filter_${num}`] !== 0 ? '#4ade80' : '#ef4444',
-                                            fontWeight: 'bold', fontSize: '0.75rem'
-                                        }}>
-                                            {data[`oil_filter_${num}`] !== 0 ? 'OK' : 'CLOGGED'}
-                                        </Typography>
-                                    </Box>
-                                </Grid>
-                            ))}
+                            <Grid item xs={6} sm={4} md={3}>
+                                <ValueTile label="Discharge Press" value={data.discharge_pressure} unit="bar" decimals={1} color="#38bdf8" min={0} max={350} warn={280} crit={320} />
+                            </Grid>
+                            <Grid item xs={6} sm={4} md={3}>
+                                <ValueTile label="Aux Pressure" value={data.aux_pressure} unit="bar" decimals={1} color="#a78bfa" min={0} max={250} warn={210} crit={235} />
+                            </Grid>
+                            <Grid item xs={6} sm={4} md={3}>
+                                <ValueTile label="Pilot LS Press" value={data.pilot_pressure} unit="bar" decimals={2} color="#22d3ee" min={0} max={50} />
+                            </Grid>
                         </Grid>
-                    </Paper>
+                    </Grid>
+
+                    {/* OIL */}
+                    <Grid item xs={12}>
+                        <SectionTitle>Hydraulic Oil</SectionTitle>
+                        <Grid container spacing={1.5}>
+                            <Grid item xs={6} sm={4} md={3}>
+                                <ValueTile label="Oil Temp" value={data.oil_temp} unit="°C" decimals={1} color="#f97316" min={0} max={100} warn={70} crit={85} />
+                            </Grid>
+                            <Grid item xs={6} sm={4} md={3}>
+                                <ValueTile label="Oil Level" value={data.oil_level} unit="%" decimals={1} color="#22d3ee" min={0} max={100} />
+                            </Grid>
+                            <Grid item xs={6} sm={4} md={2}>
+                                <StatusChip label="Temp Status" value={data.oil_temp_status} mapping={oilStatusMapping} />
+                            </Grid>
+                            <Grid item xs={6} sm={4} md={2}>
+                                <StatusChip label="Level Status" value={data.oil_level_status} mapping={oilStatusMapping} />
+                            </Grid>
+                        </Grid>
+                    </Grid>
+
+                    {/* OIL FILTERS */}
+                    <Grid item xs={12} md={5}>
+                        <Paper sx={panelSx}>
+                            <SectionTitle>Oil Filters</SectionTitle>
+                            <Grid container spacing={1}>
+                                {[1, 2, 3, 4, 5, 6, 7, 8].map(num => {
+                                    const ok = data[`oil_filter_${num}`] !== 0 && data[`oil_filter_${num}`] != null;
+                                    const c = ok ? '#4ade80' : '#ef4444';
+                                    return (
+                                        <Grid item xs={6} sm={3} key={`filter-${num}`}>
+                                            <Box sx={{ p: 0.75, bgcolor: inset, borderRadius: 1, textAlign: 'center', border: `1px solid ${c}55` }}>
+                                                <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block', fontSize: '0.6rem', fontWeight: 700 }}>FILTER {num}</Typography>
+                                                <Typography sx={{ color: c, fontWeight: 'bold', fontSize: '0.72rem' }}>{ok ? 'OK' : 'CLOGGED'}</Typography>
+                                            </Box>
+                                        </Grid>
+                                    );
+                                })}
+                            </Grid>
+                        </Paper>
+                    </Grid>
+
+                    {/* HYDRAULIC PUMPS */}
+                    <Grid item xs={12} md={7}>
+                        <Paper sx={panelSx}>
+                            <SectionTitle>Hydraulic Pumps</SectionTitle>
+                            <Grid container spacing={1.25}>
+                                <Grid item xs={12} sm={4}>
+                                    <PumpCard title="PUMP PDW" statusKey="pdw_pump_status" flowKey="pdw_pump_flow" pressKey="pdw_pump_press" />
+                                </Grid>
+                                <Grid item xs={12} sm={4}>
+                                    <PumpCard title="HTD PUMP 1" statusKey="htd_pump1_status" flowKey="htd_pump1_flow" pressKey="htd_pump1_press" />
+                                </Grid>
+                                <Grid item xs={12} sm={4}>
+                                    <PumpCard title="HTD PUMP 2" statusKey="htd_pump2_status" flowKey="htd_pump2_flow" pressKey="htd_pump2_press" />
+                                </Grid>
+                            </Grid>
+                        </Paper>
+                    </Grid>
                 </Grid>
+            </Box>
 
-                {/* HYDRAULIC PUMPS */}
-                <Grid item xs={12} md={4}>
-                    <Paper sx={{ p: 2, bgcolor: '#1e293b', height: '100%', borderRadius: 2 }}>
-                        <Typography variant="subtitle2" sx={{ color: '#94a3b8', mb: 2, letterSpacing: 1, fontWeight: 'bold' }}>HYDRAULIC PUMPS</Typography>
-                        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
-
-                            <Box sx={{ p: 1.5, bgcolor: '#0f172a', borderRadius: 1 }}>
-                                <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
-                                    <Typography variant="caption" sx={{ color: '#3182ce', fontWeight: 'bold' }}>PUMP PDW</Typography>
-                                    <Typography variant="caption" sx={{ color: data.pdw_pump_status === 2 ? '#38bdf8' : data.pdw_pump_status === 1 ? '#4ade80' : '#f97316', fontWeight: 'bold' }}>
-                                        {data.pdw_pump_status === 2 ? 'ENABLE' : data.pdw_pump_status === 1 ? 'READY' : 'NOT READY'}
-                                    </Typography>
-                                </Box>
-                                <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
-                                    <Typography variant="caption" sx={{ color: '#64748b', fontWeight: '500' }}>FLOW: <span style={{ color: 'white' }}>{Number(data.pdw_pump_flow || 0).toFixed(1)} %</span></Typography>
-                                    <Typography variant="caption" sx={{ color: '#64748b', fontWeight: '500' }}>PRESS: <span style={{ color: 'white' }}>{Number(data.pdw_pump_press || 0).toFixed(1)} bar</span></Typography>
-                                </Box>
-                            </Box>
-
-                            <Box sx={{ p: 1.5, bgcolor: '#0f172a', borderRadius: 1 }}>
-                                <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
-                                    <Typography variant="caption" sx={{ color: '#3182ce', fontWeight: 'bold' }}>HTD PUMP 1</Typography>
-                                    <Typography variant="caption" sx={{ color: data.htd_pump1_status === 2 ? '#38bdf8' : data.htd_pump1_status === 1 ? '#4ade80' : '#f97316', fontWeight: 'bold' }}>
-                                        {data.htd_pump1_status === 2 ? 'ENABLE' : data.htd_pump1_status === 1 ? 'READY' : 'NOT READY'}
-                                    </Typography>
-                                </Box>
-                                <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
-                                    <Typography variant="caption" sx={{ color: '#64748b', fontWeight: '500' }}>FLOW: <span style={{ color: 'white' }}>{Number(data.htd_pump1_flow || 0).toFixed(1)} %</span></Typography>
-                                    <Typography variant="caption" sx={{ color: '#64748b', fontWeight: '500' }}>PRESS: <span style={{ color: 'white' }}>{Number(data.htd_pump1_press || 0).toFixed(1)} bar</span></Typography>
-                                </Box>
-                            </Box>
-
-                            <Box sx={{ p: 1.5, bgcolor: '#0f172a', borderRadius: 1 }}>
-                                <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
-                                    <Typography variant="caption" sx={{ color: '#3182ce', fontWeight: 'bold' }}>HTD PUMP 2</Typography>
-                                    <Typography variant="caption" sx={{ color: data.htd_pump2_status === 2 ? '#38bdf8' : data.htd_pump2_status === 1 ? '#4ade80' : '#f97316', fontWeight: 'bold' }}>
-                                        {data.htd_pump2_status === 2 ? 'ENABLE' : data.htd_pump2_status === 1 ? 'READY' : 'NOT READY'}
-                                    </Typography>
-                                </Box>
-                                <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
-                                    <Typography variant="caption" sx={{ color: '#64748b', fontWeight: '500' }}>FLOW: <span style={{ color: 'white' }}>{Number(data.htd_pump2_flow || 0).toFixed(1)} %</span></Typography>
-                                    <Typography variant="caption" sx={{ color: '#64748b', fontWeight: '500' }}>PRESS: <span style={{ color: 'white' }}>{Number(data.htd_pump2_press || 0).toFixed(1)} bar</span></Typography>
-                                </Box>
-                            </Box>
-
-                        </Box>
-                    </Paper>
-                </Grid>
-            </Grid>
+            {/* Persistent EDR side strip */}
+            <Box
+                sx={{
+                    flex: { xs: '1 1 100%', lg: '0 0 400px' },
+                    width: { xs: '100%', lg: 400 },
+                    minHeight: { xs: 420, lg: 560 },
+                    height: { lg: 'calc(100vh - 220px)' },
+                    display: 'flex',
+                    flexDirection: 'column'
+                }}
+            >
+                <Paper sx={{ flex: 1, minHeight: 0, p: 1.25, bgcolor: surface, border: `1px solid ${border}`, borderRadius: 2, display: 'flex', flexDirection: 'column' }}>
+                    <Typography sx={{ color: 'text.secondary', fontSize: '0.72rem', fontWeight: 800, letterSpacing: 0.6, textTransform: 'uppercase', mb: 0.75 }}>
+                        HPU Trends
+                    </Typography>
+                    <Box sx={{ flex: 1, minHeight: 0 }}>
+                        <EdrView mode="compact" storageKey="edr-hpu-1" defaultStrips={EDR_STRIPS} channels={EDR_CHANNELS} />
+                    </Box>
+                </Paper>
+            </Box>
         </Box>
     );
 }

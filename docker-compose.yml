@@ -66,20 +66,33 @@ services:
       - DATA_SOURCE=${DATA_SOURCE:-plc}
       - TELEGRAF_CONFIG_PATH=/telegraf/telegraf.conf
       - CORS_ORIGIN=${CORS_ORIGIN:-}
-      # --- Windows domain / Active Directory login (optional) ---
-      - AUTH_MODE=${AUTH_MODE:-local}            # local | ldap | both
-      - LDAP_URL=${LDAP_URL:-}
-      - LDAP_BIND_DN=${LDAP_BIND_DN:-}
-      - LDAP_BIND_PASSWORD=${LDAP_BIND_PASSWORD:-}
-      - LDAP_SEARCH_BASE=${LDAP_SEARCH_BASE:-}
-      - LDAP_SEARCH_FILTER=${LDAP_SEARCH_FILTER:-}
-      - LDAP_DOMAIN=${LDAP_DOMAIN:-}
+      # --- Sync agent (store-and-forward to central CRMF; outbound only) ---
+      - CENTRAL_URL=${CENTRAL_URL:-http://sync-sink:9009}
+      - DEVICE_ID=${DEVICE_ID:-AHWR-50-3}
+      - DEVICE_TOKEN=${DEVICE_TOKEN:-}
+      - SYNC_ENABLED=${SYNC_ENABLED:-true}
+      - SYNC_BATCH_SECONDS=${SYNC_BATCH_SECONDS:-10}
+      - SYNC_BUFFER_DAYS=${SYNC_BUFFER_DAYS:-15}
+      # --- ETP 2.0 publisher (outbound only) ---
+      - ETP_ENABLED=${ETP_ENABLED:-true}
+      - ETP_URL=${ETP_URL:-ws://etp-sink:9011}
+      - ETP_STREAM_SECONDS=${ETP_STREAM_SECONDS:-5}
+      # --- Windows domain / Active Directory login ---
+      # Demo defaults target the bundled `openldap` test directory; in production
+      # override these in .env to point at the real Domain Controller (AD over LDAPS).
+      - AUTH_MODE=${AUTH_MODE:-both}             # local | ldap | both
+      - LDAP_URL=${LDAP_URL:-ldap://openldap:1389}
+      - LDAP_BIND_DN=${LDAP_BIND_DN:-cn=admin,dc=ahwr,dc=local}
+      - LDAP_BIND_PASSWORD=${LDAP_BIND_PASSWORD:-adminpassword}
+      - LDAP_SEARCH_BASE=${LDAP_SEARCH_BASE:-ou=users,dc=ahwr,dc=local}
+      - LDAP_SEARCH_FILTER=${LDAP_SEARCH_FILTER:-(|(uid={username})(cn={username})(sAMAccountName={username}))}
+      - LDAP_DOMAIN=${LDAP_DOMAIN:-AHWR}
       - LDAP_DEFAULT_ROLE=${LDAP_DEFAULT_ROLE:-viewer}
-      - LDAP_ROLE_ADMIN=${LDAP_ROLE_ADMIN:-}
-      - LDAP_ROLE_OPERATOR=${LDAP_ROLE_OPERATOR:-}
-      - LDAP_ROLE_VIEWER=${LDAP_ROLE_VIEWER:-}
+      - LDAP_ROLE_ADMIN=${LDAP_ROLE_ADMIN:-rig-admins}
+      - LDAP_ROLE_OPERATOR=${LDAP_ROLE_OPERATOR:-rig-operators}
+      - LDAP_ROLE_VIEWER=${LDAP_ROLE_VIEWER:-rig-viewers}
       - LDAP_STARTTLS=${LDAP_STARTTLS:-}
-      - LDAP_TLS_REJECT_UNAUTHORIZED=${LDAP_TLS_REJECT_UNAUTHORIZED:-true}
+      - LDAP_TLS_REJECT_UNAUTHORIZED=${LDAP_TLS_REJECT_UNAUTHORIZED:-false}
     volumes:
       - backend_data:/data
       - ./telegraf:/telegraf   # backend rewrites the managed PLC section here
@@ -116,6 +129,69 @@ services:
     depends_on:
       influxdb:
         condition: service_healthy
+
+  # OPC UA server simulator (demo) — provides real OPC UA nodes so the Telegraf
+  # opcua input can be validated end-to-end. Stands in for an OPC UA protocol device.
+  opc-plc:
+    image: mcr.microsoft.com/iotedge/opc-plc:2.12.29
+    container_name: romii_opc_plc
+    hostname: opc-plc
+    restart: unless-stopped
+    profiles: ["demo"]
+    command: ["--autoaccept", "--unsecuretransport", "--portnum=50000", "--ph=opc-plc"]
+
+  # Dedicated OPC UA collector (demo) — separate Telegraf lane for the opcua input,
+  # independent of the S7comm collector (which fails closed without a real PLC).
+  telegraf-opcua:
+    image: telegraf:1.29
+    container_name: romii_telegraf_opcua
+    restart: unless-stopped
+    profiles: ["demo"]
+    command: telegraf --config /etc/telegraf/opcua.conf
+    volumes:
+      - ./telegraf:/etc/telegraf
+    environment:
+      - INFLUX_TOKEN=${INFLUX_TOKEN}
+      - INFLUX_ORG=${INFLUX_ORG:-romii_org}
+      - INFLUX_BUCKET=${INFLUX_BUCKET:-romii_bucket}
+    depends_on:
+      influxdb:
+        condition: service_healthy
+
+  # Test directory (demo) — mock AD/LDAP server (ldapjs) standing in for the Windows
+  # Domain Controller so the AD/LDAP login path is verifiable end-to-end. Seeds:
+  #   driller1/Driller@123 (rig-operators), toolpusher1/Push@123 (rig-admins),
+  #   viewer1/View@123 (rig-viewers). Admin bind: cn=admin,dc=ahwr,dc=local / adminpassword.
+  openldap:
+    build: ./ldap-test
+    container_name: romii_openldap
+    hostname: openldap
+    restart: unless-stopped
+    profiles: ["demo"]
+    environment:
+      - LDAP_PORT=1389
+      - LDAP_ADMIN_PASSWORD=adminpassword
+
+  # Local-demo central ingest stub (stands in for the CRMF / ETP-Kafka ingest).
+  # Lets the edge store-and-forward loop be demonstrated end-to-end. Demo profile only.
+  sync-sink:
+    build: ./sync-sink
+    container_name: romii_sync_sink
+    restart: unless-stopped
+    profiles: ["demo"]
+    environment:
+      - PORT=9009
+      - INGEST_TOKEN=${DEVICE_TOKEN:-}
+
+  # Local-demo ETP 2.0 server stub (stands in for the CRMF ETP server). Demo profile only.
+  etp-sink:
+    build: ./etp-sink
+    container_name: romii_etp_sink
+    restart: unless-stopped
+    profiles: ["demo"]
+    environment:
+      - WS_PORT=9011
+      - HTTP_PORT=9012
 
 volumes:
   influxdb_data:

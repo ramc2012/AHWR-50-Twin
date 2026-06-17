@@ -1,20 +1,55 @@
 import React, { useState, useEffect } from 'react';
-import { Grid, Paper, Typography, Box, Divider } from '@mui/material';
+import { Grid, Paper, Typography, Box, Divider, useTheme } from '@mui/material';
 import { socket } from '../../socket';
-import AnalogGauge from '../Common/AnalogGauge';
-import GaugeCard from '../Common/GaugeCard';
+import EdrView from '../EDR/EdrView';
 
-const StatusIndicator = ({ label, value, mapping }) => {
-    const active = mapping[value] || { text: 'Unknown', color: '#64748b' };
+// ---- Local reusable presentational helpers (flatter/denser than analog dials) ----
+
+const ValueTile = ({ label, value, unit, decimals = 0, color = 'primary.main', min = 0, max, warn, crit, sub }) => {
+    const num = Number(value);
+    const has = Number.isFinite(num);
+    const display = has ? num.toFixed(decimals) : '--';
+
+    let accent = color;
+    let ratio = null;
+    if (has && Number.isFinite(max) && max > min) {
+        ratio = Math.min(Math.max((num - min) / (max - min), 0), 1);
+        const wr = warn != null ? (warn - min) / (max - min) : null;
+        const cr = crit != null ? (crit - min) / (max - min) : null;
+        if (cr != null && ratio >= cr) accent = '#ef4444';
+        else if (wr != null && ratio >= wr) accent = '#fbbf24';
+    }
+
     return (
-        <Box sx={{ textAlign: 'center', px: 2 }}>
-            <Typography variant="caption" sx={{ color: '#94a3b8', display: 'block', mb: 0.5 }}>{label.toUpperCase()}</Typography>
+        <Paper sx={{ p: 1.5, bgcolor: 'background.paper', border: '1px solid', borderColor: 'divider', borderRadius: 2, height: '100%', display: 'flex', flexDirection: 'column' }}>
+            <Typography variant="caption" sx={{ color: 'text.secondary', fontWeight: 700, letterSpacing: 0.4, textTransform: 'uppercase', fontSize: '0.66rem' }} noWrap>{label}</Typography>
+            <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 0.5, mt: 0.25 }}>
+                <Typography sx={{ color: accent, fontWeight: 800, fontSize: '1.7rem', lineHeight: 1.05 }}>{display}</Typography>
+                {unit && <Typography sx={{ color: 'text.secondary', fontWeight: 600, fontSize: '0.78rem' }}>{unit}</Typography>}
+            </Box>
+            {ratio != null && (
+                <Box sx={{ mt: 'auto', pt: 1 }}>
+                    <Box sx={{ height: 5, borderRadius: 3, bgcolor: 'action.hover', overflow: 'hidden' }}>
+                        <Box sx={{ width: `${ratio * 100}%`, height: '100%', bgcolor: accent, borderRadius: 3, transition: 'width .4s ease' }} />
+                    </Box>
+                </Box>
+            )}
+            {sub && <Typography variant="caption" sx={{ color: 'text.secondary', mt: ratio != null ? 0.5 : 'auto', pt: ratio != null ? 0 : 1, fontSize: '0.62rem' }} noWrap>{sub}</Typography>}
+        </Paper>
+    );
+};
+
+const StatusChip = ({ label, value, mapping }) => {
+    const active = mapping[value] || { text: '---', color: '#64748b' };
+    return (
+        <Box sx={{ textAlign: 'center', px: 1 }}>
+            <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block', mb: 0.5, fontSize: '0.62rem', fontWeight: 700 }}>{label.toUpperCase()}</Typography>
             <Box sx={{
-                bgcolor: `${active.color}15`,
+                bgcolor: `${active.color}1f`,
                 color: active.color,
                 border: `1px solid ${active.color}`,
-                px: 2, py: 0.5, borderRadius: 1,
-                fontWeight: 'bold', fontSize: '0.875rem'
+                px: 1.25, py: 0.5, borderRadius: 1,
+                fontWeight: 'bold', fontSize: '0.78rem', whiteSpace: 'nowrap'
             }}>
                 {active.text}
             </Box>
@@ -22,7 +57,39 @@ const StatusIndicator = ({ label, value, mapping }) => {
     );
 };
 
+// Row-style status chip used inside the state panels.
+const StatusRow = ({ label, value, mapping, inset, border }) => {
+    const active = mapping[value] || { text: '---', color: '#64748b' };
+    return (
+        <Box sx={{ p: 1, bgcolor: inset, borderRadius: 1, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <Typography variant="caption" sx={{ color: 'text.secondary', fontWeight: 600 }}>{label}</Typography>
+            <Box sx={{ bgcolor: `${active.color}1f`, color: active.color, border: `1px solid ${active.color}`, px: 1, py: 0.2, borderRadius: 1, fontWeight: 'bold', fontSize: '0.72rem', minWidth: 86, textAlign: 'center' }}>{active.text}</Box>
+        </Box>
+    );
+};
+
+const SectionTitle = ({ children }) => (
+    <Typography sx={{ color: 'text.secondary', fontSize: '0.7rem', fontWeight: 800, letterSpacing: 0.8, textTransform: 'uppercase', mb: 1 }}>{children}</Typography>
+);
+
+// EDR side-strip config — all four htd.* channels exist in shared/edrMetrics.json.
+const EDR_CHANNELS = ['htd.rpm', 'htd.torque', 'htd.vertical_speed', 'htd.inclination'];
+const EDR_STRIPS = [
+    {
+        title: 'HTD',
+        pens: [
+            { channelId: 'htd.rpm', color: '#38bdf8', min: 0, max: 250, enabled: true },
+            { channelId: 'htd.torque', color: '#fbbf24', min: 0, max: 2000, enabled: true },
+            { channelId: 'htd.vertical_speed', color: '#4ade80', min: -5, max: 5, enabled: true }
+        ]
+    }
+];
+
 export default function HtdDashboard() {
+    const theme = useTheme();
+    const surface = theme.palette.background.paper;
+    const inset = theme.palette.background.default;
+    const border = theme.palette.divider;
     const [data, setData] = useState({});
 
     useEffect(() => {
@@ -44,6 +111,12 @@ export default function HtdDashboard() {
         1: { text: 'DRILL', color: '#4ade80' },
         2: { text: 'SPIN', color: '#38bdf8' },
         3: { text: 'TORQUE', color: '#fbbf24' }
+    };
+
+    const opModeMapping = {
+        0: { text: 'UNKNOWN', color: '#64748b' },
+        1: { text: 'DRILLING', color: '#4ade80' },
+        2: { text: 'RIG UP', color: '#38bdf8' }
     };
 
     const rotationMapping = {
@@ -128,151 +201,109 @@ export default function HtdDashboard() {
         8: { text: 'TILTED OUT', color: '#fbbf24' }
     };
 
-    const getStatusText = (value, mapping) => mapping[value]?.text || '---';
-    const getStatusColor = (value, mapping) => mapping[value]?.color || '#64748b';
+    const panelSx = { p: 1.75, bgcolor: surface, height: '100%', borderRadius: 2, border: `1px solid ${border}` };
 
     return (
-        <Box>
-
-            <Grid container spacing={3}>
-                <Grid item xs={12}>
-                    <Paper sx={{ p: 2, bgcolor: '#1e293b', display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 2 }}>
-                        <StatusIndicator label="System Status" value={data.status} mapping={statusMapping} />
-                        <Divider orientation="vertical" flexItem sx={{ bgcolor: '#334155' }} />
-                        <StatusIndicator label="Work Mode" value={data.work_mode} mapping={workModeMapping} />
-                        <Divider orientation="vertical" flexItem sx={{ bgcolor: '#334155' }} />
-                        <StatusIndicator label="Rotation" value={data.rotation_status} mapping={rotationMapping} />
-                        <Divider orientation="vertical" flexItem sx={{ bgcolor: '#334155' }} />
-                        <StatusIndicator label="Lube" value={data.lube_status} mapping={lubeMapping} />
-                        <Divider orientation="vertical" flexItem sx={{ bgcolor: '#334155' }} />
-                        <StatusIndicator label="Brake" value={data.brake_status} mapping={brakeMapping} />
-                    </Paper>
-                </Grid>
-
-                <Grid item xs={12} md={4}>
-                    <GaugeCard footer={<Typography variant="caption" sx={{ color: '#64748b', mt: 1 }}>REQ: {data.rpm_request || 0} | CMD: {data.rpm_command || 0}</Typography>}>
-                        <AnalogGauge
-                            value={data.rpm || 0}
-                            max={250}
-                            label="TOP DRIVE RPM"
-                            unit="RPM"
-                            size="fill"
-                            color="#38bdf8"
-                        />
-                    </GaugeCard>
-                </Grid>
-
-                <Grid item xs={12} md={4}>
-                    <GaugeCard footer={<Typography variant="caption" sx={{ color: '#64748b', mt: 1 }}>REQ: {data.torque_request || 0} | CMD: {data.torque_command || 0}</Typography>}>
-                        <AnalogGauge
-                            value={data.torque || 0}
-                            max={5000}
-                            label="HTD TORQUE"
-                            unit="daN*m"
-                            size="fill"
-                            color="#fbbf24"
-                        />
-                    </GaugeCard>
-                </Grid>
-
-                <Grid item xs={12} md={4}>
-                    <GaugeCard>
-                        <AnalogGauge
-                            value={data.inclination || 0}
-                            max={100}
-                            label="INCLINATION"
-                            unit="%"
-                            size="fill"
-                            color="#a78bfa"
-                        />
-                    </GaugeCard>
-                </Grid>
-
-                {/* MECHANISMS & LINKS */}
-                <Grid item xs={12} md={4}>
-                    <Paper sx={{ p: 2, bgcolor: '#1e293b', height: '100%' }}>
-                        <Typography variant="subtitle2" sx={{ color: '#94a3b8', mb: 2 }}>MECHANISMS & LINKS</Typography>
-                        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
-                            {[
-                                { label: 'ELEVATOR', value: data.elevator_status, mapping: elevatorMapping },
-                                { label: 'IBOP', value: data.ibop_status, mapping: elevatorMapping },
-                                { label: 'LINK ROTATION', value: data.link_rotation_status, mapping: linkRotationMapping }
-                            ].map((item, idx) => {
-                                const active = item.mapping[item.value] || { text: '---', color: '#64748b' };
-                                return (
-                                    <Box key={idx} sx={{ p: 1.5, bgcolor: '#0f172a', borderRadius: 1, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                        <Typography variant="caption" sx={{ color: '#94a3b8' }}>{item.label}</Typography>
-                                        <Box sx={{
-                                            bgcolor: `${active.color}15`,
-                                            color: active.color,
-                                            border: `1px solid ${active.color}`,
-                                            px: 1.5, py: 0.25, borderRadius: 1,
-                                            fontWeight: 'bold', fontSize: '0.75rem',
-                                            minWidth: '80px', textAlign: 'center'
-                                        }}>
-                                            {active.text}
-                                        </Box>
-                                    </Box>
-                                );
-                            })}
-                        </Box>
-                    </Paper>
-                </Grid>
-
-                {/* DRIVE SYSTEM */}
-                <Grid item xs={12} md={4}>
-                    <Paper sx={{ p: 2, bgcolor: '#1e293b', height: '100%' }}>
-                        <Typography variant="subtitle2" sx={{ color: '#94a3b8', mb: 2 }}>DRIVE SYSTEM</Typography>
-                        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
-                            <Box sx={{ p: 1.5, bgcolor: '#0f172a', borderRadius: 1, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                <Typography variant="caption" sx={{ color: '#94a3b8' }}>GEAR SELECTION</Typography>
-                                <Typography sx={{ color: getStatusColor(data.gear_status, gearMapping), fontWeight: 'bold', fontSize: '0.875rem' }}>
-                                    {getStatusText(data.gear_status, gearMapping)}
-                                </Typography>
+        <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'stretch', gap: 2 }}>
+            {/* Main content */}
+            <Box sx={{ flex: '1 1 560px', minWidth: 0 }}>
+                <Grid container spacing={2}>
+                    {/* Primary states header */}
+                    <Grid item xs={12}>
+                        <Paper sx={{ p: 1.75, bgcolor: surface, border: `1px solid ${border}`, display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 1.5 }}>
+                            <StatusChip label="Status" value={data.status} mapping={statusMapping} />
+                            <Divider orientation="vertical" flexItem sx={{ borderColor: border }} />
+                            <StatusChip label="Work Mode" value={data.work_mode} mapping={workModeMapping} />
+                            <Divider orientation="vertical" flexItem sx={{ borderColor: border }} />
+                            <StatusChip label="Op Mode" value={data.op_mode} mapping={opModeMapping} />
+                            <Divider orientation="vertical" flexItem sx={{ borderColor: border }} />
+                            <StatusChip label="Rotation" value={data.rotation_status} mapping={rotationMapping} />
+                            <Box sx={{ ml: 'auto', textAlign: 'right', pr: 1 }}>
+                                <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block', fontSize: '0.62rem', fontWeight: 700 }}>WORKING TIME</Typography>
+                                <Typography variant="h6" sx={{ color: 'primary.main', fontWeight: 'bold' }}>{data.working_hours || 0}h {data.working_minutes || 0}m</Typography>
                             </Box>
-                            <Box sx={{ p: 1.5, bgcolor: '#0f172a', borderRadius: 1, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                <Typography variant="caption" sx={{ color: '#94a3b8' }}>SUSPENSION</Typography>
-                                <Typography sx={{ color: getStatusColor(data.suspension_status, suspensionMapping), fontWeight: 'bold', fontSize: '0.875rem' }}>
-                                    {getStatusText(data.suspension_status, suspensionMapping)}
-                                </Typography>
-                            </Box>
-                            <Box sx={{ p: 1.5, bgcolor: '#0f172a', borderRadius: 1, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                <Typography variant="caption" sx={{ color: '#94a3b8' }}>V-SPEED</Typography>
-                                <Typography sx={{ color: '#38bdf8', fontWeight: 'bold', fontSize: '0.875rem' }}>
-                                    {data.vertical_speed || 0} m/s
-                                </Typography>
-                            </Box>
-                        </Box>
-                    </Paper>
-                </Grid>
+                        </Paper>
+                    </Grid>
 
-                {/* MISSION STATS */}
-                <Grid item xs={12} md={4}>
-                    <Paper sx={{ p: 2, bgcolor: '#1e293b', height: '100%' }}>
-                        <Typography variant="subtitle2" sx={{ color: '#94a3b8', mb: 2 }}>MISSION STATS</Typography>
-                        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
-                            <Box sx={{ p: 1.5, bgcolor: '#0f172a', borderRadius: 1, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                <Typography variant="caption" sx={{ color: '#94a3b8' }}>RUNTIME</Typography>
-                                <Typography sx={{ color: '#4ade80', fontWeight: 'bold', fontSize: '0.875rem' }}>
-                                    {data.working_hours || 0}H {data.working_minutes || 0}M
-                                </Typography>
+                    {/* ROTARY */}
+                    <Grid item xs={12}>
+                        <SectionTitle>Rotary & Motion</SectionTitle>
+                        <Grid container spacing={1.5}>
+                            <Grid item xs={6} sm={4} md={3}>
+                                <ValueTile label="Top Drive RPM" value={data.rpm} unit="RPM" color="#38bdf8" min={0} max={250} warn={210} crit={235}
+                                    sub={`REQ ${data.rpm_request || 0} · CMD ${data.rpm_command || 0}`} />
+                            </Grid>
+                            <Grid item xs={6} sm={4} md={3}>
+                                <ValueTile label="HTD Torque" value={data.torque} unit="daN·m" color="#fbbf24" min={0} max={2000} warn={1500} crit={1800}
+                                    sub={`REQ ${data.torque_request || 0} · CMD ${data.torque_command || 0}`} />
+                            </Grid>
+                            <Grid item xs={6} sm={4} md={3}>
+                                <ValueTile label="Vertical Speed" value={data.vertical_speed} unit="m/s" decimals={2} color="#4ade80" />
+                            </Grid>
+                            <Grid item xs={6} sm={4} md={3}>
+                                <ValueTile label="Inclination" value={data.inclination} unit="%" color="#a78bfa" min={0} max={100} />
+                            </Grid>
+                        </Grid>
+                    </Grid>
+
+                    {/* MECHANISMS & LINKS */}
+                    <Grid item xs={12} sm={6} md={4}>
+                        <Paper sx={panelSx}>
+                            <SectionTitle>Mechanisms & Links</SectionTitle>
+                            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                                <StatusRow label="ELEVATOR" value={data.elevator_status} mapping={elevatorMapping} inset={inset} border={border} />
+                                <StatusRow label="IBOP" value={data.ibop_status} mapping={elevatorMapping} inset={inset} border={border} />
+                                <StatusRow label="BRAKE" value={data.brake_status} mapping={brakeMapping} inset={inset} border={border} />
+                                <StatusRow label="LINK ROTATION" value={data.link_rotation_status} mapping={linkRotationMapping} inset={inset} border={border} />
                             </Box>
-                            <Box sx={{ p: 1.5, bgcolor: '#0f172a', borderRadius: 1, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                <Typography variant="caption" sx={{ color: '#94a3b8' }}>TILT</Typography>
-                                <Typography sx={{ color: getStatusColor(data.tilt_status_db65, tiltDb65Mapping), fontWeight: 'bold', fontSize: '0.75rem' }}>
-                                    {getStatusText(data.tilt_status_db65, tiltDb65Mapping)}
-                                </Typography>
+                        </Paper>
+                    </Grid>
+
+                    {/* DRIVE SYSTEM */}
+                    <Grid item xs={12} sm={6} md={4}>
+                        <Paper sx={panelSx}>
+                            <SectionTitle>Drive System</SectionTitle>
+                            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                                <StatusRow label="GEAR SELECTION" value={data.gear_status} mapping={gearMapping} inset={inset} border={border} />
+                                <StatusRow label="SUSPENSION" value={data.suspension_status} mapping={suspensionMapping} inset={inset} border={border} />
+                                <StatusRow label="LUBE" value={data.lube_status} mapping={lubeMapping} inset={inset} border={border} />
                             </Box>
-                            <Box sx={{ p: 1.5, bgcolor: '#0f172a', borderRadius: 1, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                <Typography variant="caption" sx={{ color: '#94a3b8' }}>INCLINATION</Typography>
-                                <Typography sx={{ color: getStatusColor(data.inclination_status, inclinationStatusMapping), fontWeight: 'bold', fontSize: '0.75rem' }}>
-                                    {getStatusText(data.inclination_status, inclinationStatusMapping)}
-                                </Typography>
+                        </Paper>
+                    </Grid>
+
+                    {/* POSITIONING */}
+                    <Grid item xs={12} sm={12} md={4}>
+                        <Paper sx={panelSx}>
+                            <SectionTitle>Positioning</SectionTitle>
+                            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                                <StatusRow label="TILT" value={data.tilt_status_db65} mapping={tiltDb65Mapping} inset={inset} border={border} />
+                                <StatusRow label="INCLINATION" value={data.inclination_status} mapping={inclinationStatusMapping} inset={inset} border={border} />
                             </Box>
-                        </Box>
-                    </Paper>
+                        </Paper>
+                    </Grid>
                 </Grid>
-            </Grid>
+            </Box>
+
+            {/* Persistent EDR side strip */}
+            <Box
+                sx={{
+                    flex: { xs: '1 1 100%', lg: '0 0 400px' },
+                    width: { xs: '100%', lg: 400 },
+                    minHeight: { xs: 420, lg: 560 },
+                    height: { lg: 'calc(100vh - 220px)' },
+                    display: 'flex',
+                    flexDirection: 'column'
+                }}
+            >
+                <Paper sx={{ flex: 1, minHeight: 0, p: 1.25, bgcolor: surface, border: `1px solid ${border}`, borderRadius: 2, display: 'flex', flexDirection: 'column' }}>
+                    <Typography sx={{ color: 'text.secondary', fontSize: '0.72rem', fontWeight: 800, letterSpacing: 0.6, textTransform: 'uppercase', mb: 0.75 }}>
+                        Top Drive Trends
+                    </Typography>
+                    <Box sx={{ flex: 1, minHeight: 0 }}>
+                        <EdrView mode="compact" storageKey="edr-htd-1" defaultStrips={EDR_STRIPS} channels={EDR_CHANNELS} />
+                    </Box>
+                </Paper>
+            </Box>
         </Box>
     );
 }

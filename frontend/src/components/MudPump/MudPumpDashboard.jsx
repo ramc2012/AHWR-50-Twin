@@ -1,33 +1,84 @@
 import React, { useState, useEffect } from 'react';
-import { Grid, Paper, Typography, Box } from '@mui/material';
+import { Grid, Paper, Typography, Box, useTheme } from '@mui/material';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
-import { Activity, Gauge, Droplets, Waves } from 'lucide-react';
+import { Activity, Droplets } from 'lucide-react';
 import { socket } from '../../socket';
 import axios from '../../api';
+import EdrView from '../EDR/EdrView';
 
-function MetricCard({ title, value, unit, icon: Icon, color = '#38bdf8' }) {
+// ---- Local reusable presentational helper: compact value tile (flat, dense) ----
+// Big numeric value + unit + small label, with an optional thin range bar that
+// turns amber/red near the configured thresholds, or a colored value accent.
+function ValueTile({ label, value, unit, decimals = 0, color = '#38bdf8', min = 0, max, warn, crit, sub, surface, border }) {
+    const num = Number(value);
+    const has = Number.isFinite(num);
+    const display = has ? num.toFixed(decimals) : '--';
+
+    let accent = color;
+    let ratio = null;
+    if (has && Number.isFinite(max) && max > min) {
+        ratio = Math.min(Math.max((num - min) / (max - min), 0), 1);
+        const wr = warn != null ? (warn - min) / (max - min) : null;
+        const cr = crit != null ? (crit - min) / (max - min) : null;
+        if (cr != null && ratio >= cr) accent = '#ef4444';
+        else if (wr != null && ratio >= wr) accent = '#fbbf24';
+    }
+
     return (
-        <Paper sx={{ p: 2, bgcolor: '#1e293b', color: 'white', display: 'flex', alignItems: 'center', gap: 2 }}>
-            <Box sx={{ p: 1.5, borderRadius: '50%', bgcolor: `${color}20`, color: color }}>
-                <Icon size={24} />
+        <Paper sx={{ p: 1.5, bgcolor: surface, border: `1px solid ${border}`, borderRadius: 2, height: '100%', display: 'flex', flexDirection: 'column' }}>
+            <Typography variant="caption" sx={{ color: 'text.secondary', fontWeight: 700, letterSpacing: 0.4, textTransform: 'uppercase', fontSize: '0.66rem' }} noWrap>{label}</Typography>
+            <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 0.5, mt: 0.25 }}>
+                <Typography sx={{ color: accent, fontWeight: 800, fontSize: '1.7rem', lineHeight: 1.05 }}>{display}</Typography>
+                {unit && <Typography sx={{ color: 'text.secondary', fontWeight: 600, fontSize: '0.78rem' }}>{unit}</Typography>}
             </Box>
-            <Box>
-                <Typography variant="subtitle2" sx={{ color: '#94a3b8' }}>{title}</Typography>
-                <Typography variant="h5" sx={{ fontWeight: 'bold' }}>
-                    {value} <span style={{ fontSize: '0.9rem', color: '#64748b' }}>{unit}</span>
-                </Typography>
-            </Box>
+            {ratio != null && (
+                <Box sx={{ mt: 'auto', pt: 1 }}>
+                    <Box sx={{ height: 5, borderRadius: 3, bgcolor: 'action.hover', overflow: 'hidden' }}>
+                        <Box sx={{ width: `${ratio * 100}%`, height: '100%', bgcolor: accent, borderRadius: 3, transition: 'width .4s ease' }} />
+                    </Box>
+                </Box>
+            )}
+            {sub && <Typography variant="caption" sx={{ color: 'text.secondary', mt: ratio != null ? 0.5 : 'auto', pt: ratio != null ? 0 : 1, fontSize: '0.62rem' }} noWrap>{sub}</Typography>}
         </Paper>
     );
 }
 
+const SectionTitle = ({ icon: Icon, children }) => (
+    <Typography variant="h6" sx={{ mb: 1.5, fontWeight: 'bold', color: '#38bdf8', display: 'flex', alignItems: 'center', gap: 1 }}>
+        {Icon && <Icon size={20} />} {children}
+    </Typography>
+);
+
+// EDR side-strip config — pump (spm, pressure, flow_in) and fluid (tank volume,
+// gain/loss, trip tank) analogs are all catalogued in shared/edrMetrics.json.
+// min/max are from the catalog defaults.
+const EDR_CHANNELS = [
+    'mudpump.spm', 'mudpump.pressure', 'mudpump.flow_in',
+    'fluid.total_tank_volume', 'fluid.tank_gain_loss', 'fluid.trip_tank'
+];
+const EDR_STRIPS = [
+    {
+        title: 'Pump',
+        pens: [
+            { channelId: 'mudpump.pressure', color: '#ef4444', min: 0, max: 500, enabled: true },
+            { channelId: 'mudpump.spm', color: '#ec4899', min: 0, max: 200, enabled: true },
+            { channelId: 'mudpump.flow_in', color: '#3b82f6', min: 0, max: 1200, enabled: true }
+        ]
+    }
+];
+
 export default function MudPumpDashboard() {
+    const theme = useTheme();
+    const surface = theme.palette.background.paper;
+    const inset = theme.palette.background.default;
+    const border = theme.palette.divider;
     const [pumpData, setPumpData] = useState({
         spm: 0,
         pressure: 0,
         total_spm: 0,
         flow_in: 0,
-        flow_out: 0
+        flow_out: 0,
+        delta_pressure: 0
     });
     const [fluidData, setFluidData] = useState({
         total_tank_volume: 0,
@@ -82,145 +133,116 @@ export default function MudPumpDashboard() {
     };
 
     return (
-        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-            {/* --- SECTION 1: PUMP SYSTEMS --- */}
-            <Box>
-                <Typography variant="h6" sx={{ mb: 2, fontWeight: 'bold', color: '#38bdf8', display: 'flex', alignItems: 'center', gap: 1 }}>
-                    <Activity size={20} /> Pump Systems
-                </Typography>
-                <Grid container spacing={2}>
-                    <Grid item xs={12} sm={6} md={2.4}>
-                        <MetricCard
-                            title="PUMP SPM"
-                            value={pumpData.spm}
-                            unit="SPM"
-                            icon={Activity}
-                            color="#ec4899"
-                        />
+        <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'stretch', gap: 2 }}>
+            {/* Main content */}
+            <Box sx={{ flex: '1 1 560px', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 2.5 }}>
+                {/* --- SECTION 1: PUMP SYSTEMS --- */}
+                <Box>
+                    <SectionTitle icon={Activity}>Pump Systems</SectionTitle>
+                    <Grid container spacing={1.5}>
+                        <Grid item xs={6} sm={4} md={2}>
+                            <ValueTile label="Pump SPM" value={pumpData.spm} unit="SPM" color="#ec4899" min={0} max={200} surface={surface} border={border} />
+                        </Grid>
+                        <Grid item xs={6} sm={4} md={2}>
+                            <ValueTile label="Pressure" value={pumpData.pressure} unit="bar" color="#ef4444" min={0} max={500} warn={350} crit={420} surface={surface} border={border} />
+                        </Grid>
+                        <Grid item xs={6} sm={4} md={2}>
+                            <ValueTile label="Delta Press" value={pumpData.delta_pressure} unit="bar" decimals={1} color="#f59e0b" min={0} max={50} surface={surface} border={border} />
+                        </Grid>
+                        <Grid item xs={6} sm={4} md={2}>
+                            <ValueTile label="Inlet Flow" value={pumpData.flow_in} unit="Lt/min" color="#3b82f6" min={0} max={1200} surface={surface} border={border} />
+                        </Grid>
+                        <Grid item xs={6} sm={4} md={2}>
+                            <ValueTile label="Return Flow" value={pumpData.flow_out} unit="%" color="#22c55e" min={0} max={100} surface={surface} border={border} />
+                        </Grid>
+                        <Grid item xs={6} sm={4} md={2}>
+                            <ValueTile label="Total Strokes" value={pumpData.total_spm} unit="ct" color="#a78bfa" sub="Lifetime count" surface={surface} border={border} />
+                        </Grid>
                     </Grid>
-                    <Grid item xs={12} sm={6} md={2.4}>
-                        <MetricCard
-                            title="PRESSURE"
-                            value={pumpData.pressure}
-                            unit="bar"
-                            icon={Gauge}
-                            color="#ef4444"
-                        />
+                </Box>
+
+                {/* --- SECTION 2: TANK & FLUID SYSTEMS --- */}
+                <Box>
+                    <SectionTitle icon={Droplets}>Tank & Fluid Systems</SectionTitle>
+                    <Grid container spacing={1.5}>
+                        <Grid item xs={6} sm={6} md={3}>
+                            <ValueTile label="Active Volume" value={fluidData.total_tank_volume} unit="m³" decimals={1} color="#0ea5e9" surface={surface} border={border} />
+                        </Grid>
+                        <Grid item xs={6} sm={6} md={3}>
+                            <ValueTile label="Volume Gain/Loss" value={fluidData.tank_gain_loss} unit="m³" decimals={2}
+                                color={Number(fluidData.tank_gain_loss) >= 0 ? '#22c55e' : '#ef4444'} surface={surface} border={border}
+                                sub={Number(fluidData.tank_gain_loss) >= 0 ? 'Gaining' : 'Losing'} />
+                        </Grid>
+                        <Grid item xs={6} sm={6} md={3}>
+                            <ValueTile label="Trip Tank Volume" value={fluidData.trip_tank} unit="m³" decimals={1} color="#6366f1" surface={surface} border={border} />
+                        </Grid>
+                        <Grid item xs={6} sm={6} md={3}>
+                            <ValueTile label="Trip Gain/Loss" value={fluidData.trip_tank_percentage} unit="%" decimals={1}
+                                color={Number(fluidData.trip_tank_percentage) >= 0 ? '#22c55e' : '#ef4444'} surface={surface} border={border} />
+                        </Grid>
+
+                        {/* Individual Tank Status */}
+                        <Grid item xs={12}>
+                            <Box sx={{ p: 1.75, bgcolor: inset, borderRadius: 2, border: `1px solid ${border}` }}>
+                                <Typography variant="subtitle2" sx={{ color: 'text.secondary', mb: 1.5, textTransform: 'uppercase', letterSpacing: 1 }}>
+                                    Mud Tank Individual Volumes
+                                </Typography>
+                                <Grid container spacing={1.5}>
+                                    {[1, 2, 3, 4].map(num => (
+                                        <Grid item xs={6} sm={3} key={num}>
+                                            <Box sx={{ p: 1.5, bgcolor: surface, borderRadius: 1, textAlign: 'center', border: `1px solid ${border}` }}>
+                                                <Typography variant="caption" sx={{ color: '#64748b', display: 'block', fontWeight: 700, fontSize: '0.62rem' }}>TANK {num}</Typography>
+                                                <Typography variant="h6" sx={{ color: 'text.primary', fontWeight: 'bold' }}>
+                                                    {Number(fluidData[`tank_${num}`] || 0).toFixed(1)} <span style={{ fontSize: '0.7rem', color: '#64748b' }}>m³</span>
+                                                </Typography>
+                                            </Box>
+                                        </Grid>
+                                    ))}
+                                </Grid>
+                            </Box>
+                        </Grid>
                     </Grid>
-                    <Grid item xs={12} sm={6} md={2.4}>
-                        <MetricCard
-                            title="INLET FLOW"
-                            value={pumpData.flow_in}
-                            unit="Lt/min"
-                            icon={Droplets}
-                            color="#3b82f6"
-                        />
-                    </Grid>
-                    <Grid item xs={12} sm={6} md={2.4}>
-                        <MetricCard
-                            title="RETURN FLOW"
-                            value={pumpData.flow_out}
-                            unit="%"
-                            icon={Waves}
-                            color="#22c55e"
-                        />
-                    </Grid>
-                    <Grid item xs={12} sm={6} md={2.4}>
-                        <MetricCard
-                            title="TOTAL STROKES"
-                            value={pumpData.total_spm}
-                            unit="Count"
-                            icon={Activity}
-                            color="#f59e0b"
-                        />
-                    </Grid>
-                </Grid>
+                </Box>
+
+                {/* --- SECTION 3: CHARTS --- */}
+                <Box sx={{ flex: 1, minHeight: 0 }}>
+                    <Paper sx={{ p: 2, bgcolor: surface, color: 'text.primary', height: '100%', minHeight: 360, border: `1px solid ${border}` }}>
+                        <Typography variant="h6" sx={{ mb: 1.5, display: 'flex', alignItems: 'center', gap: 1 }}>
+                            <Activity size={20} /> Flow In vs Return Flow Trend
+                        </Typography>
+                        <ResponsiveContainer width="100%" height={300}>
+                            <LineChart data={flowTrend}>
+                                <CartesianGrid strokeDasharray="3 3" stroke={border} />
+                                <XAxis dataKey="name" stroke="#94a3b8" fontSize={12} />
+                                <YAxis stroke="#94a3b8" fontSize={12} />
+                                <Tooltip contentStyle={{ backgroundColor: inset, border: `1px solid ${border}` }} />
+                                <Legend />
+                                <Line type="monotone" dataKey="flow_in" stroke="#3b82f6" name="Inlet Flow (Lt/min)" strokeWidth={2} dot={false} />
+                                <Line type="monotone" dataKey="flow_out" stroke="#22c55e" name="Return Flow (%)" strokeWidth={2} dot={false} />
+                            </LineChart>
+                        </ResponsiveContainer>
+                    </Paper>
+                </Box>
             </Box>
 
-            {/* --- SECTION 2: TANK & FLUID SYSTEMS --- */}
-            <Box>
-                <Typography variant="h6" sx={{ mb: 2, fontWeight: 'bold', color: '#38bdf8', display: 'flex', alignItems: 'center', gap: 1 }}>
-                    <Droplets size={20} /> Tank & Fluid Systems
-                </Typography>
-                <Grid container spacing={2}>
-                    {/* Main Fluid Metrics */}
-                    <Grid item xs={12} sm={6} md={3}>
-                        <MetricCard
-                            title="ACTIVE VOLUME"
-                            value={fluidData.total_tank_volume}
-                            unit="m³"
-                            icon={Droplets}
-                            color="#0ea5e9"
-                        />
-                    </Grid>
-                    <Grid item xs={12} sm={6} md={3}>
-                        <MetricCard
-                            title="VOLUME GAIN/LOSS"
-                            value={Number(fluidData.tank_gain_loss || 0).toFixed(2)}
-                            unit="m³"
-                            icon={Activity}
-                            color={fluidData.tank_gain_loss >= 0 ? "#22c55e" : "#ef4444"}
-                        />
-                    </Grid>
-                    <Grid item xs={12} sm={6} md={3}>
-                        <MetricCard
-                            title="TRIP TANK VOLUME"
-                            value={fluidData.trip_tank}
-                            unit="m³"
-                            icon={Waves}
-                            color="#6366f1"
-                        />
-                    </Grid>
-                    <Grid item xs={12} sm={6} md={3}>
-                        <MetricCard
-                            title="TRIP GAIN/LOSS"
-                            value={fluidData.trip_tank_percentage}
-                            unit="%"
-                            icon={Activity}
-                            color={fluidData.trip_tank_percentage >= 0 ? "#22c55e" : "#ef4444"}
-                        />
-                    </Grid>
-
-                    {/* Individual Tank Status */}
-                    <Grid item xs={12}>
-                        <Box sx={{ p: 2, bgcolor: '#0f172a', borderRadius: 2, border: '1px solid #334155', mt: 1 }}>
-                            <Typography variant="subtitle2" sx={{ color: '#94a3b8', mb: 2, textTransform: 'uppercase', letterSpacing: 1 }}>
-                                Mud Tank Individual Volumes
-                            </Typography>
-                            <Grid container spacing={2}>
-                                {[1, 2, 3, 4].map(num => (
-                                    <Grid item xs={6} sm={3} key={num}>
-                                        <Box sx={{ p: 1.5, bgcolor: '#1e293b', borderRadius: 1, textAlign: 'center', border: '1px solid #334155' }}>
-                                            <Typography variant="caption" sx={{ color: '#64748b', display: 'block' }}>TANK {num}</Typography>
-                                            <Typography variant="h6" sx={{ color: 'white', fontWeight: 'bold' }}>
-                                                {fluidData[`tank_${num}`]} <span style={{ fontSize: '0.7rem', color: '#64748b' }}>m³</span>
-                                            </Typography>
-                                        </Box>
-                                    </Grid>
-                                ))}
-                            </Grid>
-                        </Box>
-                    </Grid>
-                </Grid>
-            </Box>
-
-            {/* --- SECTION 3: CHARTS --- */}
-            <Box>
-                <Paper sx={{ p: 3, bgcolor: '#1e293b', color: 'white', minHeight: 400, border: '1px solid #334155' }}>
-                    <Typography variant="h6" sx={{ mb: 2, display: 'flex', alignItems: 'center', gap: 1 }}>
-                        <Activity size={20} /> Flow In vs Return Flow Trend
+            {/* Persistent EDR side strip */}
+            <Box
+                sx={{
+                    flex: { xs: '1 1 100%', lg: '0 0 400px' },
+                    width: { xs: '100%', lg: 400 },
+                    minHeight: { xs: 420, lg: 560 },
+                    height: { lg: 'calc(100vh - 220px)' },
+                    display: 'flex',
+                    flexDirection: 'column'
+                }}
+            >
+                <Paper sx={{ flex: 1, minHeight: 0, p: 1.25, bgcolor: surface, border: `1px solid ${border}`, borderRadius: 2, display: 'flex', flexDirection: 'column' }}>
+                    <Typography sx={{ color: 'text.secondary', fontSize: '0.72rem', fontWeight: 800, letterSpacing: 0.6, textTransform: 'uppercase', mb: 0.75 }}>
+                        Mud Pump & Pit Trends
                     </Typography>
-                    <ResponsiveContainer width="100%" height={300}>
-                        <LineChart data={flowTrend}>
-                            <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
-                            <XAxis dataKey="name" stroke="#94a3b8" fontSize={12} />
-                            <YAxis stroke="#94a3b8" fontSize={12} />
-                            <Tooltip contentStyle={{ backgroundColor: '#0f172a', border: '1px solid #334155' }} />
-                            <Legend />
-                            <Line type="monotone" dataKey="flow_in" stroke="#3b82f6" name="Inlet Flow (Lt/min)" strokeWidth={2} dot={false} />
-                            <Line type="monotone" dataKey="flow_out" stroke="#22c55e" name="Return Flow (%)" strokeWidth={2} dot={false} />
-                        </LineChart>
-                    </ResponsiveContainer>
+                    <Box sx={{ flex: 1, minHeight: 0 }}>
+                        <EdrView mode="compact" storageKey="edr-mudpump-1" defaultStrips={EDR_STRIPS} channels={EDR_CHANNELS} />
+                    </Box>
                 </Paper>
             </Box>
         </Box>

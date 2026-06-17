@@ -15,7 +15,10 @@ import {
     Wrench,
     FileText,
     HeartPulse,
-    Network
+    Cable,
+    RefreshCw,
+    ClipboardList,
+    Gauge
 } from 'lucide-react';
 import {
     Box,
@@ -41,23 +44,22 @@ import {
 import { useAuth } from '../../context/AuthContext';
 import { useNavigate } from 'react-router-dom';
 import { socket, connectSocket } from '../../socket';
-import AlarmBanner from '../Alarms/AlarmBanner';
+import AlarmStrip from '../Alarms/AlarmStrip';
+import ThemeSwitcher from './ThemeSwitcher';
 import axios from '../../api';
 
 const menuItems = [
     { text: 'Rig Overview', icon: <LayoutDashboard size={20} />, path: '/' },
     { text: 'EDR', icon: <Activity size={20} />, path: '/edr' },
-    { text: 'EQUIPMENT', icon: <Database size={20} />, path: '/equipment' },
+    { text: 'Equipment', icon: <Database size={20} />, path: '/equipment' },
     { text: 'Activity', icon: <Activity size={20} />, path: '/activity' },
     { text: 'Alarms', icon: <Bell size={20} />, path: '/alarms' },
-    { text: 'Workover', icon: <Wrench size={20} />, path: '/workover' },
-    { text: 'Well Control', icon: <ShieldAlert size={20} />, path: '/wellcontrol' },
-    { text: 'Fishing Ops', icon: <Anchor size={20} />, path: '/fishing', hideCurrentLabel: true },
-    { text: 'Live Trends', icon: <ChartIcon size={20} />, path: '/trends' },
+    { text: 'Operations', icon: <ClipboardList size={20} />, path: '/operations' },
     { text: 'Reports', icon: <FileText size={20} />, path: '/reports' },
     { text: 'Maintenance', icon: <HeartPulse size={20} />, path: '/maintenance' },
-    { text: 'Fleet', icon: <Network size={20} />, path: '/fleet' },
-    // Admin/Settings is appended at render time only for role 'admin'.
+    { text: 'Efficiency', icon: <Gauge size={20} />, path: '/efficiency' },
+    { text: 'Edge Sync', icon: <RefreshCw size={20} />, path: '/sync' },
+    { text: 'Settings', icon: <Settings size={20} />, path: '/settings' },
 ];
 
 export default function Layout() {
@@ -93,10 +95,9 @@ export default function Layout() {
     const getOpModeColor = (code) => Number(code) === 1 ? '#4ade80' : '#38bdf8';
     const getAcsColor = (code) => Number(code) === 1 ? '#4ade80' : (Number(code) === 2 ? '#ef4444' : '#94a3b8');
 
-    // Admin sees the Settings entry; everyone else does not.
-    const navItems = user?.role === 'admin'
-        ? [...menuItems, { text: 'Settings', icon: <Settings size={20} />, path: '/admin' }]
-        : menuItems;
+    // Settings is visible to all (Variables tab is read-only for non-admins; the
+    // Administration tab inside Settings is gated to admins).
+    const navItems = menuItems;
 
     const handleLogout = () => {
         logout();
@@ -396,12 +397,25 @@ export default function Layout() {
                             )}
                         </Box>
                         
+                        <ThemeSwitcher />
+
                         <IconButton onClick={handleLogout} sx={{ color: '#ef4444', '&:hover': { bgcolor: 'rgba(239, 68, 68, 0.1)' } }} title="Logout">
                             <LogOut size={20} />
                         </IconButton>
                     </Box>
                 </Toolbar>
             </AppBar>
+
+            {/* Persistent global alarm strip — shown on every route, directly below the AppBar. */}
+            <Box
+                sx={{
+                    position: 'sticky',
+                    top: { xs: 'auto', md: 64 },
+                    zIndex: (theme) => theme.zIndex.drawer,
+                }}
+            >
+                <AlarmStrip />
+            </Box>
 
             {/* Edit Details Dialog */}
             <Dialog open={isDialogOpen} onClose={() => setIsDialogOpen(false)} PaperProps={{ sx: { bgcolor: '#1e293b', color: 'white', minWidth: 400 } }}>
@@ -453,9 +467,10 @@ export default function Layout() {
                 sx={{
                     flexGrow: 1,
                     p: { xs: 2, sm: 3 },
-                    bgcolor: '#0f172a',
+                    // Honor the active theme so the shell background changes when the theme switches.
+                    bgcolor: 'background.default',
                     minHeight: '100vh',
-                    color: 'white',
+                    color: 'text.primary',
                     overflowX: 'hidden'
                 }}
             >

@@ -1,12 +1,27 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Box, Typography, Paper, Grid, TextField, Button, Alert, LinearProgress, Tooltip as MuiTooltip } from '@mui/material';
+import { Box, Typography, Paper, Grid, TextField, Button, Alert, LinearProgress, Tooltip as MuiTooltip, useTheme } from '@mui/material';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, AreaChart, Area } from 'recharts';
 import { Anchor, Activity, ArrowDown, ArrowUp, Clock, RefreshCw } from 'lucide-react';
 import { socket } from '../../socket';
 import axios from '../../api';
-import AnalogGauge from '../Common/AnalogGauge';
+import EdrView from '../EDR/EdrView';
+
+// Semantic status colors (kept across all themes intentionally).
+const STATUS = { ok: '#22c55e', warn: '#fbbf24', fail: '#ef4444' };
+const ACCENT = '#fbbf24'; // fishing section accent
+
+// EDR side-strip definition for this page.
+const EDR_CHANNELS = ['drawworks.hook_load', 'drilling.wob', 'mudpump.pressure'];
+const EDR_STRIPS = [
+    { title: 'Hoisting & Pump', pens: [
+        { channelId: 'drawworks.hook_load', color: '#38bdf8', min: 0, max: 500, enabled: true },
+        { channelId: 'drilling.wob', color: '#fbbf24', min: 0, max: 100, enabled: true },
+        { channelId: 'mudpump.pressure', color: '#f472b6', min: 0, max: 500, enabled: true }
+    ] }
+];
 
 const FishingDashboard = () => {
+    const theme = useTheme();
     const [timeRange, setTimeRange] = useState('-12h');
     const [customRange, setCustomRange] = useState({ start: '', end: '' });
     const [isCustom, setIsCustom] = useState(false);
@@ -44,8 +59,11 @@ const FishingDashboard = () => {
     // 5. Torque
     const [rotation, setRotation] = useState({
         rpm: 0,
-        torque: 0 // ft-lbs
+        torque: 0 // daN·m (drill-string torque)
     });
+
+    // 6. Weight on bit (tons) — mapped from drilling.wob, useful while milling/washing over a fish.
+    const [wob, setWob] = useState(0);
 
     const [graphData, setGraphData] = useState([]);
     const [alarms, setAlarms] = useState([]);
@@ -124,11 +142,11 @@ const FishingDashboard = () => {
                     blockPosition: Number(data.drawworks.block_position) || 0
                 }));
             }
-            if (data.engine) {
+            if (data.drilling) {
                 setRotation(prev => ({
                     ...prev,
-                    rpm: Number(data.engine.rpm) || 0,
-                    torque: Number(data.engine.torque) || 0
+                    rpm: Number(data.drilling.rpm) || 0,
+                    torque: Number(data.drilling.torque) || 0
                 }));
             }
             if (data.mudpump) {
@@ -142,6 +160,7 @@ const FishingDashboard = () => {
                     ...prev,
                     bitDepth: Number(data.drilling.bit_depth) || 0
                 }));
+                if (data.drilling.wob != null) setWob(Number(data.drilling.wob) || 0);
             }
 
             const now = new Date();
@@ -156,7 +175,7 @@ const FishingDashboard = () => {
                     hookload: Number(data.drawworks?.hook_load) || 0,
                     depth: Number(data.drilling?.bit_depth) || depth.bitDepth,
                     overpull: Math.max(0, (Number(data.drawworks?.hook_load) || 0) - hoisting.stringWeight),
-                    torque: Number(data.engine?.torque) || 0
+                    torque: Number(data.drilling?.torque) || 0
                 });
 
                 const cutoff = timestamp - getRangeMs(timeRange);
@@ -225,275 +244,366 @@ const FishingDashboard = () => {
             }));
     }, [activeWindow.end, activeWindow.start, graphData]);
 
+    const axisColor = theme.palette.text.secondary;
+    const gridColor = theme.palette.divider;
 
-    const MetricBox = ({ label, value, unit, color = 'white', subLabel, subValue }) => (
-        <Paper sx={{ p: 2, bgcolor: '#1e293b', border: '1px solid #334155', height: '100%' }}>
-            <Typography variant="caption" sx={{ color: '#94a3b8', textTransform: 'uppercase' }}>{label}</Typography>
-            <Typography variant="h4" sx={{ color: color, fontWeight: 'bold' }}>
-                {value} <span style={{ fontSize: '0.5em', color: '#64748b' }}>{unit}</span>
-            </Typography>
-            {subLabel && (
-                <Box sx={{ mt: 1, pt: 1, borderTop: '1px solid #334155', display: 'flex', justifyContent: 'space-between' }}>
-                    <Typography variant="caption" sx={{ color: '#94a3b8' }}>{subLabel}</Typography>
-                    <Typography variant="body2" sx={{ color: 'white', fontWeight: 'bold' }}>{subValue}</Typography>
+    // Compact value tile (matches the equipment dashboards): big value + unit +
+    // label + a thin range bar that turns amber/red near a configured limit.
+    const ValueTile = ({ label, value, unit, decimals = 0, color = '#38bdf8', min = 0, max, warn, crit, sub }) => {
+        const num = Number(value);
+        const has = Number.isFinite(num);
+        const display = has ? num.toFixed(decimals) : '--';
+        let accent = color;
+        let ratio = null;
+        if (has && Number.isFinite(max) && max > min) {
+            ratio = Math.min(Math.max((num - min) / (max - min), 0), 1);
+            if (crit != null && num >= crit) accent = STATUS.fail;
+            else if (warn != null && num >= warn) accent = STATUS.warn;
+        }
+        return (
+            <Paper sx={{ p: 1.5, bgcolor: theme.palette.background.paper, border: '1px solid', borderColor: accent === color ? theme.palette.divider : accent, borderRadius: 2, height: '100%', display: 'flex', flexDirection: 'column' }}>
+                <Typography variant="caption" sx={{ color: theme.palette.text.secondary, fontWeight: 700, letterSpacing: 0.4, textTransform: 'uppercase', fontSize: '0.66rem' }} noWrap>{label}</Typography>
+                <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 0.5, mt: 0.25 }}>
+                    <Typography sx={{ color: accent, fontWeight: 800, fontSize: '1.6rem', lineHeight: 1.05 }}>{display}</Typography>
+                    {unit && <Typography sx={{ color: theme.palette.text.secondary, fontWeight: 600, fontSize: '0.76rem' }}>{unit}</Typography>}
                 </Box>
-            )}
-        </Paper>
+                {ratio != null && (
+                    <Box sx={{ mt: 'auto', pt: 1 }}>
+                        <Box sx={{ height: 5, borderRadius: 3, bgcolor: theme.palette.action.hover, overflow: 'hidden' }}>
+                            <Box sx={{ width: `${ratio * 100}%`, height: '100%', bgcolor: accent, borderRadius: 3, transition: 'width .4s ease' }} />
+                        </Box>
+                    </Box>
+                )}
+                {sub && <Typography variant="caption" sx={{ color: theme.palette.text.secondary, mt: ratio != null ? 0.5 : 'auto', pt: ratio != null ? 0 : 1, fontSize: '0.62rem' }} noWrap>{sub}</Typography>}
+            </Paper>
+        );
+    };
+
+    const SectionTitle = ({ children }) => (
+        <Typography sx={{ color: theme.palette.text.secondary, fontSize: '0.7rem', fontWeight: 800, letterSpacing: 0.8, textTransform: 'uppercase', mb: 1 }}>{children}</Typography>
     );
 
     return (
-        <Box sx={{ p: 3, color: 'white' }}>
-            {/* Header */}
-            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-                    <Anchor size={32} color="#fbbf24" />
-                    <Box>
-                        <Typography variant="body2" sx={{ color: '#94a3b8' }}>Live Well Intervention Monitoring</Typography>
+        <Box sx={{ display: 'flex', gap: 2, alignItems: 'flex-start', flexWrap: { xs: 'wrap', lg: 'nowrap' }, color: theme.palette.text.primary }}>
+            {/* Main content column */}
+            <Box sx={{ flex: '1 1 560px', minWidth: 0 }}>
+                {/* Header */}
+                <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2, flexWrap: 'wrap', gap: 1 }}>
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
+                        <Anchor size={28} color={ACCENT} />
+                        <Box>
+                            <Typography variant="subtitle1" sx={{ fontWeight: 'bold', color: theme.palette.text.primary, lineHeight: 1.1 }}>Fishing</Typography>
+                            <Typography variant="caption" sx={{ color: theme.palette.text.secondary }}>Live Well Intervention Monitoring</Typography>
+                        </Box>
+                    </Box>
+
+                    {/* Alarms Banner */}
+                    <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap' }}>
+                        {alarms.map(alarm => (
+                            <Alert key={alarm.id} severity={alarm.severity} variant="filled" sx={{ fontWeight: 'bold', py: 0 }}>
+                                {alarm.msg}
+                            </Alert>
+                        ))}
                     </Box>
                 </Box>
 
-                {/* Alarms Banner */}
-                <Box sx={{ display: 'flex', gap: 2 }}>
-                    {alarms.map(alarm => (
-                        <Alert key={alarm.id} severity={alarm.severity} variant="filled" sx={{ fontWeight: 'bold' }}>
-                            {alarm.msg}
-                        </Alert>
-                    ))}
-                </Box>
-            </Box>
-
-            <Grid container spacing={3}>
-                {/* --- LEFT COLUMN: CRITICAL HOISTING --- */}
-                <Grid item xs={12} md={3}>
-                    <Typography variant="subtitle1" sx={{ color: '#fbbf24', mb: 2, fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: 1 }}>
-                        <ArrowUp size={18} /> Critical Hoisting (Primary)
-                    </Typography>
-
-                    <Grid container spacing={2}>
-                        <Grid item xs={12}>
-                            <MetricBox
-                                label="Actual Hook Load"
-                                value={hoisting.hookLoad.toFixed(1)}
-                                unit="tons"
-                                color="#38bdf8"
-                                subLabel="String Weight (Tare)"
-                                subValue={`${hoisting.stringWeight} tons`}
-                            />
-                        </Grid>
-                        <Grid item xs={12}>
-                            <Paper sx={{ p: 2, bgcolor: '#0f172a', border: '1px solid #ef4444' }}>
-                                <Typography variant="caption" sx={{ color: '#ef4444', fontWeight: 'bold' }}>CALCULATED OVERPULL</Typography>
-                                <Typography variant="h3" sx={{ color: '#ef4444', fontWeight: 'bold' }}>
-                                    {overpull.toFixed(1)} <span style={{ fontSize: '0.4em' }}>tons</span>
-                                </Typography>
-                                <Box sx={{ mt: 2 }}>
-                                    <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
-                                        <Typography variant="caption" sx={{ color: '#94a3b8' }}>Tensile Limit Utilized</Typography>
-                                        <Typography variant="caption" sx={{ color: overpullPercentage > 80 ? '#ef4444' : '#fbbf24' }}>{overpullPercentage.toFixed(0)}%</Typography>
-                                    </Box>
-                                    <LinearProgress
-                                        variant="determinate"
-                                        value={overpullPercentage}
-                                        sx={{ height: 10, borderRadius: 1, bgcolor: '#334155', '& .MuiLinearProgress-bar': { bgcolor: overpullPercentage > 80 ? '#ef4444' : '#fbbf24' } }}
-                                    />
-                                </Box>
-                            </Paper>
-                        </Grid>
-
-                        <Grid item xs={12}>
-                            <Box sx={{ p: 2, bgcolor: '#1e293b', borderRadius: 1 }}>
-                                <Typography variant="caption" sx={{ color: '#94a3b8' }}>SETTINGS</Typography>
-                                <Grid container spacing={1} sx={{ mt: 1 }}>
-                                    <Grid item xs={6}>
-                                        <TextField
-                                            label="String Wt (tons)"
-                                            type="number"
-                                            size="small"
-                                            value={hoisting.stringWeight}
-                                            onChange={(e) => setHoisting({ ...hoisting, stringWeight: Number(e.target.value) })}
-                                            sx={{ bgcolor: '#0f172a', input: { color: 'white' }, label: { color: '#64748b' } }}
-                                        />
-                                    </Grid>
-                                    <Grid item xs={6}>
-                                        <TextField
-                                            label="Tensile Limit"
-                                            type="number"
-                                            size="small"
-                                            value={tensileLimit}
-                                            disabled
-                                            sx={{ bgcolor: '#0f172a', input: { color: 'white' }, label: { color: '#64748b' } }}
-                                        />
-                                    </Grid>
-                                </Grid>
-                            </Box>
-                        </Grid>
-                    </Grid>
-                </Grid>
-
-                {/* --- CENTER: GRAPHS & VISUALS --- */}
-                <Grid item xs={12} md={6}>
-                    <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2, flexWrap: 'wrap', gap: 1 }}>
-                        <Typography variant="subtitle1" sx={{ color: '#fbbf24', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: 1 }}>
-                            <Activity size={18} /> Operation Analytics
+                <Grid container spacing={2}>
+                    {/* --- LEFT COLUMN: CRITICAL HOISTING --- */}
+                    <Grid item xs={12} md={4}>
+                        <Typography variant="subtitle1" sx={{ color: ACCENT, mb: 1.5, fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: 1 }}>
+                            <ArrowUp size={18} /> Critical Hoisting (Primary)
                         </Typography>
-                        <Typography variant="caption" sx={{ color: '#94a3b8' }}>
-                            {activeRangeLabel}
-                        </Typography>
-                    </Box>
 
-                    <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', mb: 2, flexWrap: 'wrap' }}>
-                        <Box sx={{ position: 'relative' }}>
-                            <MuiTooltip title="Custom range">
-                                <Button
-                                    variant="outlined"
-                                    onClick={() => setShowCustomDate(!showCustomDate)}
-                                    sx={{ color: 'white', borderColor: '#334155', height: '100%', bgcolor: '#1e293b', minWidth: '40px', px: 1 }}
-                                >
-                                    <Clock size={20} />
-                                </Button>
-                            </MuiTooltip>
-                            {showCustomDate && (
-                                <Paper sx={{ position: 'absolute', top: '100%', left: 0, mt: 1, p: 2, bgcolor: '#0f172a', border: '1px solid #334155', zIndex: 50, width: 'max-content' }}>
-                                    <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', flexWrap: 'wrap' }}>
-                                        <Typography sx={{ color: '#94a3b8', fontSize: '0.875rem', fontWeight: 'bold' }}>CUSTOM RANGE</Typography>
-                                        <Box
-                                            component="input"
-                                            type="datetime-local"
-                                            value={customRange.start}
-                                            onChange={(e) => setCustomRange(prev => ({ ...prev, start: e.target.value }))}
-                                            sx={{ bgcolor: 'transparent', color: 'white', border: '1px solid #334155', borderRadius: '4px', p: '4px', colorScheme: 'dark' }}
+                        <Grid container spacing={2}>
+                            <Grid item xs={6} md={12}>
+                                <ValueTile
+                                    label="Actual Hook Load"
+                                    value={hoisting.hookLoad}
+                                    decimals={1}
+                                    unit="tons"
+                                    color="#38bdf8"
+                                    min={0}
+                                    max={tensileLimit}
+                                    warn={tensileLimit * 0.8}
+                                    crit={tensileLimit * 0.92}
+                                    sub={`String Wt (Tare): ${hoisting.stringWeight} t`}
+                                />
+                            </Grid>
+                            <Grid item xs={6} md={12}>
+                                <ValueTile
+                                    label="String Weight"
+                                    value={hoisting.stringWeight}
+                                    decimals={0}
+                                    unit="tons"
+                                    color="#a78bfa"
+                                    sub="Free / tare weight (input)"
+                                />
+                            </Grid>
+                            <Grid item xs={12} sm={6} md={12}>
+                                <Paper sx={{ p: 1.5, bgcolor: theme.palette.background.paper, border: `1px solid ${STATUS.fail}`, height: '100%' }}>
+                                    <Typography variant="caption" sx={{ color: STATUS.fail, fontWeight: 'bold' }}>CALCULATED OVERPULL</Typography>
+                                    <Typography variant="h3" sx={{ color: STATUS.fail, fontWeight: 'bold' }}>
+                                        {overpull.toFixed(1)} <span style={{ fontSize: '0.4em' }}>tons</span>
+                                    </Typography>
+                                    <Box sx={{ mt: 1.5 }}>
+                                        <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
+                                            <Typography variant="caption" sx={{ color: theme.palette.text.secondary }}>Tensile Limit Utilized</Typography>
+                                            <Typography variant="caption" sx={{ color: overpullPercentage > 80 ? STATUS.fail : ACCENT }}>{overpullPercentage.toFixed(0)}%</Typography>
+                                        </Box>
+                                        <LinearProgress
+                                            variant="determinate"
+                                            value={overpullPercentage}
+                                            sx={{ height: 10, borderRadius: 1, bgcolor: theme.palette.divider, '& .MuiLinearProgress-bar': { bgcolor: overpullPercentage > 80 ? STATUS.fail : ACCENT } }}
                                         />
-                                        <Box component="span" sx={{ color: '#94a3b8' }}>-</Box>
-                                        <Box
-                                            component="input"
-                                            type="datetime-local"
-                                            value={customRange.end}
-                                            onChange={(e) => setCustomRange(prev => ({ ...prev, end: e.target.value }))}
-                                            sx={{ bgcolor: 'transparent', color: 'white', border: '1px solid #334155', borderRadius: '4px', p: '4px', colorScheme: 'dark' }}
-                                        />
-                                        <Button variant="contained" size="small" onClick={applyCustomRange} sx={{ ml: 1 }}>Go</Button>
                                     </Box>
                                 </Paper>
-                            )}
+                            </Grid>
+
+                            <Grid item xs={12}>
+                                <Box sx={{ p: 1.5, bgcolor: theme.palette.background.paper, border: `1px solid ${theme.palette.divider}`, borderRadius: 1 }}>
+                                    <Typography variant="caption" sx={{ color: theme.palette.text.secondary }}>SETTINGS</Typography>
+                                    <Grid container spacing={1} sx={{ mt: 0.5 }}>
+                                        <Grid item xs={6}>
+                                            <TextField
+                                                label="String Wt (tons)"
+                                                type="number"
+                                                size="small"
+                                                fullWidth
+                                                value={hoisting.stringWeight}
+                                                onChange={(e) => setHoisting({ ...hoisting, stringWeight: Number(e.target.value) })}
+                                                sx={{ bgcolor: theme.palette.background.default, input: { color: theme.palette.text.primary }, label: { color: theme.palette.text.secondary }, '.MuiOutlinedInput-notchedOutline': { borderColor: theme.palette.divider } }}
+                                            />
+                                        </Grid>
+                                        <Grid item xs={6}>
+                                            <TextField
+                                                label="Tensile Limit"
+                                                type="number"
+                                                size="small"
+                                                fullWidth
+                                                value={tensileLimit}
+                                                disabled
+                                                sx={{ bgcolor: theme.palette.background.default, input: { color: theme.palette.text.primary }, label: { color: theme.palette.text.secondary }, '.MuiOutlinedInput-notchedOutline': { borderColor: theme.palette.divider } }}
+                                            />
+                                        </Grid>
+                                    </Grid>
+                                </Box>
+                            </Grid>
+                        </Grid>
+                    </Grid>
+
+                    {/* --- CENTER: GRAPHS & VISUALS --- */}
+                    <Grid item xs={12} md={8}>
+                        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1.5, flexWrap: 'wrap', gap: 1 }}>
+                            <Typography variant="subtitle1" sx={{ color: ACCENT, fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: 1 }}>
+                                <Activity size={18} /> Operation Analytics
+                            </Typography>
+                            <Typography variant="caption" sx={{ color: theme.palette.text.secondary }}>
+                                {activeRangeLabel}
+                            </Typography>
                         </Box>
 
-                        <Box sx={{ width: '1px', height: '24px', bgcolor: '#334155', mx: 1 }} />
-
-                        {[
-                            { label: '1m', val: '-1m' },
-                            { label: '5m', val: '-5m' },
-                            { label: '10m', val: '-10m' },
-                            { label: '15m', val: '-15m' },
-                            { label: '30m', val: '-30m' },
-                            { label: '1h', val: '-1h' },
-                            { label: '12h', val: '-12h' }
-                        ].map((opt) => (
-                            <Button
-                                key={opt.val}
-                                variant={!isCustom && timeRange === opt.val ? 'contained' : 'outlined'}
-                                onClick={() => handlePresetClick(opt.val)}
-                                size="small"
-                                sx={{
-                                    bgcolor: !isCustom && timeRange === opt.val ? '#38bdf8' : 'transparent',
-                                    color: !isCustom && timeRange === opt.val ? '#0f172a' : '#94a3b8',
-                                    borderColor: '#334155',
-                                    minWidth: '40px',
-                                    textTransform: 'none',
-                                    fontWeight: 'bold'
-                                }}
-                            >
-                                {opt.label}
-                            </Button>
-                        ))}
-
-                        <Button
-                            variant="outlined"
-                            startIcon={<RefreshCw size={16} />}
-                            onClick={fetchHistory}
-                            sx={{ color: '#38bdf8', borderColor: '#334155', ml: 1 }}
-                        >
-                            Resync
-                        </Button>
-                    </Box>
-
-                    <Paper sx={{ p: 2, bgcolor: '#1e293b', mb: 2, height: 300 }}>
-                        <Typography variant="caption" sx={{ color: '#94a3b8' }}>WOH vs DEPTH (Trend)</Typography>
-                        <ResponsiveContainer width="100%" height="100%">
-                            <LineChart data={chartData}>
-                                <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
-                                <XAxis dataKey="time" stroke="#94a3b8" />
-                                <YAxis yAxisId="left" stroke="#38bdf8" label={{ value: 'HKLD (tons)', angle: -90, position: 'insideLeft', fill: '#38bdf8' }} />
-                                <YAxis yAxisId="right" orientation="right" stroke="#fbbf24" label={{ value: 'Depth (m)', angle: 90, position: 'insideRight', fill: '#fbbf24' }} />
-                                <Tooltip contentStyle={{ backgroundColor: '#0f172a', border: '1px solid #334155' }} />
-                                <Legend />
-                                <Line yAxisId="left" type="monotone" dataKey="hookload" stroke="#38bdf8" dot={false} strokeWidth={2} />
-                                <Line yAxisId="right" type="monotone" dataKey="depth" stroke="#fbbf24" dot={false} strokeWidth={2} />
-                            </LineChart>
-                        </ResponsiveContainer>
-                    </Paper>
-
-                    <Paper sx={{ p: 2, bgcolor: '#1e293b', height: 250 }}>
-                        <Typography variant="caption" sx={{ color: '#94a3b8' }}>OVERPULL HISTORY</Typography>
-                        <ResponsiveContainer width="100%" height="100%">
-                            <AreaChart data={chartData}>
-                                <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
-                                <XAxis dataKey="time" stroke="#94a3b8" />
-                                <YAxis stroke="#ef4444" />
-                                <Tooltip contentStyle={{ backgroundColor: '#0f172a', border: '1px solid #334155' }} />
-                                <Area type="monotone" dataKey="overpull" stroke="#ef4444" fill="#ef4444" fillOpacity={0.3} />
-                            </AreaChart>
-                        </ResponsiveContainer>
-                    </Paper>
-                </Grid>
-
-                {/* --- RIGHT COLUMN: AUXILIARY PARAMETERS --- */}
-                <Grid item xs={12} md={3}>
-                    {/* Depth */}
-                    <Typography variant="subtitle1" sx={{ color: '#fbbf24', mb: 2, fontWeight: 'bold' }}>Depth & Position</Typography>
-                    <Grid container spacing={2} sx={{ mb: 3 }}>
-                        <Grid item xs={6}>
-                            <MetricBox label="Bit Depth" value={depth.bitDepth.toFixed(1)} unit="m" color="#22c55e" />
-                        </Grid>
-                        <Grid item xs={6}>
-                            <MetricBox label="Fish Top" value={depth.fishTopDepth} unit="m" color="#fbbf24" />
-                        </Grid>
-                        <Grid item xs={12}>
-                            <Box sx={{ p: 1.5, bgcolor: '#1e293b', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                <Typography variant="body2" sx={{ color: '#94a3b8' }}>Distance to Fish</Typography>
-                                <Typography variant="h6" sx={{ color: 'white', fontWeight: 'bold' }}>
-                                    {(depth.fishTopDepth - depth.bitDepth).toFixed(1)} m
-                                </Typography>
+                        <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', mb: 1.5, flexWrap: 'wrap' }}>
+                            <Box sx={{ position: 'relative' }}>
+                                <MuiTooltip title="Custom range">
+                                    <Button
+                                        variant="outlined"
+                                        onClick={() => setShowCustomDate(!showCustomDate)}
+                                        sx={{ color: theme.palette.text.primary, borderColor: theme.palette.divider, height: '100%', bgcolor: theme.palette.background.paper, minWidth: '40px', px: 1 }}
+                                    >
+                                        <Clock size={20} />
+                                    </Button>
+                                </MuiTooltip>
+                                {showCustomDate && (
+                                    <Paper sx={{ position: 'absolute', top: '100%', left: 0, mt: 1, p: 2, bgcolor: theme.palette.background.default, border: `1px solid ${theme.palette.divider}`, zIndex: 50, width: 'max-content' }}>
+                                        <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', flexWrap: 'wrap' }}>
+                                            <Typography sx={{ color: theme.palette.text.secondary, fontSize: '0.875rem', fontWeight: 'bold' }}>CUSTOM RANGE</Typography>
+                                            <Box
+                                                component="input"
+                                                type="datetime-local"
+                                                value={customRange.start}
+                                                onChange={(e) => setCustomRange(prev => ({ ...prev, start: e.target.value }))}
+                                                sx={{ bgcolor: 'transparent', color: theme.palette.text.primary, border: `1px solid ${theme.palette.divider}`, borderRadius: '4px', p: '4px', colorScheme: theme.palette.mode === 'dark' ? 'dark' : 'light' }}
+                                            />
+                                            <Box component="span" sx={{ color: theme.palette.text.secondary }}>-</Box>
+                                            <Box
+                                                component="input"
+                                                type="datetime-local"
+                                                value={customRange.end}
+                                                onChange={(e) => setCustomRange(prev => ({ ...prev, end: e.target.value }))}
+                                                sx={{ bgcolor: 'transparent', color: theme.palette.text.primary, border: `1px solid ${theme.palette.divider}`, borderRadius: '4px', p: '4px', colorScheme: theme.palette.mode === 'dark' ? 'dark' : 'light' }}
+                                            />
+                                            <Button variant="contained" size="small" onClick={applyCustomRange} sx={{ ml: 1 }}>Go</Button>
+                                        </Box>
+                                    </Paper>
+                                )}
                             </Box>
+
+                            <Box sx={{ width: '1px', height: '24px', bgcolor: theme.palette.divider, mx: 0.5 }} />
+
+                            {[
+                                { label: '1m', val: '-1m' },
+                                { label: '5m', val: '-5m' },
+                                { label: '10m', val: '-10m' },
+                                { label: '15m', val: '-15m' },
+                                { label: '30m', val: '-30m' },
+                                { label: '1h', val: '-1h' },
+                                { label: '12h', val: '-12h' }
+                            ].map((opt) => {
+                                const active = !isCustom && timeRange === opt.val;
+                                return (
+                                    <Button
+                                        key={opt.val}
+                                        variant={active ? 'contained' : 'outlined'}
+                                        onClick={() => handlePresetClick(opt.val)}
+                                        size="small"
+                                        sx={{
+                                            color: active ? theme.palette.getContrastText(theme.palette.primary.main) : theme.palette.text.secondary,
+                                            borderColor: theme.palette.divider,
+                                            minWidth: '40px',
+                                            textTransform: 'none',
+                                            fontWeight: 'bold'
+                                        }}
+                                    >
+                                        {opt.label}
+                                    </Button>
+                                );
+                            })}
+
+                            <Button
+                                variant="outlined"
+                                startIcon={<RefreshCw size={16} />}
+                                onClick={fetchHistory}
+                                sx={{ color: theme.palette.primary.main, borderColor: theme.palette.divider, ml: 0.5 }}
+                            >
+                                Resync
+                            </Button>
+                        </Box>
+
+                        <Paper sx={{ p: 1.5, bgcolor: theme.palette.background.paper, border: `1px solid ${theme.palette.divider}`, mb: 2, height: 280 }}>
+                            <Typography variant="caption" sx={{ color: theme.palette.text.secondary }}>WOH vs DEPTH (Trend)</Typography>
+                            <ResponsiveContainer width="100%" height="100%">
+                                <LineChart data={chartData}>
+                                    <CartesianGrid strokeDasharray="3 3" stroke={gridColor} />
+                                    <XAxis dataKey="time" stroke={axisColor} />
+                                    <YAxis yAxisId="left" stroke="#38bdf8" label={{ value: 'HKLD (tons)', angle: -90, position: 'insideLeft', fill: '#38bdf8' }} />
+                                    <YAxis yAxisId="right" orientation="right" stroke={ACCENT} label={{ value: 'Depth (m)', angle: 90, position: 'insideRight', fill: ACCENT }} />
+                                    <Tooltip contentStyle={{ backgroundColor: theme.palette.background.default, border: `1px solid ${theme.palette.divider}` }} />
+                                    <Legend />
+                                    <Line yAxisId="left" type="monotone" dataKey="hookload" stroke="#38bdf8" dot={false} strokeWidth={2} />
+                                    <Line yAxisId="right" type="monotone" dataKey="depth" stroke={ACCENT} dot={false} strokeWidth={2} />
+                                </LineChart>
+                            </ResponsiveContainer>
+                        </Paper>
+
+                        <Paper sx={{ p: 1.5, bgcolor: theme.palette.background.paper, border: `1px solid ${theme.palette.divider}`, height: 230 }}>
+                            <Typography variant="caption" sx={{ color: theme.palette.text.secondary }}>OVERPULL HISTORY</Typography>
+                            <ResponsiveContainer width="100%" height="100%">
+                                <AreaChart data={chartData}>
+                                    <CartesianGrid strokeDasharray="3 3" stroke={gridColor} />
+                                    <XAxis dataKey="time" stroke={axisColor} />
+                                    <YAxis stroke={STATUS.fail} />
+                                    <Tooltip contentStyle={{ backgroundColor: theme.palette.background.default, border: `1px solid ${theme.palette.divider}` }} />
+                                    <Area type="monotone" dataKey="overpull" stroke={STATUS.fail} fill={STATUS.fail} fillOpacity={0.3} />
+                                </AreaChart>
+                            </ResponsiveContainer>
+                        </Paper>
+                    </Grid>
+
+                    {/* --- HOISTING & POSITION --- */}
+                    <Grid item xs={12} md={8}>
+                        <SectionTitle>Hoisting &amp; Position</SectionTitle>
+                        <Grid container spacing={1.5}>
+                            <Grid item xs={6} sm={4} md={3}>
+                                <ValueTile label="Bit Depth" value={depth.bitDepth} decimals={1} unit="m" color={STATUS.ok} />
+                            </Grid>
+                            <Grid item xs={6} sm={4} md={3}>
+                                <ValueTile label="Fish Top" value={depth.fishTopDepth} decimals={0} unit="m" color={ACCENT} sub="Target (input)" />
+                            </Grid>
+                            <Grid item xs={6} sm={4} md={3}>
+                                <ValueTile label="Block Position" value={hoisting.blockPosition} decimals={1} unit="%" color="#22d3ee" min={0} max={100} />
+                            </Grid>
+                            <Grid item xs={6} sm={4} md={3}>
+                                <ValueTile label="Weight on Bit" value={wob} decimals={1} unit="t" color="#818cf8" min={0} max={100} warn={80} crit={90} sub="Mill / wash-over" />
+                            </Grid>
+                            <Grid item xs={12} sm={6} md={6}>
+                                <Box sx={{ p: 1.25, bgcolor: theme.palette.background.paper, border: `1px solid ${theme.palette.divider}`, borderRadius: 2, display: 'flex', justifyContent: 'space-between', alignItems: 'center', height: '100%' }}>
+                                    <Typography variant="body2" sx={{ color: theme.palette.text.secondary }}>Distance to Fish</Typography>
+                                    <Typography variant="h6" sx={{ color: theme.palette.text.primary, fontWeight: 'bold' }}>
+                                        {(depth.fishTopDepth - depth.bitDepth).toFixed(1)} m
+                                    </Typography>
+                                </Box>
+                            </Grid>
+                            <Grid item xs={12} sm={6} md={6}>
+                                <Box sx={{ p: 1.25, bgcolor: theme.palette.background.paper, border: `1px solid ${theme.palette.divider}`, borderRadius: 2, display: 'flex', justifyContent: 'space-between', alignItems: 'center', height: '100%' }}>
+                                    <Typography variant="body2" sx={{ color: theme.palette.text.secondary }}>Last Jar Impact</Typography>
+                                    <Typography variant="h6" sx={{ color: theme.palette.text.primary, fontWeight: 'bold' }}>
+                                        {jarring.lastImpactLoad} t
+                                    </Typography>
+                                </Box>
+                            </Grid>
                         </Grid>
                     </Grid>
 
-                    {/* Jarring */}
-                    <Typography variant="subtitle1" sx={{ color: '#fbbf24', mb: 2, fontWeight: 'bold' }}>Jarring Ops</Typography>
-                    <Box sx={{ display: 'flex', gap: 2, mb: 3 }}>
-                        <Paper sx={{ flex: 1, p: 2, bgcolor: '#1e293b', textAlign: 'center' }}>
-                            <ArrowUp size={24} color="#38bdf8" style={{ margin: 'auto' }} />
-                            <Typography variant="h5" sx={{ fontWeight: 'bold', mt: 1 }}>{jarring.upImpacts}</Typography>
-                            <Typography variant="caption" sx={{ color: '#94a3b8' }}>UP JARS</Typography>
-                        </Paper>
-                        <Paper sx={{ flex: 1, p: 2, bgcolor: '#1e293b', textAlign: 'center' }}>
-                            <ArrowDown size={24} color="#fbbf24" style={{ margin: 'auto' }} />
-                            <Typography variant="h5" sx={{ fontWeight: 'bold', mt: 1 }}>{jarring.downImpacts}</Typography>
-                            <Typography variant="caption" sx={{ color: '#94a3b8' }}>DOWN JARS</Typography>
-                        </Paper>
-                    </Box>
+                    {/* --- JARRING (graphic, kept) --- */}
+                    <Grid item xs={12} md={4}>
+                        <SectionTitle>Jarring Ops</SectionTitle>
+                        <Box sx={{ display: 'flex', gap: 1.5 }}>
+                            <Paper sx={{ flex: 1, p: 1.5, bgcolor: theme.palette.background.paper, border: `1px solid ${theme.palette.divider}`, borderRadius: 2, textAlign: 'center' }}>
+                                <ArrowUp size={24} color="#38bdf8" style={{ margin: 'auto' }} />
+                                <Typography variant="h5" sx={{ fontWeight: 'bold', mt: 0.5, color: theme.palette.text.primary }}>{jarring.upImpacts}</Typography>
+                                <Typography variant="caption" sx={{ color: theme.palette.text.secondary }}>UP JARS</Typography>
+                            </Paper>
+                            <Paper sx={{ flex: 1, p: 1.5, bgcolor: theme.palette.background.paper, border: `1px solid ${theme.palette.divider}`, borderRadius: 2, textAlign: 'center' }}>
+                                <ArrowDown size={24} color={ACCENT} style={{ margin: 'auto' }} />
+                                <Typography variant="h5" sx={{ fontWeight: 'bold', mt: 0.5, color: theme.palette.text.primary }}>{jarring.downImpacts}</Typography>
+                                <Typography variant="caption" sx={{ color: theme.palette.text.secondary }}>DOWN JARS</Typography>
+                            </Paper>
+                        </Box>
+                    </Grid>
 
-                    {/* Pressure */}
-                    <Typography variant="subtitle1" sx={{ color: '#fbbf24', mb: 2, fontWeight: 'bold' }}>Well Pressure</Typography>
-                    <Grid container spacing={1}>
-                        <Grid item xs={6}>
-                            <MetricBox label="Pump Press" value={pressure.pump} unit="psi" color="#f472b6" />
-                        </Grid>
-                        <Grid item xs={6}>
-                            <MetricBox label="Torque" value={rotation.torque.toFixed(0)} unit="ft-lbs" color="#a78bfa" />
+                    {/* --- PUMP & ROTATION --- */}
+                    <Grid item xs={12}>
+                        <SectionTitle>Pump &amp; Rotation</SectionTitle>
+                        <Grid container spacing={1.5}>
+                            <Grid item xs={6} sm={4} md={3}>
+                                <ValueTile label="Pump Press" value={pressure.pump} decimals={0} unit="psi" color="#f472b6" min={0} max={5000} warn={4000} crit={4500} />
+                            </Grid>
+                            <Grid item xs={6} sm={4} md={3}>
+                                <ValueTile label="Rotary Speed" value={rotation.rpm} decimals={0} unit="rpm" color="#38bdf8" min={0} max={250} warn={200} crit={230} />
+                            </Grid>
+                            <Grid item xs={6} sm={4} md={3}>
+                                <ValueTile label="Torque" value={rotation.torque} decimals={0} unit="daN·m" color="#a78bfa" min={0} max={12000} warn={9000} crit={11000} />
+                            </Grid>
+                            <Grid item xs={6} sm={4} md={3}>
+                                <ValueTile label="Tubing Press" value={pressure.tbg} decimals={0} unit="psi" color="#fbbf24" min={0} max={5000} warn={4000} crit={4500} />
+                            </Grid>
                         </Grid>
                     </Grid>
                 </Grid>
-            </Grid>
+            </Box>
+
+            {/* Persistent EDR side strip */}
+            <Paper
+                sx={{
+                    flex: { xs: '1 1 100%', lg: '0 0 400px' },
+                    width: { xs: '100%', lg: 400 },
+                    bgcolor: theme.palette.background.paper,
+                    border: `1px solid ${theme.palette.divider}`,
+                    borderRadius: 1,
+                    p: 1.25,
+                    height: { lg: 'calc(100vh - 220px)' },
+                    minHeight: { xs: 420, lg: 0 },
+                    display: 'flex',
+                    flexDirection: 'column'
+                }}
+            >
+                <Typography sx={{ display: 'flex', alignItems: 'center', gap: 0.75, color: theme.palette.text.secondary, fontSize: '0.72rem', fontWeight: 800, textTransform: 'uppercase', letterSpacing: 0.6, mb: 1 }}>
+                    <Activity size={14} /> EDR — Hoisting & Pump
+                </Typography>
+                <Box sx={{ flex: 1, minHeight: 0 }}>
+                    <EdrView mode="compact" storageKey="edr-fishing-1" defaultStrips={EDR_STRIPS} channels={EDR_CHANNELS} />
+                </Box>
+            </Paper>
         </Box>
     );
 };

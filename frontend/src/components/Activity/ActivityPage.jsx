@@ -2,20 +2,44 @@ import React, { useState, useEffect, useMemo } from 'react';
 import {
     Box, Typography, Paper, Grid, Button, Select, MenuItem, FormControl,
     InputLabel, Chip, Table, TableBody, TableCell, TableContainer, TableHead,
-    TableRow, Snackbar, Alert
+    TableRow, Snackbar, Alert, useTheme
 } from '@mui/material';
-import { Activity as ActivityIcon, Clock, Zap, RotateCcw, CheckCircle2, AlertTriangle } from 'lucide-react';
+import { Activity as ActivityIcon, Clock, Zap, RotateCcw, CheckCircle2, AlertTriangle, LineChart } from 'lucide-react';
 import axios from '../../api';
 import { socket } from '../../socket';
 import { useAuth } from '../../context/AuthContext';
 import { formatDuration, formatClock, secondsSince, todayISO } from '../../utils/format';
+import EdrView from '../EDR/EdrView';
 
-const headSx = { color: '#94a3b8', fontWeight: 'bold', borderColor: '#334155', whiteSpace: 'nowrap' };
-const cellSx = { color: 'white', borderColor: '#1e293b' };
+// Semantic status colors (kept across all themes intentionally).
+const STATUS = { prod: '#4ade80', npt: '#ef4444', other: '#f59e0b' };
+
+// EDR side-strip definition for this page.
+const EDR_CHANNELS = ['drawworks.hook_load', 'drawworks.block_position', 'drilling.rop', 'mudpump.spm', 'mudpump.pressure'];
+const EDR_STRIPS = [
+    { title: 'Hoisting', pens: [
+        { channelId: 'drawworks.hook_load', color: '#38bdf8', min: 0, max: 500, enabled: true },
+        { channelId: 'drawworks.block_position', color: '#fbbf24', min: 0, max: 50, enabled: true }
+    ] },
+    { title: 'Pumps', pens: [
+        { channelId: 'mudpump.spm', color: '#4ade80', min: 0, max: 200, enabled: true },
+        { channelId: 'mudpump.pressure', color: '#f472b6', min: 0, max: 500, enabled: true }
+    ] }
+];
 
 export default function ActivityPage() {
+    const theme = useTheme();
     const { user } = useAuth();
     const canWrite = user?.role === 'admin' || user?.role === 'operator';
+
+    const headSx = { color: theme.palette.text.secondary, fontWeight: 'bold', borderColor: theme.palette.divider, whiteSpace: 'nowrap' };
+    const cellSx = { color: theme.palette.text.primary, borderColor: theme.palette.divider };
+    const fieldSx = {
+        bgcolor: theme.palette.background.default,
+        color: theme.palette.text.primary,
+        '.MuiSvgIcon-root': { color: theme.palette.text.primary },
+        '.MuiOutlinedInput-notchedOutline': { borderColor: theme.palette.divider }
+    };
 
     const [current, setCurrent] = useState(null); // {code,label,productive,npt,source,since,suggested}
     const [codes, setCodes] = useState([]);
@@ -127,194 +151,220 @@ export default function ActivityPage() {
 
     const isProductive = current?.productive;
     const isNpt = current?.npt;
-    const statusColor = isNpt ? '#ef4444' : isProductive ? '#4ade80' : '#f59e0b';
+    const statusColor = isNpt ? STATUS.npt : isProductive ? STATUS.prod : STATUS.other;
     const sinceSec = current?.since ? secondsSince(current.since) : 0;
 
     return (
-        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-            <Typography variant="h6" sx={{ fontWeight: 'bold', color: '#38bdf8', display: 'flex', alignItems: 'center', gap: 1 }}>
-                <ActivityIcon size={22} /> Activity / Tour
-            </Typography>
+        <Box sx={{ display: 'flex', gap: 2, alignItems: 'flex-start', flexWrap: { xs: 'wrap', lg: 'nowrap' } }}>
+            {/* Main content column */}
+            <Box sx={{ flex: '1 1 560px', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 2 }}>
+                <Typography variant="h6" sx={{ fontWeight: 'bold', color: theme.palette.primary.main, display: 'flex', alignItems: 'center', gap: 1 }}>
+                    <ActivityIcon size={22} /> Activity / Tour
+                </Typography>
 
-            <Grid container spacing={2}>
-                {/* Current activity */}
-                <Grid item xs={12} md={7}>
-                    <Paper sx={{ p: 3, bgcolor: '#1e293b', border: `1px solid ${statusColor}`, height: '100%' }}>
-                        <Typography variant="caption" sx={{ color: '#94a3b8', textTransform: 'uppercase', letterSpacing: 1 }}>
-                            Current Activity
-                        </Typography>
-                        <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 2, mt: 1, flexWrap: 'wrap' }}>
-                            <Typography variant="h3" sx={{ fontWeight: 'bold', color: statusColor }}>
-                                {current?.code || '--'}
+                <Grid container spacing={2}>
+                    {/* Current activity */}
+                    <Grid item xs={12} md={7}>
+                        <Paper sx={{ p: 2, bgcolor: theme.palette.background.paper, border: `1px solid ${statusColor}`, height: '100%' }}>
+                            <Typography variant="caption" sx={{ color: theme.palette.text.secondary, textTransform: 'uppercase', letterSpacing: 1 }}>
+                                Current Activity
                             </Typography>
-                            <Typography variant="h6" sx={{ color: 'white' }}>{current?.label || 'No data'}</Typography>
-                        </Box>
-                        <Box sx={{ display: 'flex', gap: 1.5, mt: 2, flexWrap: 'wrap', alignItems: 'center' }}>
-                            <Chip
-                                icon={isNpt ? <AlertTriangle size={14} /> : <CheckCircle2 size={14} />}
-                                label={isNpt ? 'NPT' : isProductive ? 'Productive' : 'Non-productive'}
-                                size="small"
-                                sx={{ bgcolor: `${statusColor}22`, color: statusColor, fontWeight: 'bold', '& .MuiChip-icon': { color: statusColor } }}
-                            />
-                            <Chip
-                                label={`Source: ${current?.source === 'manual' ? 'Manual override' : 'Auto'}`}
-                                size="small"
-                                variant="outlined"
-                                sx={{ color: '#94a3b8', borderColor: '#334155' }}
-                            />
-                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, color: '#94a3b8' }}>
-                                <Clock size={16} />
-                                <Typography variant="body2">{formatDuration(sinceSec)} since {formatClock(current?.since)}</Typography>
-                            </Box>
-                        </Box>
-                        {current?.suggested && current.suggested !== current.code && (
-                            <Box sx={{ mt: 2, p: 1.5, bgcolor: '#0f172a', borderRadius: 1, border: '1px dashed #334155', display: 'flex', alignItems: 'center', gap: 1 }}>
-                                <Zap size={16} color="#38bdf8" />
-                                <Typography variant="body2" sx={{ color: '#94a3b8' }}>
-                                    Auto suggestion: <span style={{ color: '#38bdf8', fontWeight: 'bold' }}>{current.suggested}</span>
+                            <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 2, mt: 0.5, flexWrap: 'wrap' }}>
+                                <Typography variant="h3" sx={{ fontWeight: 'bold', color: statusColor }}>
+                                    {current?.code || '--'}
                                 </Typography>
+                                <Typography variant="h6" sx={{ color: theme.palette.text.primary }}>{current?.label || 'No data'}</Typography>
                             </Box>
-                        )}
-                    </Paper>
-                </Grid>
-
-                {/* Manual set control */}
-                <Grid item xs={12} md={5}>
-                    <Paper sx={{ p: 3, bgcolor: '#1e293b', border: '1px solid #334155', height: '100%' }}>
-                        <Typography variant="subtitle1" sx={{ fontWeight: 'bold', color: '#38bdf8', mb: 2 }}>
-                            Set Activity
-                        </Typography>
-                        {!canWrite ? (
-                            <Typography variant="body2" sx={{ color: '#94a3b8' }}>
-                                Read-only. Operator or admin role required to change activity.
-                            </Typography>
-                        ) : (
-                            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                                <FormControl fullWidth size="small">
-                                    <InputLabel sx={{ color: '#94a3b8' }}>Activity code</InputLabel>
-                                    <Select
-                                        value={selCode}
-                                        label="Activity code"
-                                        onChange={(e) => { setSelCode(e.target.value); setSelReason(''); }}
-                                        sx={{ bgcolor: '#0f172a', color: 'white', '.MuiSvgIcon-root': { color: 'white' }, '.MuiOutlinedInput-notchedOutline': { borderColor: '#334155' } }}
-                                    >
-                                        {codes.map((c) => (
-                                            <MenuItem key={c.code} value={c.code}>
-                                                {c.code} — {c.label}{c.productive === false ? ' (NPT)' : ''}
-                                            </MenuItem>
-                                        ))}
-                                    </Select>
-                                </FormControl>
-
-                                {needsReason && (
-                                    <FormControl fullWidth size="small">
-                                        <InputLabel sx={{ color: '#94a3b8' }}>NPT reason</InputLabel>
-                                        <Select
-                                            value={selReason}
-                                            label="NPT reason"
-                                            onChange={(e) => setSelReason(e.target.value)}
-                                            sx={{ bgcolor: '#0f172a', color: 'white', '.MuiSvgIcon-root': { color: 'white' }, '.MuiOutlinedInput-notchedOutline': { borderColor: '#334155' } }}
-                                        >
-                                            {nptReasons.map((r) => {
-                                                const val = typeof r === 'string' ? r : (r.reason || r.code || r.label);
-                                                const lbl = typeof r === 'string' ? r : (r.label || r.reason || r.code);
-                                                return <MenuItem key={val} value={val}>{lbl}</MenuItem>;
-                                            })}
-                                        </Select>
-                                    </FormControl>
-                                )}
-
-                                <Box sx={{ display: 'flex', gap: 1 }}>
-                                    <Button
-                                        variant="contained"
-                                        onClick={handleSet}
-                                        disabled={!selCode || (needsReason && !selReason)}
-                                        sx={{ bgcolor: '#38bdf8', color: '#0f172a', textTransform: 'none', fontWeight: 'bold', '&:hover': { bgcolor: '#0ea5e9' } }}
-                                    >
-                                        Set
-                                    </Button>
-                                    <Button
-                                        variant="outlined"
-                                        startIcon={<RotateCcw size={16} />}
-                                        onClick={handleAuto}
-                                        sx={{ color: '#94a3b8', borderColor: '#334155', textTransform: 'none' }}
-                                    >
-                                        Return to Auto
-                                    </Button>
+                            <Box sx={{ display: 'flex', gap: 1, mt: 1.5, flexWrap: 'wrap', alignItems: 'center' }}>
+                                <Chip
+                                    icon={isNpt ? <AlertTriangle size={14} /> : <CheckCircle2 size={14} />}
+                                    label={isNpt ? 'NPT' : isProductive ? 'Productive' : 'Non-productive'}
+                                    size="small"
+                                    sx={{ bgcolor: `${statusColor}22`, color: statusColor, fontWeight: 'bold', '& .MuiChip-icon': { color: statusColor } }}
+                                />
+                                <Chip
+                                    label={`Source: ${current?.source === 'manual' ? 'Manual override' : 'Auto'}`}
+                                    size="small"
+                                    variant="outlined"
+                                    sx={{ color: theme.palette.text.secondary, borderColor: theme.palette.divider }}
+                                />
+                                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, color: theme.palette.text.secondary }}>
+                                    <Clock size={16} />
+                                    <Typography variant="body2">{formatDuration(sinceSec)} since {formatClock(current?.since)}</Typography>
                                 </Box>
                             </Box>
-                        )}
-                    </Paper>
-                </Grid>
-            </Grid>
-
-            {/* Productive vs NPT summary */}
-            <Paper sx={{ p: 3, bgcolor: '#1e293b', border: '1px solid #334155' }}>
-                <Typography variant="subtitle1" sx={{ fontWeight: 'bold', color: '#38bdf8', mb: 2 }}>
-                    Today — Productive vs NPT
-                </Typography>
-                <Box sx={{ display: 'flex', height: 28, borderRadius: 1, overflow: 'hidden', border: '1px solid #334155' }}>
-                    <Box sx={{ width: `${totals.prodPct}%`, bgcolor: '#4ade80' }} title={`Productive ${formatDuration(totals.prod)}`} />
-                    <Box sx={{ width: `${totals.nptPct}%`, bgcolor: '#ef4444' }} title={`NPT ${formatDuration(totals.npt)}`} />
-                    <Box sx={{ width: `${totals.otherPct}%`, bgcolor: '#64748b' }} title={`Other ${formatDuration(totals.other)}`} />
-                </Box>
-                <Box sx={{ display: 'flex', gap: 3, mt: 1.5, flexWrap: 'wrap' }}>
-                    <LegendItem color="#4ade80" label="Productive" value={formatDuration(totals.prod)} />
-                    <LegendItem color="#ef4444" label="NPT" value={formatDuration(totals.npt)} />
-                    <LegendItem color="#64748b" label="Other" value={formatDuration(totals.other)} />
-                </Box>
-            </Paper>
-
-            {/* Activity timeline */}
-            <Paper sx={{ bgcolor: '#1e293b', border: '1px solid #334155' }}>
-                <Box sx={{ p: 2 }}>
-                    <Typography variant="subtitle1" sx={{ fontWeight: 'bold', color: '#38bdf8' }}>
-                        Today’s Activity Timeline
-                    </Typography>
-                </Box>
-                <TableContainer>
-                    <Table size="small">
-                        <TableHead>
-                            <TableRow>
-                                <TableCell sx={headSx}>Start</TableCell>
-                                <TableCell sx={headSx}>End</TableCell>
-                                <TableCell sx={headSx}>Code</TableCell>
-                                <TableCell sx={headSx}>Label</TableCell>
-                                <TableCell sx={headSx}>Type</TableCell>
-                                <TableCell sx={headSx}>Duration</TableCell>
-                                <TableCell sx={headSx}>Depth</TableCell>
-                                <TableCell sx={headSx}>Source</TableCell>
-                            </TableRow>
-                        </TableHead>
-                        <TableBody>
-                            {[...log].reverse().map((e, i) => {
-                                const c = e.npt ? '#ef4444' : e.productive ? '#4ade80' : '#f59e0b';
-                                return (
-                                    <TableRow key={`${e.start}-${i}`} hover>
-                                        <TableCell sx={cellSx}>{formatClock(e.start)}</TableCell>
-                                        <TableCell sx={cellSx}>{e.end ? formatClock(e.end) : <span style={{ color: '#4ade80' }}>ongoing</span>}</TableCell>
-                                        <TableCell sx={cellSx}><span style={{ color: c, fontWeight: 'bold' }}>{e.code}</span></TableCell>
-                                        <TableCell sx={cellSx}>{e.label}</TableCell>
-                                        <TableCell sx={cellSx}>
-                                            <Chip label={e.npt ? 'NPT' : e.productive ? 'Prod' : 'Other'} size="small"
-                                                sx={{ bgcolor: `${c}22`, color: c, height: 20, fontWeight: 'bold' }} />
-                                        </TableCell>
-                                        <TableCell sx={cellSx}>{formatDuration(e.durationSec)}</TableCell>
-                                        <TableCell sx={cellSx}>{e.depth != null ? `${e.depth} m` : '--'}</TableCell>
-                                        <TableCell sx={cellSx}>{e.source || 'auto'}</TableCell>
-                                    </TableRow>
-                                );
-                            })}
-                            {log.length === 0 && (
-                                <TableRow>
-                                    <TableCell colSpan={8} align="center" sx={{ color: '#94a3b8', py: 4, borderColor: '#1e293b' }}>
-                                        No activity logged today yet.
-                                    </TableCell>
-                                </TableRow>
+                            {current?.suggested && current.suggested !== current.code && (
+                                <Box sx={{ mt: 1.5, p: 1.25, bgcolor: theme.palette.background.default, borderRadius: 1, border: `1px dashed ${theme.palette.divider}`, display: 'flex', alignItems: 'center', gap: 1 }}>
+                                    <Zap size={16} color={theme.palette.primary.main} />
+                                    <Typography variant="body2" sx={{ color: theme.palette.text.secondary }}>
+                                        Auto suggestion: <span style={{ color: theme.palette.primary.main, fontWeight: 'bold' }}>{current.suggested}</span>
+                                    </Typography>
+                                </Box>
                             )}
-                        </TableBody>
-                    </Table>
-                </TableContainer>
+                        </Paper>
+                    </Grid>
+
+                    {/* Manual set control */}
+                    <Grid item xs={12} md={5}>
+                        <Paper sx={{ p: 2, bgcolor: theme.palette.background.paper, border: `1px solid ${theme.palette.divider}`, height: '100%' }}>
+                            <Typography variant="subtitle1" sx={{ fontWeight: 'bold', color: theme.palette.primary.main, mb: 1.5 }}>
+                                Set Activity
+                            </Typography>
+                            {!canWrite ? (
+                                <Typography variant="body2" sx={{ color: theme.palette.text.secondary }}>
+                                    Read-only. Operator or admin role required to change activity.
+                                </Typography>
+                            ) : (
+                                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
+                                    <FormControl fullWidth size="small">
+                                        <InputLabel sx={{ color: theme.palette.text.secondary }}>Activity code</InputLabel>
+                                        <Select
+                                            value={selCode}
+                                            label="Activity code"
+                                            onChange={(e) => { setSelCode(e.target.value); setSelReason(''); }}
+                                            sx={fieldSx}
+                                        >
+                                            {codes.map((c) => (
+                                                <MenuItem key={c.code} value={c.code}>
+                                                    {c.code} — {c.label}{c.productive === false ? ' (NPT)' : ''}
+                                                </MenuItem>
+                                            ))}
+                                        </Select>
+                                    </FormControl>
+
+                                    {needsReason && (
+                                        <FormControl fullWidth size="small">
+                                            <InputLabel sx={{ color: theme.palette.text.secondary }}>NPT reason</InputLabel>
+                                            <Select
+                                                value={selReason}
+                                                label="NPT reason"
+                                                onChange={(e) => setSelReason(e.target.value)}
+                                                sx={fieldSx}
+                                            >
+                                                {nptReasons.map((r) => {
+                                                    const val = typeof r === 'string' ? r : (r.reason || r.code || r.label);
+                                                    const lbl = typeof r === 'string' ? r : (r.label || r.reason || r.code);
+                                                    return <MenuItem key={val} value={val}>{lbl}</MenuItem>;
+                                                })}
+                                            </Select>
+                                        </FormControl>
+                                    )}
+
+                                    <Box sx={{ display: 'flex', gap: 1 }}>
+                                        <Button
+                                            variant="contained"
+                                            onClick={handleSet}
+                                            disabled={!selCode || (needsReason && !selReason)}
+                                            sx={{ textTransform: 'none', fontWeight: 'bold' }}
+                                        >
+                                            Set
+                                        </Button>
+                                        <Button
+                                            variant="outlined"
+                                            startIcon={<RotateCcw size={16} />}
+                                            onClick={handleAuto}
+                                            sx={{ color: theme.palette.text.secondary, borderColor: theme.palette.divider, textTransform: 'none' }}
+                                        >
+                                            Return to Auto
+                                        </Button>
+                                    </Box>
+                                </Box>
+                            )}
+                        </Paper>
+                    </Grid>
+                </Grid>
+
+                {/* Productive vs NPT summary */}
+                <Paper sx={{ p: 2, bgcolor: theme.palette.background.paper, border: `1px solid ${theme.palette.divider}` }}>
+                    <Typography variant="subtitle1" sx={{ fontWeight: 'bold', color: theme.palette.primary.main, mb: 1.5 }}>
+                        Today — Productive vs NPT
+                    </Typography>
+                    <Box sx={{ display: 'flex', height: 24, borderRadius: 1, overflow: 'hidden', border: `1px solid ${theme.palette.divider}` }}>
+                        <Box sx={{ width: `${totals.prodPct}%`, bgcolor: STATUS.prod }} title={`Productive ${formatDuration(totals.prod)}`} />
+                        <Box sx={{ width: `${totals.nptPct}%`, bgcolor: STATUS.npt }} title={`NPT ${formatDuration(totals.npt)}`} />
+                        <Box sx={{ width: `${totals.otherPct}%`, bgcolor: '#64748b' }} title={`Other ${formatDuration(totals.other)}`} />
+                    </Box>
+                    <Box sx={{ display: 'flex', gap: 3, mt: 1.25, flexWrap: 'wrap' }}>
+                        <LegendItem theme={theme} color={STATUS.prod} label="Productive" value={formatDuration(totals.prod)} />
+                        <LegendItem theme={theme} color={STATUS.npt} label="NPT" value={formatDuration(totals.npt)} />
+                        <LegendItem theme={theme} color="#64748b" label="Other" value={formatDuration(totals.other)} />
+                    </Box>
+                </Paper>
+
+                {/* Activity timeline */}
+                <Paper sx={{ bgcolor: theme.palette.background.paper, border: `1px solid ${theme.palette.divider}` }}>
+                    <Box sx={{ p: 1.5 }}>
+                        <Typography variant="subtitle1" sx={{ fontWeight: 'bold', color: theme.palette.primary.main }}>
+                            Today’s Activity Timeline
+                        </Typography>
+                    </Box>
+                    <TableContainer>
+                        <Table size="small">
+                            <TableHead>
+                                <TableRow>
+                                    <TableCell sx={headSx}>Start</TableCell>
+                                    <TableCell sx={headSx}>End</TableCell>
+                                    <TableCell sx={headSx}>Code</TableCell>
+                                    <TableCell sx={headSx}>Label</TableCell>
+                                    <TableCell sx={headSx}>Type</TableCell>
+                                    <TableCell sx={headSx}>Duration</TableCell>
+                                    <TableCell sx={headSx}>Depth</TableCell>
+                                    <TableCell sx={headSx}>Source</TableCell>
+                                </TableRow>
+                            </TableHead>
+                            <TableBody>
+                                {[...log].reverse().map((e, i) => {
+                                    const c = e.npt ? STATUS.npt : e.productive ? STATUS.prod : STATUS.other;
+                                    return (
+                                        <TableRow key={`${e.start}-${i}`} hover>
+                                            <TableCell sx={cellSx}>{formatClock(e.start)}</TableCell>
+                                            <TableCell sx={cellSx}>{e.end ? formatClock(e.end) : <span style={{ color: STATUS.prod }}>ongoing</span>}</TableCell>
+                                            <TableCell sx={cellSx}><span style={{ color: c, fontWeight: 'bold' }}>{e.code}</span></TableCell>
+                                            <TableCell sx={cellSx}>{e.label}</TableCell>
+                                            <TableCell sx={cellSx}>
+                                                <Chip label={e.npt ? 'NPT' : e.productive ? 'Prod' : 'Other'} size="small"
+                                                    sx={{ bgcolor: `${c}22`, color: c, height: 20, fontWeight: 'bold' }} />
+                                            </TableCell>
+                                            <TableCell sx={cellSx}>{formatDuration(e.durationSec)}</TableCell>
+                                            <TableCell sx={cellSx}>{e.depth != null ? `${e.depth} m` : '--'}</TableCell>
+                                            <TableCell sx={cellSx}>{e.source || 'auto'}</TableCell>
+                                        </TableRow>
+                                    );
+                                })}
+                                {log.length === 0 && (
+                                    <TableRow>
+                                        <TableCell colSpan={8} align="center" sx={{ color: theme.palette.text.secondary, py: 4, borderColor: theme.palette.divider }}>
+                                            No activity logged today yet.
+                                        </TableCell>
+                                    </TableRow>
+                                )}
+                            </TableBody>
+                        </Table>
+                    </TableContainer>
+                </Paper>
+            </Box>
+
+            {/* Persistent EDR side strip */}
+            <Paper
+                sx={{
+                    flex: { xs: '1 1 100%', lg: '0 0 400px' },
+                    width: { xs: '100%', lg: 400 },
+                    bgcolor: theme.palette.background.paper,
+                    border: `1px solid ${theme.palette.divider}`,
+                    borderRadius: 1,
+                    p: 1.25,
+                    height: { lg: 'calc(100vh - 220px)' },
+                    minHeight: { xs: 420, lg: 0 },
+                    display: 'flex',
+                    flexDirection: 'column'
+                }}
+            >
+                <Typography sx={{ display: 'flex', alignItems: 'center', gap: 0.75, color: theme.palette.text.secondary, fontSize: '0.72rem', fontWeight: 800, textTransform: 'uppercase', letterSpacing: 0.6, mb: 1 }}>
+                    <LineChart size={14} /> EDR — Hoisting & Pumps
+                </Typography>
+                <Box sx={{ flex: 1, minHeight: 0 }}>
+                    <EdrView mode="compact" storageKey="edr-activity" defaultStrips={EDR_STRIPS} channels={EDR_CHANNELS} />
+                </Box>
             </Paper>
 
             <Snackbar open={notification.open} autoHideDuration={4000} onClose={() => setNotification({ ...notification, open: false })}>
@@ -324,12 +374,12 @@ export default function ActivityPage() {
     );
 }
 
-function LegendItem({ color, label, value }) {
+function LegendItem({ theme, color, label, value }) {
     return (
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
             <Box sx={{ width: 12, height: 12, borderRadius: '2px', bgcolor: color }} />
-            <Typography variant="body2" sx={{ color: '#94a3b8' }}>
-                {label}: <span style={{ color: 'white', fontWeight: 'bold' }}>{value}</span>
+            <Typography variant="body2" sx={{ color: theme.palette.text.secondary }}>
+                {label}: <span style={{ color: theme.palette.text.primary, fontWeight: 'bold' }}>{value}</span>
             </Typography>
         </Box>
     );

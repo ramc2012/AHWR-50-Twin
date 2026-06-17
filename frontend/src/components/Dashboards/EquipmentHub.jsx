@@ -1,8 +1,8 @@
 import React, { useState } from 'react';
-import { Grid, Paper, Typography, Box, Button, IconButton, Breadcrumbs, Link, Divider } from '@mui/material';
+import { Paper, Typography, Box, Button, useTheme } from '@mui/material';
 import {
     Gauge, Activity, Droplets, ShieldAlert, Anchor,
-    ChevronLeft, Settings, LayoutDashboard, Database
+    LayoutDashboard
 } from 'lucide-react';
 
 // Import child dashboards
@@ -14,55 +14,10 @@ import HpuDashboard from './HpuDashboard';
 import CatEngineDashboard from './CatEngineDashboard';
 import MudPumpDashboard from '../MudPump/MudPumpDashboard';
 
-const EquipmentCard = ({ title, icon: Icon, color, description, onClick }) => (
-    <Paper
-        onClick={onClick}
-        sx={{
-            p: 3,
-            height: '100%',
-            cursor: 'pointer',
-            bgcolor: '#1e293b',
-            transition: 'all 0.3s ease',
-            border: '1px solid #334155',
-            '&:hover': {
-                transform: 'translateY(-5px)',
-                bgcolor: '#334155',
-                borderColor: color,
-                boxShadow: `0 0 20px ${color}20`
-            },
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            textAlign: 'center'
-        }}
-    >
-        <Box sx={{
-            width: 60, height: 60, borderRadius: '50%',
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            bgcolor: `${color}20`, color: color, mb: 2
-        }}>
-            <Icon size={32} />
-        </Box>
-        <Typography variant="h6" sx={{ fontWeight: 'bold', mb: 1 }}>{title}</Typography>
-        <Typography variant="body2" sx={{ color: '#94a3b8' }}>{description}</Typography>
-
-        <Box sx={{ mt: 'auto', pt: 3, width: '100%' }}>
-            <Button
-                variant="outlined"
-                fullWidth
-                sx={{
-                    color: color,
-                    borderColor: `${color}50`,
-                    '&:hover': { borderColor: color, bgcolor: `${color}10` }
-                }}
-            >
-                OPEN DASHBOARD
-            </Button>
-        </Box>
-    </Paper>
-);
-
 export default function EquipmentHub() {
+    const theme = useTheme();
+    const surface = theme.palette.background.paper;
+    const border = theme.palette.divider;
     const [view, setView] = useState('cat-engine'); // Default directly to Cat Engine
 
     const renderContent = () => {
@@ -88,30 +43,26 @@ export default function EquipmentHub() {
         { id: 'pct', title: 'PCT TONG', icon: Anchor, color: '#22d3ee', desc: 'Power Casing Tong' }
     ];
 
-
+    const active = equipments.find(eq => eq.id === view) || equipments[0];
 
     return (
-        <Box sx={{ minHeight: '100%', display: 'flex', flexDirection: 'column', gap: 3 }}>
-            {/* Top Navigation Bar */}
+        <Box sx={{ minHeight: '100%', display: 'flex', flexDirection: 'column', gap: 2 }}>
+            {/* Top navigation: dense, full-width, theme-aware equipment selector. */}
             <Paper
                 elevation={0}
                 sx={{
                     p: 1,
-                    display: 'flex',
+                    display: 'grid',
+                    gridTemplateColumns: { xs: 'repeat(3, 1fr)', sm: 'repeat(4, 1fr)', md: `repeat(${equipments.length}, 1fr)` },
                     gap: 1,
-                    bgcolor: '#1e293b',
+                    bgcolor: surface,
                     borderRadius: 2,
-                    border: '1px solid #334155',
-                    flexWrap: 'wrap',
+                    border: `1px solid ${border}`,
                     position: 'sticky',
                     top: 0,
                     zIndex: 100
                 }}
             >
-
-
-
-
                 {equipments.map((eq) => {
                     const isActive = view === eq.id;
                     const Icon = eq.icon;
@@ -122,21 +73,53 @@ export default function EquipmentHub() {
                             onClick={() => setView(eq.id)}
                             startIcon={<Icon size={18} />}
                             sx={{
-                                color: isActive ? '#0f172a' : '#94a3b8',
+                                color: isActive ? theme.palette.getContrastText(eq.color) : 'text.secondary',
                                 bgcolor: isActive ? eq.color : 'transparent',
+                                border: `1px solid ${isActive ? eq.color : 'transparent'}`,
+                                justifyContent: 'center',
                                 '&:hover': {
-                                    bgcolor: isActive ? eq.color : 'rgba(255,255,255,0.05)',
-                                    opacity: 0.9
+                                    bgcolor: isActive ? eq.color : `${eq.color}1a`,
+                                    borderColor: isActive ? eq.color : `${eq.color}66`,
+                                    color: isActive ? theme.palette.getContrastText(eq.color) : eq.color,
+                                    opacity: isActive ? 0.92 : 1
                                 },
                                 fontWeight: isActive ? 'bold' : 'medium',
-                                px: 2
+                                px: 1.25,
+                                minWidth: 0,
+                                whiteSpace: 'nowrap'
                             }}
                         >
-                            {eq.title.split(' ')[0]} {/* Show first word for brevity on top bar */}
+                            {eq.title.split(' ')[0]}
                         </Button>
                     );
                 })}
             </Paper>
+
+            {/* Active equipment context banner */}
+            <Box
+                sx={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 1.5,
+                    px: 0.5
+                }}
+            >
+                <Box sx={{
+                    width: 40, height: 40, borderRadius: 1.5, flexShrink: 0,
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    bgcolor: `${active.color}1f`, color: active.color
+                }}>
+                    <active.icon size={22} />
+                </Box>
+                <Box sx={{ minWidth: 0 }}>
+                    <Typography variant="h6" sx={{ fontWeight: 'bold', lineHeight: 1.15, color: 'text.primary' }} noWrap>
+                        {active.title}
+                    </Typography>
+                    <Typography variant="caption" sx={{ color: 'text.secondary' }} noWrap>
+                        {active.desc}
+                    </Typography>
+                </Box>
+            </Box>
 
             <Box sx={{ flexGrow: 1 }}>
                 {renderContent()}

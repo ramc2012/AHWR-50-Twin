@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Box, Typography, Tabs, Tab, Paper, TextField, Button, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, IconButton, Select, MenuItem, InputLabel, FormControl, Grid, Alert, Snackbar, Dialog, DialogTitle, DialogContent, DialogActions } from '@mui/material';
 import { Trash2, Save, Plus, AlertCircle, RefreshCw, Edit2 } from 'lucide-react';
 import axios from '../../api';
+import { useAuth } from '../../context/AuthContext';
 
 function TabPanel(props) {
     const { children, value, index, ...other } = props;
@@ -24,6 +25,18 @@ function TabPanel(props) {
 }
 
 export default function AdminPanel() {
+    const { user } = useAuth();
+    // Defense-in-depth: this panel mutates users / PLC config (admin-only). It is
+    // reached via the admin-gated Settings tab, but guard here too so a non-admin
+    // can never render it via a direct route/import (backend also enforces 403).
+    if (user?.role !== 'admin') {
+        return (
+            <Box sx={{ p: 4, textAlign: 'center', color: 'text.secondary' }}>
+                <AlertCircle size={32} style={{ marginBottom: 8 }} />
+                <Typography>Administrator access required.</Typography>
+            </Box>
+        );
+    }
     const [value, setValue] = useState(0);
     const [config, setConfig] = useState({ slaves: [] });
     const [users, setUsers] = useState([]);
