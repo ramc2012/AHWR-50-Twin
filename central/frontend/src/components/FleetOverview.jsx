@@ -1,132 +1,136 @@
 import React, { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-    Box, Grid, Paper, Table, TableBody, TableCell, TableContainer, TableHead, TableRow,
-    Typography, Stack, ToggleButton, ToggleButtonGroup, TextField, InputAdornment, Chip,
+    Box, Paper, Typography, Stack, ToggleButton, ToggleButtonGroup, TextField,
+    InputAdornment, Chip, Select, MenuItem, FormControl, InputLabel,
 } from '@mui/material';
-import { Search, SignalCellularAlt, NotificationsActive, FactCheck, Dvr } from '@mui/icons-material';
+import { Search } from '@mui/icons-material';
 import { useFleet } from '../context/FleetContext';
-import { KpiCard, StatusChip, HealthBar, PriorityChip, fmtAgo } from './common';
+import { PriorityChip } from './common';
+import { STATUS_COLOR } from '../theme';
 import FleetMap from './FleetMap';
 
+const healthColor = (v) => (v >= 80 ? STATUS_COLOR.online : v >= 50 ? STATUS_COLOR.degraded : STATUS_COLOR.offline);
+
+// Compact clickable rig tile, coloured by status. One line carries name · activity ·
+// location; a short health bar + alarm sit below. Clicking zooms briefly then opens the rig.
+function RigTile({ rig, onOpen }) {
+    const [zoom, setZoom] = useState(false);
+    const color = STATUS_COLOR[rig.status] || STATUS_COLOR.pending;
+    const location = rig.assetUnit || rig.field || '—';
+    const hv = Math.max(0, Math.min(100, rig.healthScore || 0));
+
+    const open = () => { if (zoom) return; setZoom(true); setTimeout(() => onOpen(rig.rigId), 150); };
+    const onKeyDown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); } };
+
+    return (
+        <Paper
+            role="button"
+            tabIndex={0}
+            aria-label={`Open rig ${rig.name} (${rig.rigId})`}
+            onClick={open}
+            onKeyDown={onKeyDown}
+            title={`${rig.name} · ${rig.activeActivity || '—'} · ${location}`}
+            sx={{
+                px: 1, py: 0.85, height: '100%', display: 'flex', flexDirection: 'column', gap: 0.5,
+                cursor: 'pointer', borderLeft: `3px solid ${color}`, bgcolor: `${color}0d`,
+                transition: 'transform 150ms ease, box-shadow 150ms ease',
+                transform: zoom ? 'scale(1.05)' : 'scale(1)',
+                boxShadow: zoom ? `0 0 0 1px ${color}88, 0 8px 22px rgba(0,0,0,0.45)` : 'none',
+                '&:hover': { transform: zoom ? 'scale(1.05)' : 'translateY(-1px)', boxShadow: `0 0 0 1px ${color}55` },
+                '&:focus-visible': { outline: `2px solid ${color}`, outlineOffset: 2 },
+            }}
+        >
+            {/* One line: rig name · activity · location. */}
+            <Typography variant="body2" noWrap sx={{ lineHeight: 1.2 }}>
+                <Box component="span" sx={{ width: 7, height: 7, borderRadius: '50%', bgcolor: color, display: 'inline-block', mr: 0.6, verticalAlign: 'middle' }} />
+                <Box component="span" sx={{ fontWeight: 800 }}>{rig.name}</Box>
+                <Box component="span" sx={{ color: 'text.secondary' }}> · {rig.activeActivity || '—'} · {location}</Box>
+            </Typography>
+
+            {/* Short health bar + alarm. */}
+            <Stack direction="row" alignItems="center" spacing={0.75}>
+                <Box sx={{ width: 56, height: 5, borderRadius: 3, bgcolor: 'rgba(255,255,255,0.08)', overflow: 'hidden', flex: '0 0 auto' }}>
+                    <Box sx={{ width: `${hv}%`, height: '100%', bgcolor: healthColor(hv) }} />
+                </Box>
+                <Typography variant="caption" sx={{ color: healthColor(hv), fontWeight: 700, width: 22 }}>{hv}</Typography>
+                <Box sx={{ flexGrow: 1 }} />
+                {rig.alarm?.highest
+                    ? <PriorityChip priority={rig.alarm.highest} />
+                    : <Box component="span" sx={{ width: 7, height: 7, borderRadius: '50%', bgcolor: STATUS_COLOR.online, opacity: 0.5 }} />}
+            </Stack>
+        </Paper>
+    );
+}
+
 export default function FleetOverview() {
-    const { fleet, summary } = useFleet();
+    const { fleet } = useFleet();
     const nav = useNavigate();
     const [filter, setFilter] = useState('all');
+    const [unit, setUnit] = useState('all');
     const [q, setQ] = useState('');
-    const s = summary || {};
+
+    const units = useMemo(() => {
+        const set = new Set(fleet.map((r) => r.assetUnit || r.field).filter(Boolean));
+        return Array.from(set).sort((a, b) => a.localeCompare(b));
+    }, [fleet]);
 
     const rows = useMemo(() => fleet.filter((r) => {
         if (filter !== 'all' && r.status !== filter) return false;
-        if (q && !(`${r.name} ${r.rigId} ${r.activeJob || ''}`.toLowerCase().includes(q.toLowerCase()))) return false;
+        if (unit !== 'all' && (r.assetUnit || r.field) !== unit) return false;
+        if (q && !(`${r.name} ${r.rigId} ${r.assetUnit || r.field || ''} ${r.activeJob || ''}`.toLowerCase().includes(q.toLowerCase()))) return false;
         return true;
-    }), [fleet, filter, q]);
+    }), [fleet, filter, unit, q]);
 
     return (
-        <Box>
-            <Grid container spacing={2} mb={2}>
-                <Grid item xs={6} sm={4} md={2}><KpiCard label="Rigs online" value={s.online ?? 0} sub={`of ${s.total ?? 0} in fleet`} color="success.main" icon={<SignalCellularAlt fontSize="small" color="success" />} /></Grid>
-                <Grid item xs={6} sm={4} md={2}><KpiCard label="Degraded" value={s.degraded ?? 0} sub="missing tags / lag" color="warning.main" /></Grid>
-                <Grid item xs={6} sm={4} md={2}><KpiCard label="Offline" value={s.offline ?? 0} sub="no recent data" color="error.main" /></Grid>
-                <Grid item xs={6} sm={4} md={2}><KpiCard label="Active alarms" value={s.alarmsActive ?? 0} sub={`${s.alarmsP1 ?? 0} priority-1`} color={s.alarmsP1 ? 'error.main' : 'text.primary'} icon={<NotificationsActive fontSize="small" color={s.alarmsP1 ? 'error' : 'disabled'} />} /></Grid>
-                <Grid item xs={6} sm={4} md={2}><KpiCard label="Avg health" value={s.avgHealth ?? 0} sub="data-quality score" icon={<FactCheck fontSize="small" color="info" />} /></Grid>
-                <Grid item xs={6} sm={4} md={2}><KpiCard label="Reporting" value={`${s.rigsReporting ?? 0}`} sub="streaming now" icon={<Dvr fontSize="small" color="primary" />} /></Grid>
-            </Grid>
+        // Full-height two-pane: interactive map (left) + rig tiles (right). The status
+        // bubbles in the top app bar already carry the fleet KPIs, so no redundant cards.
+        <Box sx={{ height: '100%', display: 'flex', flexDirection: { xs: 'column', md: 'row' }, gap: 2, minHeight: 0 }}>
+            {/* LEFT — smaller interactive pan/zoom map; click a marker to open the rig. */}
+            <Box sx={{ flex: { md: '0.85 1 0' }, minHeight: { xs: 300, md: 0 }, display: 'flex' }}>
+                <FleetMap rigs={fleet} />
+            </Box>
 
-            <Grid container spacing={2}>
-                <Grid item xs={12} md={7}>
-                    <FleetMap rigs={fleet} />
-                </Grid>
-                <Grid item xs={12} md={5}>
-                    <Paper sx={{ p: 2, height: '100%' }}>
-                        <Typography variant="subtitle2" color="text.secondary" gutterBottom>ROLLOUT BY STAGE-GATE</Typography>
-                        <Stack spacing={1.2} mt={1}>
-                            {[
-                                ['Online & reporting', s.online ?? 0, 'success.main'],
-                                ['Degraded', s.degraded ?? 0, 'warning.main'],
-                                ['Stale', s.stale ?? 0, 'warning.main'],
-                                ['Offline', s.offline ?? 0, 'error.main'],
-                                ['Pending onboarding', s.pending ?? 0, 'text.secondary'],
-                            ].map(([label, val, color]) => {
-                                const pct = s.total ? Math.round((val / s.total) * 100) : 0;
-                                return (
-                                    <Box key={label}>
-                                        <Stack direction="row" justifyContent="space-between">
-                                            <Typography variant="body2">{label}</Typography>
-                                            <Typography variant="body2" color="text.secondary">{val} · {pct}%</Typography>
-                                        </Stack>
-                                        <Box sx={{ height: 8, borderRadius: 4, bgcolor: 'rgba(255,255,255,0.06)', mt: 0.5, overflow: 'hidden' }}>
-                                            <Box sx={{ width: `${pct}%`, height: '100%', bgcolor: color }} />
-                                        </Box>
-                                    </Box>
-                                );
-                            })}
+            {/* RIGHT — denser grid of compact rig tiles, filling the (now larger) pane. */}
+            <Box sx={{ flex: { md: '1.7 1 0' }, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+                <Paper sx={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+                    <Box sx={{ p: 1.5, flex: '0 0 auto' }}>
+                        <Stack direction="row" alignItems="center" justifyContent="space-between" mb={1}>
+                            <Typography variant="h6">Fleet — {rows.length} rig{rows.length !== 1 ? 's' : ''}</Typography>
                         </Stack>
-                        <Typography variant="caption" color="text.secondary" display="block" mt={2}>
-                            Streaming rigs publish 100 channels at 1 Hz; central latency target &lt; 30 s.
-                        </Typography>
-                    </Paper>
-                </Grid>
-            </Grid>
+                        <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+                            <TextField size="small" placeholder="Search rig / unit / job" value={q} onChange={(e) => setQ(e.target.value)} sx={{ flex: 1, minWidth: 160 }}
+                                InputProps={{ startAdornment: <InputAdornment position="start"><Search fontSize="small" /></InputAdornment> }} />
+                            <FormControl size="small" sx={{ minWidth: 150 }}>
+                                <InputLabel id="asset-unit-label">Asset unit</InputLabel>
+                                <Select labelId="asset-unit-label" label="Asset unit" value={unit} onChange={(e) => setUnit(e.target.value)}>
+                                    <MenuItem value="all">All units</MenuItem>
+                                    {units.map((u) => <MenuItem key={u} value={u}>{u}</MenuItem>)}
+                                </Select>
+                            </FormControl>
+                        </Stack>
+                        <ToggleButtonGroup size="small" exclusive value={filter} onChange={(_e, v) => v && setFilter(v)} sx={{ mt: 1, flexWrap: 'wrap' }}>
+                            <ToggleButton value="all">All</ToggleButton>
+                            <ToggleButton value="online">Online</ToggleButton>
+                            <ToggleButton value="degraded">Degraded</ToggleButton>
+                            <ToggleButton value="offline">Offline</ToggleButton>
+                            <ToggleButton value="pending">Pending</ToggleButton>
+                        </ToggleButtonGroup>
+                    </Box>
 
-            <Paper sx={{ mt: 2 }}>
-                <Stack direction="row" spacing={2} alignItems="center" sx={{ p: 2, flexWrap: 'wrap' }} useFlexGap>
-                    <Typography variant="h6" sx={{ flexGrow: 1 }}>Fleet — {rows.length} rig{rows.length !== 1 ? 's' : ''}</Typography>
-                    <TextField size="small" placeholder="Search rig / job" value={q} onChange={(e) => setQ(e.target.value)}
-                        InputProps={{ startAdornment: <InputAdornment position="start"><Search fontSize="small" /></InputAdornment> }} />
-                    <ToggleButtonGroup size="small" exclusive value={filter} onChange={(_e, v) => v && setFilter(v)}>
-                        <ToggleButton value="all">All</ToggleButton>
-                        <ToggleButton value="online">Online</ToggleButton>
-                        <ToggleButton value="degraded">Degraded</ToggleButton>
-                        <ToggleButton value="offline">Offline</ToggleButton>
-                        <ToggleButton value="pending">Pending</ToggleButton>
-                    </ToggleButtonGroup>
-                </Stack>
-                <TableContainer>
-                    <Table size="small" stickyHeader>
-                        <TableHead>
-                            <TableRow>
-                                <TableCell>Rig</TableCell>
-                                <TableCell>Status</TableCell>
-                                <TableCell>Activity / Job</TableCell>
-                                <TableCell>Alarms</TableCell>
-                                <TableCell sx={{ minWidth: 140 }}>Data quality</TableCell>
-                                <TableCell align="right">Sync lag</TableCell>
-                                <TableCell align="right">Last data</TableCell>
-                            </TableRow>
-                        </TableHead>
-                        <TableBody>
-                            {rows.map((r) => (
-                                <TableRow key={r.rigId} hover sx={{ cursor: 'pointer' }} onClick={() => nav(`/rigs/${r.rigId}`)}>
-                                    <TableCell>
-                                        <Typography variant="body2" fontWeight={700}>{r.name}</Typography>
-                                        <Typography variant="caption" color="text.secondary">{r.rigId}</Typography>
-                                    </TableCell>
-                                    <TableCell><StatusChip status={r.status} /></TableCell>
-                                    <TableCell>
-                                        <Typography variant="body2">{r.activeActivity || '—'}</Typography>
-                                        <Typography variant="caption" color="text.secondary">{r.activeJob || ''}</Typography>
-                                    </TableCell>
-                                    <TableCell>
-                                        <Stack direction="row" spacing={0.5} alignItems="center">
-                                            {r.alarm?.highest ? <PriorityChip priority={r.alarm.highest} /> : <Typography variant="caption" color="text.secondary">none</Typography>}
-                                            {r.alarm?.active > 0 && <Chip size="small" variant="outlined" label={r.alarm.active} />}
-                                        </Stack>
-                                    </TableCell>
-                                    <TableCell><HealthBar value={r.healthScore} /></TableCell>
-                                    <TableCell align="right">
-                                        <Typography variant="body2" color={r.syncLagSec > 30 ? 'warning.main' : 'text.secondary'}>
-                                            {r.syncLagSec == null ? '—' : `${r.syncLagSec}s`}
-                                        </Typography>
-                                    </TableCell>
-                                    <TableCell align="right"><Typography variant="caption" color="text.secondary">{fmtAgo(r.lastDataAt)}</Typography></TableCell>
-                                </TableRow>
-                            ))}
-                            {!rows.length && <TableRow><TableCell colSpan={7} align="center" sx={{ py: 4, color: 'text.secondary' }}>No rigs match the filter.</TableCell></TableRow>}
-                        </TableBody>
-                    </Table>
-                </TableContainer>
-            </Paper>
+                    <Box sx={{ flex: 1, minHeight: 0, overflow: 'auto', px: 1.5, pb: 1.5 }}>
+                        {/* Container-relative grid: many compact tiles per row. */}
+                        <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(168px, 1fr))', gap: 1, alignItems: 'stretch' }}>
+                            {rows.map((r) => <RigTile key={r.rigId} rig={r} onOpen={(id) => nav(`/rigs/${id}`)} />)}
+                        </Box>
+                        {!rows.length && (
+                            <Box sx={{ py: 6, textAlign: 'center', color: 'text.secondary' }}>
+                                <Typography variant="body2">No rigs match the filter.</Typography>
+                            </Box>
+                        )}
+                    </Box>
+                </Paper>
+            </Box>
         </Box>
     );
 }

@@ -20,13 +20,18 @@ const PERIODS = [
 export default function Reports() {
     const [period, setPeriod] = useState('snapshot');
     const [rows, setRows] = useState([]);
+    const [windowInterval, setWindowInterval] = useState('');
     const [err, setErr] = useState('');
     const [loading, setLoading] = useState(true);
 
     const load = useCallback(() => {
         setErr('');
         api.report(period === 'snapshot' ? undefined : period)
-            .then((d) => setRows(Array.isArray(d) ? d : []))
+            // Backend now returns { period, windowInterval, rows } for ALL periods (audit #29).
+            .then((d) => {
+                setRows(Array.isArray(d) ? d : (d?.rows || []));
+                setWindowInterval(Array.isArray(d) ? '' : (d?.windowInterval || ''));
+            })
             .catch((e) => { if (e?.response?.status !== 401) setErr(e?.response?.data?.error || 'Failed to load report'); })
             .finally(() => setLoading(false));
     }, [period]);
@@ -34,22 +39,28 @@ export default function Reports() {
 
     const download = async () => {
         try {
-            const res = await axios.get('/api/reports/fleet.csv', { responseType: 'blob' });
+            // CSV export is period-aware: pass the selected period (omit for snapshot).
+            const res = await axios.get('/api/reports/fleet.csv', {
+                responseType: 'blob',
+                params: period === 'snapshot' ? {} : { period },
+            });
             const url = URL.createObjectURL(res.data);
             const a = document.createElement('a');
-            a.href = url; a.download = 'crmf-fleet-report.csv'; a.click();
+            a.href = url; a.download = `crmf-fleet-report-${period}.csv`; a.click();
             URL.revokeObjectURL(url);
         } catch (e) {
             if (e?.response?.status !== 401) setErr('CSV export failed');
         }
     };
 
-    const reporting = rows.filter((r) => r.last_data_at).length;
-    const alarms = rows.reduce((s, r) => s + (r.alarm_active || 0), 0);
+    // Defensive across snapshot vs period rows (finding #3): period rows carry
+    // sample_buckets / alarm_events instead of last_data_at / alarm_active.
+    const reporting = rows.filter((r) => r.last_data_at || r.sample_buckets > 0).length;
+    const alarms = rows.reduce((s, r) => s + (r.alarm_active ?? r.alarm_events ?? 0), 0);
     const live = rows.filter((r) => r.gate === 'live').length;
 
     return (
-        <Box>
+        <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
             <Stack direction="row" alignItems="center" mb={2} spacing={2} flexWrap="wrap" useFlexGap>
                 <Typography variant="h5" fontWeight={800} sx={{ flexGrow: 1 }}>Reports</Typography>
                 <ToggleButtonGroup size="small" exclusive value={period} onChange={(_e, v) => v && setPeriod(v)}>
@@ -67,7 +78,7 @@ export default function Reports() {
                 <Grid item xs={6} md={3}><KpiCard label="Active alarms" value={alarms} color={alarms ? 'warning.main' : 'success.main'} /></Grid>
             </Grid>
 
-            <Paper>
+            <Paper sx={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
                 <Typography variant="h6" sx={{ p: 2, pb: 1 }}>
                     Consolidated fleet operations report
                     {period !== 'snapshot' && <Chip size="small" variant="outlined" label={period} sx={{ ml: 1, textTransform: 'capitalize' }} />}
@@ -76,8 +87,11 @@ export default function Reports() {
                     {period === 'snapshot'
                         ? 'Auto-generated snapshot — DWR consolidation, adoption and data-quality (proposal §6.1 reporting).'
                         : `Consolidated ${period} report aggregated over the trailing window (proposal §6.1 reporting).`}
+                    {windowInterval && (
+                        <Chip size="small" variant="outlined" label={`window: ${windowInterval}`} sx={{ ml: 1 }} />
+                    )}
                 </Typography>
-                <TableContainer sx={{ mt: 1 }}>
+                <TableContainer sx={{ mt: 1, flex: 1, minHeight: 0, overflow: 'auto' }}>
                     <Table size="small" stickyHeader>
                         <TableHead><TableRow>
                             <TableCell>Rig</TableCell><TableCell>Status</TableCell><TableCell>Activity</TableCell>

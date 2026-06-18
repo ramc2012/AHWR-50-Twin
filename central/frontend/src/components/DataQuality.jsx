@@ -28,7 +28,7 @@ export default function DataQuality() {
     const below = rows.filter((r) => r.lastDataAt && r.healthScore < 98).length;
 
     return (
-        <Box>
+        <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
             <Typography variant="h5" fontWeight={800} mb={2}>Data Quality Monitor</Typography>
             {err && <Alert severity="error" sx={{ mb: 2 }} onClose={() => setErr('')}>{err}</Alert>}
             <Grid container spacing={2} mb={2}>
@@ -38,8 +38,8 @@ export default function DataQuality() {
                 <Grid item xs={6} md={3}><KpiCard label="Below 98 target" value={below} color={below ? 'warning.main' : 'success.main'} /></Grid>
             </Grid>
 
-            <Paper>
-                <TableContainer>
+            <Paper sx={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+                <TableContainer sx={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
                     <Table size="small" stickyHeader>
                         <TableHead>
                             <TableRow>

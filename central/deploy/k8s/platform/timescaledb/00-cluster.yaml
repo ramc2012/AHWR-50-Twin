@@ -100,6 +100,22 @@ spec:
   superuserSecret:
     name: crmf-db-superuser
 
+  # ---- Application role login (audit #2) ----------------------------
+  # The schema (crmf-schema ConfigMap) runs as `postgres`, so the running app must connect
+  # as the least-privilege crmf_app role (chart config.PGUSER=crmf_app), which CANNOT drop
+  # or bypass the append-only audit_log trigger — keeping the audit trail tamper-evident.
+  # crmf_app is CREATEd by the schema; managed.roles gives it a login password. The
+  # crmf-db-app-login Secret (kubernetes.io/basic-auth, username crmf_app) MUST carry the
+  # SAME password as the backend's PGPASSWORD (crmf-secrets) — in production both are
+  # sourced from Vault / External-Secrets.
+  managed:
+    roles:
+      - name: crmf_app
+        ensure: present
+        login: true
+        passwordSecret:
+          name: crmf-db-app-login
+
   # ---- Monitoring (Prometheus Operator PodMonitor) ------------------
   monitoring:
     enablePodMonitor: true

@@ -1,59 +1,77 @@
 import React from 'react';
-import { Box, Paper, Typography, Stack } from '@mui/material';
+import { Box, Paper, Stack, Typography } from '@mui/material';
 import { useNavigate } from 'react-router-dom';
+import { MapContainer, TileLayer, CircleMarker, Tooltip } from 'react-leaflet';
+import 'leaflet/dist/leaflet.css';
 import { STATUS_COLOR } from '../theme';
 
-// Geographic scatter of the fleet over the Ankleshwar Asset (proposal §6.1 fleet map).
-export default function FleetMap({ rigs }) {
-    const nav = useNavigate();
-    const pts = rigs.filter((r) => r.latitude != null && r.longitude != null);
-    const W = 100, H = 64, pad = 6;
+// Interactive pan/zoom fleet map (Leaflet) over India — pan-ONGC. Each rig is a
+// status-coloured marker; clicking it opens the rig drill-down.
+//
+// Tiles default to CARTO dark (matches the ops theme). DATA RESIDENCY: a production
+// ONGC deployment (zero internet egress) should point VITE_MAP_TILE_URL at an
+// INTERNAL/offline tile server; the map, markers and pan/zoom work regardless of
+// whether the basemap tiles load.
+const TILE_URL = import.meta.env.VITE_MAP_TILE_URL
+    || 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png';
+const TILE_ATTR = import.meta.env.VITE_MAP_TILE_ATTR
+    || '&copy; OpenStreetMap contributors &copy; CARTO';
 
-    let minLat = Infinity, maxLat = -Infinity, minLon = Infinity, maxLon = -Infinity;
-    for (const r of pts) {
-        minLat = Math.min(minLat, r.latitude); maxLat = Math.max(maxLat, r.latitude);
-        minLon = Math.min(minLon, r.longitude); maxLon = Math.max(maxLon, r.longitude);
-    }
-    const sx = (lon) => pad + ((lon - minLon) / ((maxLon - minLon) || 1)) * (W - 2 * pad);
-    const sy = (lat) => pad + (1 - (lat - minLat) / ((maxLat - minLat) || 1)) * (H - 2 * pad);
+export default function FleetMap({ rigs = [] }) {
+    const nav = useNavigate();
+    const pts = rigs.filter((r) => Number.isFinite(Number(r.latitude)) && Number.isFinite(Number(r.longitude)));
 
     return (
-        <Paper sx={{ p: 2, height: '100%' }}>
-            <Typography variant="subtitle2" color="text.secondary" gutterBottom>FLEET MAP · ANKLESHWAR ASSET</Typography>
-            <Box sx={{ position: 'relative', width: '100%' }}>
-                <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', height: 'auto', background: 'linear-gradient(160deg,#0e1a30,#0a1322)', borderRadius: 8 }}>
-                    {/* subtle grid */}
-                    {[...Array(9)].map((_, i) => (
-                        <line key={'v' + i} x1={(W / 8) * i} y1={0} x2={(W / 8) * i} y2={H} stroke="rgba(255,255,255,0.04)" strokeWidth={0.2} />
-                    ))}
-                    {[...Array(6)].map((_, i) => (
-                        <line key={'h' + i} x1={0} y1={(H / 5) * i} x2={W} y2={(H / 5) * i} stroke="rgba(255,255,255,0.04)" strokeWidth={0.2} />
-                    ))}
-                    {pts.map((r) => {
-                        const c = STATUS_COLOR[r.status] || '#64748b';
-                        const live = r.status === 'online' || r.status === 'degraded';
-                        return (
-                            <g key={r.rigId} onClick={() => nav(`/rigs/${r.rigId}`)} style={{ cursor: 'pointer' }}>
-                                {live && <circle cx={sx(r.longitude)} cy={sy(r.latitude)} r={2.6} fill={c} opacity={0.25}>
-                                    <animate attributeName="r" values="2.2;4.2;2.2" dur="2.4s" repeatCount="indefinite" />
-                                    <animate attributeName="opacity" values="0.35;0;0.35" dur="2.4s" repeatCount="indefinite" />
-                                </circle>}
-                                <circle cx={sx(r.longitude)} cy={sy(r.latitude)} r={1.6} fill={c} stroke="#0b1220" strokeWidth={0.3}>
-                                    <title>{`${r.name} · ${r.status}${r.activeActivity ? ' · ' + r.activeActivity : ''}${r.alarm?.p1 ? ' · P1' : ''}`}</title>
-                                </circle>
-                            </g>
-                        );
-                    })}
-                </svg>
+        <Paper sx={{ height: '100%', width: '100%', overflow: 'hidden', position: 'relative' }}>
+            {/* Title overlay (top-right so it never collides with the Leaflet zoom control). */}
+            <Box sx={{ position: 'absolute', top: 8, right: 8, zIndex: 500, pointerEvents: 'none',
+                bgcolor: 'rgba(11,18,32,0.72)', px: 1, py: 0.4, borderRadius: 1, border: '1px solid rgba(255,255,255,0.08)' }}>
+                <Typography variant="caption" sx={{ fontWeight: 800, letterSpacing: 0.5, color: 'text.secondary' }}>
+                    FLEET MAP · PAN-ONGC
+                </Typography>
             </Box>
-            <Stack direction="row" spacing={2} mt={1} flexWrap="wrap" useFlexGap>
-                {Object.entries(STATUS_COLOR).map(([k, c]) => (
-                    <Stack key={k} direction="row" spacing={0.5} alignItems="center">
-                        <Box sx={{ width: 10, height: 10, borderRadius: '50%', bgcolor: c }} />
-                        <Typography variant="caption" color="text.secondary" textTransform="capitalize">{k}</Typography>
-                    </Stack>
-                ))}
-            </Stack>
+
+            <MapContainer
+                center={[22.5, 80]}
+                zoom={5}
+                minZoom={3}
+                scrollWheelZoom
+                worldCopyJump
+                style={{ height: '100%', width: '100%', background: '#0b1220' }}
+            >
+                <TileLayer url={TILE_URL} attribution={TILE_ATTR} subdomains="abcd" />
+                {pts.map((r) => {
+                    const color = STATUS_COLOR[r.status] || STATUS_COLOR.pending;
+                    return (
+                        <CircleMarker
+                            key={r.rigId}
+                            center={[Number(r.latitude), Number(r.longitude)]}
+                            radius={7}
+                            pathOptions={{ color: '#0b1220', weight: 1.5, fillColor: color, fillOpacity: 0.95 }}
+                            eventHandlers={{ click: () => nav(`/rigs/${r.rigId}`) }}
+                        >
+                            <Tooltip direction="top" offset={[0, -6]}>
+                                <strong>{r.name}</strong> · {r.assetUnit || r.field || '—'}<br />
+                                {String(r.status || '').toUpperCase()}
+                                {r.alarm?.p1 ? ' · P1' : ''}{r.activeActivity ? ` · ${r.activeActivity}` : ''}
+                            </Tooltip>
+                        </CircleMarker>
+                    );
+                })}
+            </MapContainer>
+
+            {/* Status legend overlay. */}
+            <Box sx={{ position: 'absolute', bottom: 8, left: 8, zIndex: 500,
+                bgcolor: 'rgba(11,18,32,0.78)', px: 1, py: 0.5, borderRadius: 1, border: '1px solid rgba(255,255,255,0.08)' }}>
+                <Stack direction="row" spacing={1.2} flexWrap="wrap" useFlexGap>
+                    {Object.entries(STATUS_COLOR).map(([k, c]) => (
+                        <Stack key={k} direction="row" spacing={0.5} alignItems="center">
+                            <Box sx={{ width: 9, height: 9, borderRadius: '50%', bgcolor: c }} />
+                            <Typography variant="caption" color="text.secondary" textTransform="capitalize">{k}</Typography>
+                        </Stack>
+                    ))}
+                </Stack>
+            </Box>
         </Paper>
     );
 }

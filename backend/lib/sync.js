@@ -15,6 +15,10 @@ const SCHEMA_VERSION = '1.0';
 const CONFIG_FILE = 'sync_config.json';
 const STATE_FILE = 'sync_state.json';
 const BUFFER_DIR = path.join(DATA_DIR, 'sync_buffer');
+const DEADLETTER_DIR = path.join(DATA_DIR, 'sync_deadletter');
+// Max transient (network/5xx) attempts on a single batch before it is dead-lettered,
+// so a poison batch can't wedge the oldest-first queue forever. Reset on restart.
+const SYNC_MAX_ATTEMPTS = Math.max(1, Number(process.env.SYNC_MAX_ATTEMPTS || 50));
 
 const DEFAULTS = {
     enabled: process.env.SYNC_ENABLED !== 'false',
@@ -30,7 +34,7 @@ const DEFAULTS = {
 };
 
 let config = { ...DEFAULTS, ...(readJson(CONFIG_FILE, {}) || {}) };
-let st = readJson(STATE_FILE, null) || { nextSeq: 1, droppedBatches: 0, sentBatches: 0, ackedBatches: 0, ackedPoints: 0 };
+let st = readJson(STATE_FILE, null) || { nextSeq: 1, droppedBatches: 0, deadLetteredBatches: 0, sentBatches: 0, ackedBatches: 0, ackedPoints: 0 };
 let connected = false;
 let lastSyncAt = null;     // last successful ack time
 let lastError = null;
@@ -40,6 +44,7 @@ const recent = [];         // ring of recent flattened snapshots (for WITSML exp
 const RECENT_MAX = 600;
 let io = null;
 let flushing = false;
+const attempts = new Map();   // batch filename -> transient failed-attempt count (in-memory)
 
 try { fs.mkdirSync(BUFFER_DIR, { recursive: true }); } catch { /* ignore */ }
 const persistState = () => writeJson(STATE_FILE, st).catch(() => {});
@@ -113,7 +118,7 @@ function prune() {
         try {
             const old = fs.statSync(p).mtimeMs < cutoff;
             const over = (files.length - dropped) > config.maxBufferFiles;
-            if (old || over) { fs.unlinkSync(p); dropped++; }
+            if (old || over) { fs.unlinkSync(p); attempts.delete(f); dropped++; }
         } catch { /* ignore */ }
     }
     if (dropped) { st.droppedBatches += dropped; persistState(); }
@@ -138,7 +143,28 @@ function postBatch(buf, seq) {
     });
 }
 
-// Drain oldest-first, bounded per cycle. Stops on first failure (back-pressure).
+// Move a poison/refused batch out of the replay queue so it can't block later batches.
+function deadLetter(f, reason) {
+    const src = path.join(BUFFER_DIR, f);
+    try {
+        fs.mkdirSync(DEADLETTER_DIR, { recursive: true });
+        fs.renameSync(src, path.join(DEADLETTER_DIR, f));
+    } catch {
+        try { fs.unlinkSync(src); } catch { /* ignore */ } // last resort: don't let it wedge the queue
+    }
+    attempts.delete(f);
+    st.deadLetteredBatches = (st.deadLetteredBatches || 0) + 1;
+    console.error(`[sync] dead-lettered ${f}: ${reason} -> ${DEADLETTER_DIR}`);
+}
+
+// Drain oldest-first, bounded per cycle. Failure handling distinguishes the BATCH being
+// bad from the LINK being down, so a WAN outage never loses good data:
+//   - 4xx (central refused the payload): dead-letter that batch and CONTINUE.
+//   - 5xx (central reached but errored): back-pressure + bounded retry; dead-letter only
+//     after SYNC_MAX_ATTEMPTS so a poison batch the server chokes on can't wedge forever.
+//   - network error / timeout (link DOWN): back-pressure ONLY — never dead-letter; the
+//     day-based buffer cap (maxBufferDays) is the sole bound, so the buffer replays IN
+//     FULL when the link returns.
 async function flush() {
     if (flushing || !config.enabled) return;
     flushing = true;
@@ -150,11 +176,32 @@ async function flush() {
             const r = await postBatch(buf, f);
             if (r.ok) {
                 try { fs.unlinkSync(p); } catch { /* ignore */ }
+                attempts.delete(f);
                 st.sentBatches += 1; st.ackedBatches += 1; st.ackedPoints += pointsOf(f);
                 connected = true; lastSyncAt = new Date().toISOString(); lastError = null;
+            } else if (typeof r.status === 'number' && r.status >= 400 && r.status < 500) {
+                // Permanent: central refused the payload itself (400/413/422/401...). The
+                // BATCH is the problem — dead-letter it and keep draining the rest.
+                lastError = `HTTP ${r.status} (rejected)`;
+                deadLetter(f, lastError);
+                continue;
+            } else if (typeof r.status === 'number' && r.status >= 500) {
+                // Central was REACHED but errored (5xx): a transient central issue, or a
+                // batch it consistently chokes on. Bound the retries so a poison batch
+                // can't wedge replay forever, but keep back-pressure meanwhile.
+                connected = false; lastError = `HTTP ${r.status}`;
+                const n = (attempts.get(f) || 0) + 1;
+                attempts.set(f, n);
+                if (n >= SYNC_MAX_ATTEMPTS) { deadLetter(f, `${lastError} after ${n} attempts`); continue; }
+                break;
             } else {
-                connected = false; lastError = r.err || `HTTP ${r.status}`;
-                break; // don't hammer a down link
+                // Could NOT reach central (network error / timeout): the LINK is down, not
+                // the batch. NEVER dead-letter here — keep the data so a multi-hour outage
+                // replays IN FULL on restore; the only bound is the day-based buffer cap
+                // (maxBufferDays). Clear any prior 5xx streak so it doesn't carry over.
+                connected = false; lastError = r.err || 'unreachable';
+                attempts.delete(f);
+                break; // back-pressure: don't hammer a down link
             }
         }
         persistState();
@@ -185,6 +232,7 @@ function getStatus() {
         ackedBatches: st.ackedBatches,
         ackedPoints: st.ackedPoints,
         droppedBatches: st.droppedBatches,
+        deadLetteredBatches: st.deadLetteredBatches || 0,
     };
 }
 

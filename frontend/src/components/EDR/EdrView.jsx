@@ -733,6 +733,207 @@ function StripVariables({ strip, latest, compact, surface, border, subText }) {
 }
 
 // ---------------------------------------------------------------------------
+// Depth track — the leftmost EDR column.
+//
+// Reuses the EXACT same row metrics as a pen strip (header height, chart band,
+// fixed bottom-block height) so it is header-aligned and baseline-aligned with
+// every other strip. The chart band hosts the shared depth/time axis: the same
+// horizontal gridlines the strips draw (same hTickCount formula keyed off the
+// measured chart height) plus tick labels sitting ON those gridlines, so a
+// viewer reads the index across all strips on the same rows. A thin hole-depth
+// trace is drawn in depth mode where the bin data supports it. The fixed bottom
+// block holds the live HOLE DEPTH + BIT DEPTH readouts on the shared baseline.
+//
+// Drag-to-scroll on the chart band mirrors the old standalone axis behaviour.
+// ---------------------------------------------------------------------------
+
+function DepthAxisChart({
+    indexMode,
+    indexDomain,
+    axisTicks,
+    samples,
+    maxDepth,
+    gridColor,
+    subText,
+    accent,
+    onPointerDown,
+    onPointerMove,
+    onPointerUp
+}) {
+    const ref = useRef(null);
+    const [size, setSize] = useState({ w: 60, h: 260 });
+
+    useEffect(() => {
+        const el = ref.current;
+        if (!el || typeof ResizeObserver === 'undefined') return undefined;
+        const ro = new ResizeObserver(entries => {
+            const cr = entries[0]?.contentRect;
+            if (cr) setSize({ w: Math.max(20, cr.width), h: Math.max(40, cr.height) });
+        });
+        ro.observe(el);
+        return () => ro.disconnect();
+    }, []);
+
+    const { w, h } = size;
+
+    // SAME horizontal gridline math as StripChart so labels land on the exact
+    // rows the strips draw their gridlines.
+    const hTickCount = Math.max(2, Math.min(8, Math.round(h / 48)));
+    const hLines = Array.from({ length: hTickCount + 1 }, (_, i) => (i / hTickCount));
+
+    // Thin hole-depth trace (depth mode only — the index IS depth, so the trace
+    // is a monotonic diagonal that visually ties depth to the gridlines).
+    const [d0, d1] = indexDomain;
+    const span = d1 - d0 || 1;
+    const depthTracePath = useMemo(() => {
+        if (indexMode !== 'depth' || !samples.length) return '';
+        // In depth mode the y-position already encodes depth; draw a guide line
+        // from the top of the visible window down to the current max depth so the
+        // operator sees how much of the window holds real (drilled) hole.
+        const yMax = Math.max(0, Math.min(1, (maxDepth - d0) / span)) * h;
+        if (yMax <= 0) return '';
+        const x = w * 0.5;
+        return `M${x.toFixed(1)},0L${x.toFixed(1)},${yMax.toFixed(1)}`;
+    }, [indexMode, samples.length, maxDepth, d0, span, h, w]);
+
+    return (
+        <Box
+            ref={ref}
+            onPointerDown={onPointerDown}
+            onPointerMove={onPointerMove}
+            onPointerUp={onPointerUp}
+            onPointerLeave={onPointerUp}
+            sx={{ position: 'relative', width: '100%', height: '100%', cursor: 'ns-resize', userSelect: 'none', touchAction: 'none' }}
+        >
+            <svg width="100%" height="100%" viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" style={{ display: 'block' }}>
+                {/* SAME horizontal gridlines as the strips */}
+                {hLines.map((f, i) => (
+                    <line key={`h${i}`} x1={0} x2={w} y1={f * h} y2={f * h} stroke={gridColor} strokeWidth={0.5} />
+                ))}
+                {/* thin hole-depth guide trace (depth mode) */}
+                {depthTracePath && (
+                    <path
+                        d={depthTracePath}
+                        fill="none"
+                        stroke="#22d3ee"
+                        strokeWidth={2}
+                        strokeLinecap="round"
+                        opacity={0.85}
+                        vectorEffect="non-scaling-stroke"
+                    />
+                )}
+            </svg>
+            {/* axis unit caption */}
+            <Typography sx={{ position: 'absolute', top: 4, left: 0, right: 0, textAlign: 'center', fontSize: '0.6rem', fontWeight: 800, color: subText, textTransform: 'uppercase', pointerEvents: 'none' }}>
+                {indexMode === 'depth' ? 'm' : 'time'}
+            </Typography>
+            {/* tick labels pinned to the gridline fractions (axisTicks share the same domain) */}
+            {axisTicks.map((t, i) => (
+                <Box key={i} sx={{ position: 'absolute', left: 0, right: 0, top: `${t.frac * 100}%`, transform: 'translateY(-50%)', px: 0.25, pointerEvents: 'none' }}>
+                    <Typography sx={{ fontSize: '0.62rem', color: subText, textAlign: 'center', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
+                        {t.label}
+                    </Typography>
+                </Box>
+            ))}
+        </Box>
+    );
+}
+
+function DepthTrack({
+    indexMode,
+    indexDomain,
+    axisTicks,
+    samples,
+    maxDepth,
+    holeDepthVal,
+    bitDepthVal,
+    headerH,
+    bottomH,
+    chartBg,
+    panelBg,
+    border,
+    gridColor,
+    text,
+    subText,
+    accent,
+    onPointerDown,
+    onPointerMove,
+    onPointerUp
+}) {
+    // HOLE / BIT depth as the bottom block, on the SAME baseline + height as the
+    // strips' StripVariables block. We mirror StripVariables' geometry (fixed
+    // BOTTOM_H, mt: 0.5) exactly rather than hardcoding divergent values.
+    const rows = [
+        { id: HOLE_DEPTH_METRIC, value: holeDepthVal, color: '#22d3ee' },
+        { id: BIT_DEPTH_METRIC, value: bitDepthVal, color: '#fbbf24' }
+    ];
+    return (
+        <Box sx={{ flex: '0 0 132px', minWidth: 0, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+            {/* header — same height/style as a strip header, titled DEPTH */}
+            <Box sx={{ height: headerH, display: 'flex', alignItems: 'center', gap: 0.5, mb: '4px' }}>
+                <Gauge size={14} color={subText} style={{ flex: '0 0 auto' }} />
+                <Typography sx={{ flex: 1, minWidth: 0, color: text, fontSize: '0.74rem', fontWeight: 900, textTransform: 'uppercase', letterSpacing: 0.3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    Depth
+                </Typography>
+            </Box>
+            {/* chart band — same chartTop..chartBottom band as the strips; hosts the depth axis */}
+            <Box sx={{ flex: '1 1 auto', minHeight: 0, bgcolor: chartBg, border: `1px solid ${border}`, borderRadius: 1, overflow: 'hidden' }}>
+                <DepthAxisChart
+                    indexMode={indexMode}
+                    indexDomain={indexDomain}
+                    axisTicks={axisTicks}
+                    samples={samples}
+                    maxDepth={maxDepth}
+                    gridColor={gridColor}
+                    subText={subText}
+                    accent={accent}
+                    onPointerDown={onPointerDown}
+                    onPointerMove={onPointerMove}
+                    onPointerUp={onPointerUp}
+                />
+            </Box>
+            {/* fixed-height bottom block — mirrors StripVariables geometry for an exact baseline match */}
+            <Box
+                sx={{
+                    flex: `0 0 ${bottomH}px`,
+                    height: bottomH,
+                    mt: 0.5,
+                    bgcolor: panelBg,
+                    border: `1px solid ${border}`,
+                    borderRadius: 1,
+                    px: 0.75,
+                    py: 0.5,
+                    display: 'flex',
+                    flexDirection: 'column',
+                    justifyContent: 'space-evenly',
+                    overflow: 'hidden'
+                }}
+            >
+                {rows.map((r) => {
+                    const unit = channelUnit(r.id);
+                    return (
+                        <Box key={r.id} sx={{ display: 'flex', flexDirection: 'column', minWidth: 0, lineHeight: 1.05 }}>
+                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, minWidth: 0 }}>
+                                <Box sx={{ width: 8, height: 8, borderRadius: '2px', bgcolor: r.color, flex: '0 0 auto' }} />
+                                <Typography sx={{ color: subText, fontSize: '0.6rem', fontWeight: 800, textTransform: 'uppercase', letterSpacing: 0.2, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                    {channelLabel(r.id)}
+                                </Typography>
+                            </Box>
+                            <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 0.4, pl: 1.4 }}>
+                                <Typography sx={{ color: text, fontSize: '1.35rem', fontWeight: 900, lineHeight: 1.05, fontVariantNumeric: 'tabular-nums' }}>
+                                    {fmtValue(r.value, channelPrecision(r.id))}
+                                </Typography>
+                                <Typography sx={{ color: subText, fontSize: '0.66rem', fontWeight: 700 }}>{unit}</Typography>
+                            </Box>
+                        </Box>
+                    );
+                })}
+            </Box>
+        </Box>
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Per-strip config dialog
 // ---------------------------------------------------------------------------
 
@@ -1219,7 +1420,9 @@ export default function EdrView({
             {showTopReadouts && (
                 <Box sx={{ display: 'flex', alignItems: 'stretch', gap: 0.75, mb: 1 }}>
                     {showLeftDepth && (
-                        <Box sx={{ flex: `0 0 ${axisWidth + 168}px`, display: 'flex', alignItems: 'center', gap: 0.6, pl: 0.5 }}>
+                        /* Spacer aligning the top readout row with the strips column:
+                           depth track (132) + gap + left scroll rail (~30) + gap. */
+                        <Box sx={{ flex: '0 0 176px', display: 'flex', alignItems: 'center', gap: 0.6, pl: 0.5 }}>
                             <Gauge size={16} color={subText} />
                             <Typography sx={{ color: subText, fontSize: '0.66rem', fontWeight: 800, textTransform: 'uppercase', letterSpacing: 0.5 }}>
                                 Depth
@@ -1272,44 +1475,61 @@ export default function EdrView({
 
             {/* Strip area */}
             <Box ref={stripAreaRef} sx={{ flex: '1 1 auto', minHeight: 0, display: 'flex', gap: 0.75 }}>
-                {/* Left depth band (full mode): HOLE DEPTH + BIT DEPTH, always shown. */}
-                {showLeftDepth && (
+                {/* Leftmost DEPTH track (full mode): header + depth-axis chart band + HOLE/BIT
+                    depth bottom block, all sharing the strips' row metrics so it aligns exactly.
+                    The depth/time axis is folded into this track's chart band. */}
+                {showLeftDepth ? (
+                    <DepthTrack
+                        indexMode={indexMode}
+                        indexDomain={indexDomain}
+                        axisTicks={axisTicks}
+                        samples={samples}
+                        maxDepth={maxDepth}
+                        holeDepthVal={holeDepthVal}
+                        bitDepthVal={bitDepthVal}
+                        headerH={headerH}
+                        bottomH={bottomH}
+                        chartBg={chartBg}
+                        panelBg={panelBg}
+                        border={border}
+                        gridColor={gridColor}
+                        text={text}
+                        subText={subText}
+                        accent={accent}
+                        onPointerDown={onAxisPointerDown}
+                        onPointerMove={onAxisPointerMove}
+                        onPointerUp={onAxisPointerUp}
+                    />
+                ) : (
+                    /* Compact mode: keep the slim standalone index axis (no depth track). */
                     <Box
+                        onPointerDown={onAxisPointerDown}
+                        onPointerMove={onAxisPointerMove}
+                        onPointerUp={onAxisPointerUp}
+                        onPointerLeave={onAxisPointerUp}
                         sx={{
-                            flex: '0 0 168px',
-                            display: 'flex',
-                            flexDirection: 'column',
-                            gap: 0.75,
+                            flex: `0 0 ${axisWidth}px`,
+                            bgcolor: panelBg,
+                            border: `1px solid ${border}`,
+                            borderRadius: 1,
+                            position: 'relative',
+                            cursor: 'ns-resize',
+                            userSelect: 'none',
+                            touchAction: 'none',
                             mt: `${railTop}px`,
                             mb: `${railBottom}px`
                         }}
                     >
-                        <ReadoutTile
-                            id={HOLE_DEPTH_METRIC}
-                            value={holeDepthVal}
-                            surface={panelBg}
-                            border={border}
-                            text={text}
-                            subText={subText}
-                            accent="#22d3ee"
-                            valueColor={text}
-                            valueSize="2.2rem"
-                            minWidth={0}
-                            showCategory={false}
-                        />
-                        <ReadoutTile
-                            id={BIT_DEPTH_METRIC}
-                            value={bitDepthVal}
-                            surface={panelBg}
-                            border={border}
-                            text={text}
-                            subText={subText}
-                            accent="#fbbf24"
-                            valueColor={text}
-                            valueSize="2.2rem"
-                            minWidth={0}
-                            showCategory={false}
-                        />
+                        <Typography sx={{ position: 'absolute', top: 4, left: 0, right: 0, textAlign: 'center', fontSize: '0.6rem', fontWeight: 800, color: subText, textTransform: 'uppercase' }}>
+                            {indexMode === 'depth' ? 'm' : 'time'}
+                        </Typography>
+                        {axisTicks.map((t, i) => (
+                            <Box key={i} sx={{ position: 'absolute', left: 0, right: 0, top: `${t.frac * 100}%`, transform: 'translateY(-50%)', px: 0.25 }}>
+                                <Typography sx={{ fontSize: '0.55rem', color: subText, textAlign: 'center', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
+                                    {t.label}
+                                </Typography>
+                            </Box>
+                        ))}
                     </Box>
                 )}
 
@@ -1328,39 +1548,6 @@ export default function EdrView({
                     top={railTop}
                     bottom={railBottom}
                 />
-
-                {/* Shared index axis */}
-                <Box
-                    onPointerDown={onAxisPointerDown}
-                    onPointerMove={onAxisPointerMove}
-                    onPointerUp={onAxisPointerUp}
-                    onPointerLeave={onAxisPointerUp}
-                    sx={{
-                        flex: `0 0 ${axisWidth}px`,
-                        bgcolor: panelBg,
-                        border: `1px solid ${border}`,
-                        borderRadius: 1,
-                        position: 'relative',
-                        cursor: 'ns-resize',
-                        userSelect: 'none',
-                        touchAction: 'none',
-                        // align with the chart area: skip the strip header at the top
-                        // and the fixed variables block at the bottom.
-                        mt: `${railTop}px`,
-                        mb: `${railBottom}px`
-                    }}
-                >
-                    <Typography sx={{ position: 'absolute', top: 4, left: 0, right: 0, textAlign: 'center', fontSize: '0.6rem', fontWeight: 800, color: subText, textTransform: 'uppercase' }}>
-                        {indexMode === 'depth' ? 'm' : 'time'}
-                    </Typography>
-                    {axisTicks.map((t, i) => (
-                        <Box key={i} sx={{ position: 'absolute', left: 0, right: 0, top: `${t.frac * 100}%`, transform: 'translateY(-50%)', px: 0.25 }}>
-                            <Typography sx={{ fontSize: isCompact ? '0.55rem' : '0.62rem', color: subText, textAlign: 'center', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
-                                {t.label}
-                            </Typography>
-                        </Box>
-                    ))}
-                </Box>
 
                 {/* Strips */}
                 <Box sx={{ flex: 1, minWidth: 0, display: 'flex', gap: 0.75 }}>

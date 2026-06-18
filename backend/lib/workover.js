@@ -186,8 +186,36 @@ function getDailyReport(date) {
     };
 }
 
+// Aggregate activity + connections over an arbitrary window (used to summarise a WELL,
+// which spans multiple days). startIso required; endIso defaults to now.
+function windowSummary(startIso, endIso) {
+    const startMs = Date.parse(startIso); const endMs = endIso ? Date.parse(endIso) : Date.now();
+    if (!Number.isFinite(startMs)) return null;
+    const inWin = (iso) => { const t = Date.parse(iso); return t >= startMs && t <= endMs; };
+    const entries = log.filter((e) => inWin(e.start)).map((e) => ({ ...e, durationSec: e.durationSec != null ? e.durationSec : Math.round((Math.min(Date.now(), endMs) - Date.parse(e.start)) / 1000) }));
+    const byCode = {}; let productiveSec = 0, nptSec = 0;
+    for (const e of entries) {
+        byCode[e.code] = byCode[e.code] || { code: e.code, label: e.label, durationSec: 0, productive: e.productive };
+        byCode[e.code].durationSec += e.durationSec || 0;
+        if (e.productive) productiveSec += e.durationSec || 0; else nptSec += e.durationSec || 0;
+    }
+    const depths = entries.map((e) => e.depth).filter((x) => x != null);
+    const recs = conn.records.filter((r) => inWin(r.ts));
+    return {
+        startedAt: startIso, endedAt: endIso || nowIso(endMs),
+        durationHrs: Number(((endMs - startMs) / 3600000).toFixed(2)),
+        productiveSec, nptSec,
+        activitySummary: Object.values(byCode).sort((a, b) => b.durationSec - a.durationSec),
+        connections: { run: recs.length, pass: recs.filter((r) => r.result === 'PASS').length, fail: recs.filter((r) => r.result === 'FAIL').length },
+        joints: recs.length,
+        depthStart: depths.length ? depths[0] : null,
+        depthEnd: depths.length ? depths[depths.length - 1] : null,
+        depthProgress: depths.length ? Number((depths[depths.length - 1] - depths[0]).toFixed(2)) : 0,
+    };
+}
+
 module.exports = {
     updateActivity, setActivity, getCurrent, getCodes, getLog,
     updateTorqueTurn, getTorqueTurnLive, getConnections,
-    getDailyReport, getHeader, setHeader,
+    getDailyReport, getHeader, setHeader, windowSummary,
 };

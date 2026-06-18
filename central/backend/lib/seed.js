@@ -1,13 +1,62 @@
 'use strict';
-// Idempotent seed for a demonstrable fleet: 50-rig registry around the Ankleshwar
-// Asset at varied rollout stages (proposal §6.2 rig master, §8 stage-gate plan),
-// the standard tag dictionary, default portal users, and §7 value-realization KPIs.
+// Idempotent seed for a demonstrable fleet: a 50-rig registry distributed across
+// ONGC's pan-India Asset units at varied rollout stages (proposal §6.2 rig master,
+// §8 stage-gate plan), the standard tag dictionary, default portal users, and §7
+// value-realization KPIs.
 const { query } = require('./db');
 const { hash } = require('./auth');
 const { TAGS } = require('./tags');
 
 const FLEET_SIZE = Number(process.env.FLEET_SIZE || 50);
-const ANK_LAT = 21.628, ANK_LON = 73.014; // Ankleshwar Asset, Gujarat
+// Rigs the fleet-sim streams live (must match fleet-sim/sim.js ACTIVE_RIGS). Each
+// gets a current well seeded under its sim job name so the Wells list shows the
+// live, rig-attached wells from the very first boot.
+const ACTIVE_RIGS = Number(process.env.ACTIVE_RIGS || 14);
+
+// Pan-ONGC Asset units (real ONGC assets, representative lat/lon). The India map
+// and these seed coordinates must agree so rig dots land in the right region.
+// [name, field, lat, lon]
+const ASSET_UNITS = [
+    ['Mumbai High',          'Mumbai High',        19.45, 71.30],
+    ['Bassein & Satellite',  'Bassein',            19.60, 71.95],
+    ['Mehsana',              'Mehsana',            23.60, 72.40],
+    ['Ahmedabad',            'Ahmedabad',          23.03, 72.58],
+    ['Ankleshwar',           'Ankleshwar',         21.63, 73.01],
+    ['Cambay',               'Cambay',             22.30, 72.62],
+    ['Rajahmundry (KG)',     'KG Basin',           17.00, 81.78],
+    ['Karaikal (Cauvery)',   'Cauvery',            10.92, 79.84],
+    ['Assam (Sivasagar)',    'Sivasagar',          26.98, 94.64],
+    ['Tripura (Agartala)',   'Tripura',            23.83, 91.28],
+    ['Rajasthan (Barmer)',   'Barmer',             26.10, 71.40],
+    ['Jorhat (Assam)',       'Jorhat',             26.75, 94.22],
+];
+const UNIT_BY_NAME = Object.fromEntries(ASSET_UNITS.map((u) => [u[0], u]));
+
+// Assign each rig (1..50) to an Asset unit. The first ~14 rigs — the ones the
+// fleet-sim streams live — are spread across a handful of units (Ankleshwar,
+// Mumbai High, Assam, Rajahmundry/KG, Mehsana) so the India map shows live dots
+// in multiple regions. The remainder are distributed round-robin so every unit is
+// represented.
+function unitFor(n) {
+    const live = {
+        1: 'Ankleshwar', 2: 'Ankleshwar', 3: 'Ankleshwar',
+        4: 'Mumbai High', 5: 'Mumbai High', 6: 'Mumbai High',
+        7: 'Assam (Sivasagar)', 8: 'Assam (Sivasagar)',
+        9: 'Rajahmundry (KG)', 10: 'Rajahmundry (KG)',
+        11: 'Mehsana', 12: 'Mehsana',
+        13: 'Bassein & Satellite', 14: 'Cambay',
+    };
+    if (live[n]) return UNIT_BY_NAME[live[n]];
+    // Round-robin the rest across all units so each Asset is on the map.
+    return ASSET_UNITS[(n - 1) % ASSET_UNITS.length];
+}
+
+// Deterministic small jitter (±~0.25°) around an Asset centroid so each unit reads
+// as a cluster of rigs rather than a single overlapping dot.
+function jitter(n, salt) {
+    const s = Math.sin(n * 12.9898 + salt * 78.233) * 43758.5453;
+    return (s - Math.floor(s) - 0.5) * 0.5; // ~[-0.25, +0.25]
+}
 
 // Stage-gate distribution across the fleet (demonstrates rollout governance).
 function plan(n) {
@@ -23,15 +72,15 @@ async function seedRigs() {
         const rigId = `AHWR-50-${n}`;
         const name = `AHWR-${String(n).padStart(2, '0')}`;
         const p = plan(n);
-        // Cluster the rigs across the field with a deterministic spiral so the map reads as an oilfield.
-        const ang = n * 2.39996, rad = 0.02 + (n % 12) * 0.012;
-        const lat = ANK_LAT + Math.sin(ang) * rad + ((n % 5) - 2) * 0.006;
-        const lon = ANK_LON + Math.cos(ang) * rad + ((n % 7) - 3) * 0.006;
+        const [assetUnit, field, baseLat, baseLon] = unitFor(n);
+        // Cluster near the unit centroid with deterministic ±0.25° jitter.
+        const lat = baseLat + jitter(n, 1);
+        const lon = baseLon + jitter(n, 2);
         await query(
-            `INSERT INTO rigs (rig_id, name, section, field, latitude, longitude, commissioned_at, status, schema_version)
-             VALUES ($1,$2,'Workover Services','Ankleshwar',$3,$4,$5,$6,'1.0')
+            `INSERT INTO rigs (rig_id, name, section, asset_unit, field, latitude, longitude, commissioned_at, status, schema_version)
+             VALUES ($1,$2,'Workover Services',$3,$4,$5,$6,$7,$8,'1.0')
              ON CONFLICT (rig_id) DO NOTHING`,
-            [rigId, name, Number(lat.toFixed(5)), Number(lon.toFixed(5)),
+            [rigId, name, assetUnit, field, Number(lat.toFixed(5)), Number(lon.toFixed(5)),
              p.commissioning === 'commissioned' ? '2026-01-15' : null,
              p.gate === 'gate0' || p.gate === 'discovery' ? 'pending' : 'offline']);
         await query(
@@ -94,10 +143,21 @@ async function seedValueMetrics() {
 async function seedGovernanceExtras() {
     const { rows } = await query('SELECT count(*)::int AS c FROM escalations');
     if (rows[0].c === 0) {
-        await query(`INSERT INTO escalations (rig_id, title, severity, status, owner, notes) VALUES
-            ('AHWR-50-21','Cellular link unstable — sync lag > 10 min during peak','high','open','Instrumentation','Dual-SIM failover not provisioned; VSAT survey requested'),
-            ('AHWR-50-28','PLC tag access pending vendor approval','medium','in_progress','Asset OT','Read-only tap design submitted for security review'),
-            ('AHWR-50-33','Panel temperature alarms during commissioning','low','open','Site team','Ventilation kit dispatched')`);
+        // Each demo escalation references a specific rig — guard with WHERE EXISTS so a
+        // small fleet (e.g. a 3-edge pilot with FLEET_SIZE < 33) doesn't hit the
+        // escalations_rig_id_fkey FK and abort seeding. Same pattern as the wells/
+        // maintenance seeds below. Escalations for rigs outside the fleet are skipped.
+        const escalations = [
+            ['AHWR-50-21', 'Cellular link unstable — sync lag > 10 min during peak', 'high', 'open', 'Instrumentation', 'Dual-SIM failover not provisioned; VSAT survey requested'],
+            ['AHWR-50-28', 'PLC tag access pending vendor approval', 'medium', 'in_progress', 'Asset OT', 'Read-only tap design submitted for security review'],
+            ['AHWR-50-33', 'Panel temperature alarms during commissioning', 'low', 'open', 'Site team', 'Ventilation kit dispatched'],
+        ];
+        for (const e of escalations) {
+            await query(
+                `INSERT INTO escalations (rig_id, title, severity, status, owner, notes)
+                 SELECT $1,$2,$3,$4,$5,$6 WHERE EXISTS (SELECT 1 FROM rigs WHERE rig_id = $1)`,
+                e);
+        }
     }
     const d = await query('SELECT count(*)::int AS c FROM decisions');
     if (d.rows[0].c === 0) {
@@ -162,6 +222,88 @@ async function seedNotificationChannels() {
          VALUES ('webhook', 'Demo webhook (notify-sink)', $1, 'P1', true)`, [url]);
 }
 
+// ---------------------------------------------------------------------
+// Well management seed (WITSML-inspired; proposal §6.1 well drill-down).
+// 1) For each STREAMING rig, seed its CURRENT well under the rig's sim job name
+//    (well_id = base job name, type/status 'workover', asset/field/coords copied
+//    from the rig, current_rig_id = rig). Runs accrue at runtime from trackRun.
+// 2) ~25 EXTRA wells across asset units with varied lifecycle/type/operator/depth
+//    and NO current rig, so the Wells list is rich on first boot.
+// Idempotent: ON CONFLICT DO NOTHING (and trackRun owns current_rig_id at runtime).
+// ---------------------------------------------------------------------
+
+// Base sim job name for rig n — MUST match fleet-sim/sim.js (the base of its
+// 3-well rotation set). The rotating siblings are created at runtime by trackRun.
+function baseJobFor(n) { return `GS-${10 + n}#${3 + (n % 5)}`; }
+
+async function seedWells() {
+    // Guard on table existence so the backend still boots if the wells tables have
+    // not been applied yet (defensive, idempotent).
+    const reg = await query("SELECT to_regclass('public.wells') AS t");
+    if (!reg.rows[0] || !reg.rows[0].t) {
+        console.warn('Seed: wells table not present yet — skipping well seed.');
+        return;
+    }
+
+    // 1) Current well per streaming rig (job-name = well-name, attached to the rig).
+    const liveCount = Math.min(ACTIVE_RIGS, FLEET_SIZE);
+    for (let n = 1; n <= liveCount; n++) {
+        const rigId = `AHWR-50-${n}`;
+        const job = baseJobFor(n);
+        const [assetUnit, field, baseLat, baseLon] = unitFor(n);
+        const lat = Number((baseLat + jitter(n, 3)).toFixed(5));
+        const lon = Number((baseLon + jitter(n, 4)).toFixed(5));
+        const spud = new Date(Date.now() - (30 + (n % 20)) * 86400000).toISOString().slice(0, 10);
+        await query(
+            `INSERT INTO wells
+               (well_id, name, uwi, well_type, status, field, asset_unit, latitude, longitude,
+                spud_date, total_depth, operator, current_rig_id)
+             SELECT $1,$1,$2,'workover','workover',$3,$4,$5,$6,$7,$8,'ONGC',$9
+             WHERE EXISTS (SELECT 1 FROM rigs WHERE rig_id = $9)
+             ON CONFLICT (well_id) DO NOTHING`,
+            [job, `IN-ONGC-${1000 + n}`, field, assetUnit, lat, lon, spud,
+             Number((1500 + (n % 7) * 60).toFixed(0)), rigId]);
+    }
+
+    // 2) ~25 extra wells across asset units (varied lifecycle), NO current rig.
+    // [suffix, well_type, status, totalDepth]
+    const profiles = [
+        ['production', 'producing', 1820], ['production', 'producing', 2050],
+        ['injection', 'producing', 1640], ['production', 'suspended', 1910],
+        ['exploration', 'planned', 2600], ['appraisal', 'planned', 2380],
+        ['production', 'completed', 1750], ['workover', 'workover', 1480],
+        ['production', 'abandoned', 1990], ['injection', 'suspended', 1560],
+        ['production', 'producing', 2120], ['exploration', 'drilling', 2740],
+        ['production', 'producing', 1880], ['appraisal', 'completed', 2290],
+        ['production', 'suspended', 1700], ['injection', 'producing', 1610],
+        ['production', 'producing', 1960], ['workover', 'workover', 1520],
+        ['production', 'abandoned', 1840], ['exploration', 'planned', 2810],
+        ['production', 'producing', 2030], ['appraisal', 'drilling', 2470],
+        ['production', 'completed', 1790], ['injection', 'suspended', 1580],
+        ['production', 'producing', 2160],
+    ];
+    let idx = 0;
+    for (const [wellType, status, td] of profiles) {
+        idx += 1;
+        // Spread across all asset units round-robin.
+        const [assetUnit, field, baseLat, baseLon] = ASSET_UNITS[(idx - 1) % ASSET_UNITS.length];
+        const wellId = `${field.replace(/[^A-Za-z0-9]/g, '').slice(0, 6).toUpperCase()}-${100 + idx}`;
+        const lat = Number((baseLat + jitter(idx + 100, 5)).toFixed(5));
+        const lon = Number((baseLon + jitter(idx + 100, 6)).toFixed(5));
+        const spud = (status === 'planned')
+            ? null
+            : new Date(Date.now() - (90 + idx * 11) * 86400000).toISOString().slice(0, 10);
+        await query(
+            `INSERT INTO wells
+               (well_id, name, uwi, well_type, status, field, asset_unit, latitude, longitude,
+                spud_date, total_depth, operator, block_lease)
+             VALUES ($1,$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'ONGC',$11)
+             ON CONFLICT (well_id) DO NOTHING`,
+            [wellId, `IN-ONGC-${2000 + idx}`, wellType, status, field, assetUnit, lat, lon,
+             spud, td, `${field} Block`]);
+    }
+}
+
 async function seedAll() {
     await seedRigs();
     await seedTags();
@@ -170,7 +312,8 @@ async function seedAll() {
     await seedGovernanceExtras();
     await seedMaintenance();
     await seedNotificationChannels();
-    console.log(`Seed complete: ${FLEET_SIZE}-rig registry, tag dictionary, users, value metrics, maintenance records.`);
+    await seedWells();
+    console.log(`Seed complete: ${FLEET_SIZE}-rig registry across ${ASSET_UNITS.length} ONGC Asset units, tag dictionary, users, value metrics, maintenance records, wells.`);
 }
 
 module.exports = { seedAll };

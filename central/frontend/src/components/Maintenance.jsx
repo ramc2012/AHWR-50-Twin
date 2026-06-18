@@ -81,7 +81,7 @@ export default function Maintenance() {
     const s = summary || {};
 
     return (
-        <Box>
+        <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
             <Stack direction="row" alignItems="center" spacing={2} mb={2} flexWrap="wrap" useFlexGap>
                 <Typography variant="h5" fontWeight={800} sx={{ flexGrow: 1 }}>Maintenance &amp; Reliability</Typography>
                 <ToggleButtonGroup size="small" exclusive value={filter} onChange={(_e, v) => v && setFilter(v)}>
@@ -100,11 +100,11 @@ export default function Maintenance() {
                 <Grid item xs={6} md={3}><KpiCard label="Breakdowns" value={s.breakdownCount ?? 0} color={(s.breakdownCount ?? 0) ? 'warning.main' : 'success.main'} /></Grid>
             </Grid>
 
-            <Grid container spacing={2}>
-                <Grid item xs={12} md={s.byRig?.length ? 8 : 12}>
-                    <Paper>
+            <Grid container spacing={2} sx={{ flex: 1, minHeight: 0 }}>
+                <Grid item xs={12} md={s.byRig?.length ? 8 : 12} sx={{ display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+                    <Paper sx={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
                         <Typography variant="h6" sx={{ p: 2, pb: 1 }}>Maintenance records</Typography>
-                        <TableContainer sx={{ maxHeight: 560 }}>
+                        <TableContainer sx={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
                             <Table size="small" stickyHeader>
                                 <TableHead><TableRow>
                                     <TableCell>Rig</TableCell><TableCell>Type</TableCell><TableCell>Title</TableCell>
@@ -154,8 +154,8 @@ export default function Maintenance() {
                 </Grid>
 
                 {!!s.byRig?.length && (
-                    <Grid item xs={12} md={4}>
-                        <Paper sx={{ p: 2, maxHeight: 600, overflow: 'auto' }}>
+                    <Grid item xs={12} md={4} sx={{ display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+                        <Paper sx={{ p: 2, flex: 1, minHeight: { xs: 240, md: 0 }, overflow: 'auto' }}>
                             <Typography variant="h6" gutterBottom>PM compliance by rig</Typography>
                             <Stack spacing={1.5} mt={1}>
                                 {s.byRig.map((b) => {

@@ -34,7 +34,7 @@ export default function AlarmCommandCentre() {
     const p1 = rows.reduce((s, r) => s + (r.p1 || 0), 0);
 
     return (
-        <Box>
+        <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
             <Stack direction="row" alignItems="center" spacing={2} mb={2} flexWrap="wrap" useFlexGap>
                 <Typography variant="h5" fontWeight={800} sx={{ flexGrow: 1 }}>Alarm Command Centre</Typography>
                 <ToggleButtonGroup size="small" exclusive value={priority} onChange={(_e, v) => v && setPriority(v)}>
@@ -50,8 +50,8 @@ export default function AlarmCommandCentre() {
                 ? <Alert severity="error" sx={{ mb: 2 }}>{p1} priority-1 condition(s) active — ESD / lockout / well-control. Read-only: the CRMF surfaces these for surveillance; it never actuates rig control.</Alert>
                 : <Alert severity="success" sx={{ mb: 2 }}>No priority-1 conditions across the fleet.</Alert>}
 
-            <Paper>
-                <TableContainer>
+            <Paper sx={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+                <TableContainer sx={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
                     <Table size="small" stickyHeader>
                         <TableHead>
                             <TableRow>

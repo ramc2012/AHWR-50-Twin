@@ -29,7 +29,7 @@ export default function WorkoverPerformance() {
     const fleetPass = totalConn ? Math.round(((totalConn - totalFail) / totalConn) * 100) : null;
 
     return (
-        <Box>
+        <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
             <Stack direction="row" alignItems="center" spacing={2} mb={2} flexWrap="wrap" useFlexGap>
                 <Typography variant="h5" fontWeight={800} sx={{ flexGrow: 1 }}>Workover Performance</Typography>
                 <ToggleButtonGroup size="small" exclusive value={hours} onChange={(_e, v) => v && setHours(v)}>
@@ -48,12 +48,12 @@ export default function WorkoverPerformance() {
                 <Grid item xs={6} md={3}><KpiCard label="Rigs with activity" value={conns.length} /></Grid>
             </Grid>
 
-            <Grid container spacing={2}>
-                <Grid item xs={12} md={7}>
-                    <Paper>
+            <Grid container spacing={2} sx={{ flex: 1, minHeight: 0 }}>
+                <Grid item xs={12} md={7} sx={{ display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+                    <Paper sx={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
                         <Typography variant="h6" sx={{ p: 2, pb: 1 }}>Connection quality — torque-turn (fleet benchmark)</Typography>
-                        <TableContainer>
-                            <Table size="small">
+                        <TableContainer sx={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
+                            <Table size="small" stickyHeader>
                                 <TableHead><TableRow>
                                     <TableCell>Rig</TableCell><TableCell align="right">Conns</TableCell>
                                     <TableCell align="right">Pass</TableCell><TableCell align="right">Fail</TableCell>
@@ -84,8 +84,8 @@ export default function WorkoverPerformance() {
                         </TableContainer>
                     </Paper>
                 </Grid>
-                <Grid item xs={12} md={5}>
-                    <Paper sx={{ p: 2, maxHeight: 520, overflow: 'auto' }}>
+                <Grid item xs={12} md={5} sx={{ display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+                    <Paper sx={{ p: 2, flex: 1, minHeight: 0, overflow: 'auto' }}>
                         <Typography variant="h6" gutterBottom>Activity / NPT feed</Typography>
                         {(data.activity || []).map((a, i) => (
                             <Stack key={i} direction="row" spacing={1} alignItems="center" py={0.5} sx={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>

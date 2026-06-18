@@ -1,9 +1,10 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useNavigate, Navigate } from 'react-router-dom';
 import {
     Box, Paper, TextField, Button, Typography, Alert, Stack, Chip,
 } from '@mui/material';
 import { useAuth } from '../context/AuthContext';
+import { api } from '../api';
 
 export default function Login() {
     const { user, login } = useAuth();
@@ -12,6 +13,15 @@ export default function Login() {
     const [password, setP] = useState('');
     const [err, setErr] = useState('');
     const [busy, setBusy] = useState(false);
+    const [info, setInfo] = useState(null);
+
+    useEffect(() => {
+        let alive = true;
+        api.authInfo()
+            .then((i) => { if (alive) setInfo(i); })
+            .catch(() => { if (alive) setInfo(null); });
+        return () => { alive = false; };
+    }, []);
 
     if (user) return <Navigate to="/" replace />;
 
@@ -22,6 +32,11 @@ export default function Login() {
         catch { setErr('Invalid credentials'); }
         finally { setBusy(false); }
     };
+
+    const ldapEnabled = !!info?.ldapEnabled;
+    const mode = info?.authMode || 'local';
+    const showLocal = mode === 'local' || mode === 'both';
+    const domain = info?.domain || null;
 
     return (
         <Box sx={{ minHeight: '100vh', display: 'grid', placeItems: 'center',
@@ -34,6 +49,15 @@ export default function Login() {
                         Centralised Rig Monitoring Facility
                     </Typography>
                 </Stack>
+                {ldapEnabled && (
+                    <Stack spacing={1} alignItems="center" mb={2}>
+                        <Chip size="small" color="primary" variant="outlined"
+                            label={domain ? `Windows domain (${domain}) or local` : 'Windows domain or local'} />
+                        <Typography variant="caption" color="text.secondary" textAlign="center">
+                            Use your ONGC domain username and password
+                        </Typography>
+                    </Stack>
+                )}
                 {err && <Alert severity="error" sx={{ mb: 2 }}>{err}</Alert>}
                 <TextField fullWidth label="Username" value={username} onChange={(e) => setU(e.target.value)}
                     margin="normal" autoFocus autoComplete="username" />
@@ -42,10 +66,12 @@ export default function Login() {
                 <Button type="submit" fullWidth variant="contained" size="large" sx={{ mt: 2 }} disabled={busy}>
                     {busy ? 'Signing in…' : 'Sign in'}
                 </Button>
-                <Stack direction="row" spacing={1} mt={2} justifyContent="center" flexWrap="wrap" useFlexGap>
-                    <Chip size="small" variant="outlined" label="admin / admin123" />
-                    <Chip size="small" variant="outlined" label="viewer / viewer123" />
-                </Stack>
+                {showLocal && (
+                    <Stack direction="row" spacing={1} mt={2} justifyContent="center" flexWrap="wrap" useFlexGap>
+                        <Chip size="small" variant="outlined" label="admin / admin123" />
+                        <Chip size="small" variant="outlined" label="viewer / viewer123" />
+                    </Stack>
+                )}
                 <Typography variant="caption" color="text.secondary" display="block" textAlign="center" mt={2}>
                     Monitoring-only platform · read-only with respect to rig PLC/control
                 </Typography>

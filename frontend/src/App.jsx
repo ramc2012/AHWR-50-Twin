@@ -15,6 +15,7 @@ const EfficiencyPage = lazy(() => import('./components/Efficiency/EfficiencyPage
 const VariablesPage = lazy(() => import('./components/Variables/VariablesPage'));
 const EdgeSyncPage = lazy(() => import('./components/Sync/EdgeSyncPage'));
 const OperationsPage = lazy(() => import('./components/Operations/OperationsPage'));
+const WellPage = lazy(() => import('./components/Well/WellPage'));
 const SettingsPage = lazy(() => import('./components/Settings/SettingsPage'));
 
 import { ThemeModeProvider } from './context/ThemeModeContext';
@@ -51,6 +52,7 @@ function App() {
                                 <Route path="activity" element={screen(ActivityPage)} />
                                 <Route path="alarms" element={screen(AlarmsPage)} />
                                 <Route path="operations" element={screen(OperationsPage)} />
+                                <Route path="well" element={screen(WellPage)} />
                                 <Route path="workover" element={screen(WorkoverPage)} />
                                 <Route path="reports" element={screen(ReportsPage)} />
                                 <Route path="maintenance" element={screen(MaintenancePage)} />

@@ -9,6 +9,9 @@ node_modules/
 # Build output
 frontend/dist/
 
+# Tooling artifacts (workflow scripts dropped by agent tooling — not project code)
+.workflow-scale.js
+
 # Runtime state (created at runtime / in volumes — never commit)
 backend/users.json
 backend/drilling_state.json

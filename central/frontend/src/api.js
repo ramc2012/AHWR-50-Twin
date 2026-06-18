@@ -22,6 +22,15 @@ axios.interceptors.response.use(
     }
 );
 
+// Activity-phase colour key (matches the edge ActivityPage + CRMF spec). Productive
+// phases get their own hue; any NPT / wait / idle / stop maps to red; unknown -> grey.
+const PHASE_COLORS = {
+    RIH: '#38bdf8', POOH: '#22d3ee', CIRCULATE: '#4ade80', MAKE_UP: '#fbbf24',
+    BREAK_OUT: '#a78bfa', TRIP: '#38bdf8', DRILL: '#4ade80', RUN: '#38bdf8', PULL: '#22d3ee',
+    WAIT: '#ef4444', IDLE: '#ef4444', NPT: '#ef4444', REPAIR: '#ef4444', STOP: '#ef4444',
+};
+export const phaseColor = (phase) => PHASE_COLORS[String(phase || '').toUpperCase()] || '#64748b';
+
 export const setToken = (token) => {
     if (token) {
         localStorage.setItem('crmf_token', token);
@@ -33,12 +42,19 @@ export const setToken = (token) => {
 };
 
 export const api = {
+    authInfo: () => axios.get('/api/auth/info').then((r) => r.data),
     login: (username, password) => axios.post('/api/auth/login', { username, password }).then((r) => r.data),
     me: () => axios.get('/api/auth/me').then((r) => r.data),
     fleet: () => axios.get('/api/fleet').then((r) => r.data),
     summary: () => axios.get('/api/fleet/summary').then((r) => r.data),
     rig: (id) => axios.get(`/api/rigs/${id}`).then((r) => r.data),
     history: (id, metric, minutes) => axios.get(`/api/rigs/${id}/history`, { params: { metric, minutes } }).then((r) => r.data),
+    // Per-rig activity timeline (current phase + ordered segments + per-phase aggregate + productive/NPT totals).
+    activity: (id, hours) => axios.get(`/api/rigs/${id}/activity`, { params: hours ? { hours } : {} }).then((r) => r.data),
+    // Per-rig remote HMI mirror (edge-shape live payload + multi-metric strips + alarms).
+    rigLive: (id) => axios.get(`/api/rigs/${id}/live`).then((r) => r.data),
+    rigHistoryMulti: (id, metrics, minutes) => axios.get(`/api/rigs/${id}/history-multi`, { params: { metrics: Array.isArray(metrics) ? metrics.join(',') : metrics, minutes } }).then((r) => r.data),
+    rigAlarms: (id, limit) => axios.get(`/api/rigs/${id}/alarms`, { params: { limit } }).then((r) => r.data),
     alarms: (priority) => axios.get('/api/alarms', { params: { priority } }).then((r) => r.data),
     dataQuality: () => axios.get('/api/data-quality').then((r) => r.data),
     workover: (hours) => axios.get('/api/workover', { params: { hours } }).then((r) => r.data),
@@ -71,4 +87,33 @@ export const api = {
     updateNotifyChannel: (id, patch) => axios.patch(`/api/notifications/channels/${id}`, patch).then((r) => r.data),
     deleteNotifyChannel: (id) => axios.delete(`/api/notifications/channels/${id}`).then((r) => r.data),
     testNotifyChannel: (id) => axios.post(`/api/notifications/channels/${id}/test`).then((r) => r.data),
+
+    // Central settings (retention/update-rate/offline/latency) — PATCH is admin-only on the backend.
+    settings: () => axios.get('/api/settings').then((r) => r.data),
+    setSettings: (patch) => axios.patch('/api/settings', patch).then((r) => r.data),
+
+    // Rig registry mutations — admin-only on the backend (monitoring-only: no write path to the rig PLC).
+    // addRig returns the created rig plus a one-time `device_token` (the per-rig edge sync credential,
+    // generated server-side if the admin left it blank). rotateRigToken issues a fresh token (shown once).
+    addRig: (body) => axios.post('/api/rigs', body).then((r) => r.data),
+    rotateRigToken: (rigId) => axios.post(`/api/rigs/${encodeURIComponent(rigId)}/rotate-token`).then((r) => r.data),
+    deleteRig: (rigId) => axios.delete(`/api/rigs/${rigId}`).then((r) => r.data),
+
+    // User presence / liveness.
+    presence: () => axios.get('/api/presence').then((r) => r.data),
+    pingPresence: () => axios.post('/api/presence/ping').then((r) => r.data),
+
+    // Wells lifecycle registry (well = first-class lifecycle entity; well_runs link telemetry
+    // to a well over a time window for offline EDR replay). List/detail visible to all users;
+    // add/update/delete are admin-only on the backend (audited). Monitoring-only throughout.
+    // Well ids can contain '#' (e.g. GS-11#4) — a URL fragment delimiter — so they
+    // MUST be encodeURIComponent'd in the path or the server sees a truncated id.
+    wells: (params) => axios.get('/api/wells', { params }).then((r) => r.data),
+    well: (id) => axios.get(`/api/wells/${encodeURIComponent(id)}`).then((r) => r.data),
+    wellRuns: (id) => axios.get(`/api/wells/${encodeURIComponent(id)}/runs`).then((r) => r.data),
+    addWell: (b) => axios.post('/api/wells', b).then((r) => r.data),
+    updateWell: (id, p) => axios.patch(`/api/wells/${encodeURIComponent(id)}`, p).then((r) => r.data),
+    deleteWell: (id) => axios.delete(`/api/wells/${encodeURIComponent(id)}`).then((r) => r.data),
+    // Range-mode multi-metric history (epochMs from/to) for offline EDR replay over a well run.
+    rigHistoryRange: (id, metrics, fromMs, toMs) => axios.get(`/api/rigs/${id}/history-multi`, { params: { metrics: (metrics || []).join(','), from: fromMs, to: toMs } }).then((r) => r.data),
 };

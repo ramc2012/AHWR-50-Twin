@@ -15,6 +15,7 @@ const fs = require('fs');
 const path = require('path');
 const http = require('http');
 const zlib = require('zlib');
+const crypto = require('crypto');
 const express = require('express');
 const helmet = require('helmet');
 const cors = require('cors');
@@ -24,6 +25,7 @@ const { Server } = require('socket.io');
 const { waitForDb, query, pool } = require('./lib/db');
 const { seedAll } = require('./lib/seed');
 const auth = require('./lib/auth');
+const ldap = require('./lib/ldap');
 const fleet = require('./lib/fleet');
 const gov = require('./lib/governance');
 const maint = require('./lib/maintenance');
@@ -34,6 +36,11 @@ const { TAGS } = require('./lib/tags');
 const metrics = require('./lib/metrics');
 const kafka = require('./lib/kafka');
 const notify = require('./lib/notify');
+const rigview = require('./lib/rigview');
+const wells = require('./lib/wells');
+const activity = require('./lib/activity');
+const settings = require('./lib/settings');
+const presence = require('./lib/presence');
 
 const PORT = Number(process.env.PORT || 6000);
 const METRICS_ENABLED = process.env.METRICS_ENABLED !== 'false'; // default ON
@@ -118,6 +125,14 @@ app.post('/ingest', ingestLimiter, express.raw({ type: '*/*', limit: '64mb' }), 
         }
 
         metrics.observeIngest({ ok: true, durationSec: elapsedSec(), points: result.points, events: result.events });
+
+        // Track the well-run this batch belongs to (proposal §6.1 well drill-down /
+        // offline EDR replay). The job is the activity payload's job, or the rig's
+        // active_job. Non-blocking + swallow errors: well tracking must never affect
+        // the ingest ack. MONITORING-ONLY: this only records which well a rig worked.
+        if (result.activeJob) {
+            wells.trackRun(result.rigId, result.activeJob, Date.now()).catch(() => {});
+        }
 
         // Fan out to Kafka (no-op unless KAFKA_ENABLED; never throws into this path).
         kafka.publishBatch(result.rigId, batch);
@@ -212,6 +227,8 @@ function buildApiRouter() {
     r.use(apiLimiter, jsonBody);
 
     // ----- Auth (auth-exempt: login + me handle their own auth) -----
+    // Tells the login UI which providers are available (local / LDAP / both).
+    r.get('/auth/info', (_req, res) => res.json(ldap.info()));
     r.post('/auth/login', loginLimiter, async (req, res) => {
         const { username, password } = req.body || {};
         const result = await auth.login(username, password);
@@ -230,6 +247,11 @@ function buildApiRouter() {
 
     // ----- Everything below requires auth -----
     r.use(auth.requireAuth);
+
+    // User liveness (proposal §6.5): every authed request refreshes the caller's
+    // session row. Fire-and-forget — presence is best-effort and never blocks or
+    // fails the request (touch swallows its own errors).
+    r.use((req, _res, next) => { presence.touch(req.user, req.ip); next(); });
 
     // wrap honours e.status (audit #24) instead of always 500.
     const wrap = (fn) => async (req, res) => {
@@ -261,9 +283,125 @@ function buildApiRouter() {
     }));
     r.get('/rigs/:id/history', wrap((req) =>
         fleet.getHistory(req.params.id, req.query.metric, req.query.minutes)));
+    // Per-rig remote HMI mirror (proposal §6.1 rig drill-down): edge-shape live
+    // payload, multi-metric history strips, and per-rig alarm history. Read-only.
+    r.get('/rigs/:id/live', wrap(async (req) => {
+        const v = await rigview.reconstruct(req.params.id);
+        if (!v) throw Object.assign(new Error('rig not found'), { status: 404 });
+        return v;
+    }));
+    // history-multi: trailing-window (minutes) OR explicit range (from/to epoch ms,
+    // for OFFLINE EDR past-run replay). Range wins when both from & to are present.
+    r.get('/rigs/:id/history-multi', wrap((req) => {
+        const fromMs = Number(req.query.from);
+        const toMs = Number(req.query.to);
+        if (Number.isFinite(fromMs) && Number.isFinite(toMs) && toMs > fromMs) {
+            return rigview.multiHistory(req.params.id, req.query.metrics, { fromMs, toMs });
+        }
+        return rigview.multiHistory(req.params.id, req.query.metrics, req.query.minutes);
+    }));
+    r.get('/rigs/:id/alarms', wrap((req) =>
+        rigview.rigAlarms(req.params.id, req.query.limit)));
+    // Per-rig ACTIVITY timeline (proposal §6.1 — mirrors the edge ActivityPage):
+    // reconstructs the day's phase segments + productive/NPT split for the
+    // width-proportional activity bar. Read-only, default 24h window.
+    r.get('/rigs/:id/activity', wrap((req) =>
+        activity.getActivity(req.params.id, Number(req.query.hours) || 24)));
     r.get('/alarms', wrap((req) => fleet.getAlarms({ priority: req.query.priority })));
     r.get('/data-quality', wrap(() => fleet.getDataQuality()));
     r.get('/workover', wrap((req) => gov.getWorkover({ hours: req.query.hours })));
+
+    // ----- Well management (WITSML-inspired; proposal §6.1 well drill-down) -----
+    // A WELL is a first-class lifecycle entity; a WELL_RUN links telemetry to a
+    // well over a time window so per-well stored data (incl. PAST runs for offline
+    // EDR replay) is queryable by well. List/detail/runs are auth; CRUD is admin +
+    // audited. MONITORING-ONLY: nothing here writes to a rig/PLC.
+    r.get('/wells', wrap((req) => wells.getWells({
+        assetUnit: req.query.assetUnit, status: req.query.status, q: req.query.q })));
+    r.get('/wells/:id', wrap((req) => wells.getWell(req.params.id)));
+    r.get('/wells/:id/runs', wrap((req) => wells.getRuns(req.params.id)));
+    r.post('/wells', requireRoleAudited('admin'),
+        wrap((req) => wells.addWell(req.body, req.user.username)));
+    r.patch('/wells/:id', requireRoleAudited('admin'),
+        wrap((req) => wells.updateWell(req.params.id, req.body, req.user.username)));
+    r.delete('/wells/:id', requireRoleAudited('admin'),
+        wrap((req) => wells.deleteWell(req.params.id, req.user.username)));
+
+    // ----- Rig registry CRUD (proposal §6.2 rig master, admin-only, audited) -----
+    // MONITORING-ONLY: this manages the central rig REGISTRY (who we expect data
+    // from); it never writes to a rig/PLC. A new rig starts at stage-gate 'gate0'
+    // with status 'pending' until its edge first reports in.
+    r.post('/rigs', requireRoleAudited('admin'), wrap(async (req) => {
+        const b = req.body || {};
+        const rigId = String(b.rigId || '').trim();
+        const name = String(b.name || '').trim();
+        if (!rigId || !/^[A-Za-z0-9._-]{2,64}$/.test(rigId)) {
+            throw Object.assign(new Error('rigId is required (2-64 chars: letters, digits, . _ -)'), { status: 400 });
+        }
+        if (!name || name.length > 120) {
+            throw Object.assign(new Error('name is required (1-120 chars)'), { status: 400 });
+        }
+        const lat = b.latitude == null || b.latitude === '' ? null : Number(b.latitude);
+        const lon = b.longitude == null || b.longitude === '' ? null : Number(b.longitude);
+        if (lat != null && (!Number.isFinite(lat) || lat < -90 || lat > 90)) {
+            throw Object.assign(new Error('latitude must be between -90 and 90'), { status: 400 });
+        }
+        if (lon != null && (!Number.isFinite(lon) || lon < -180 || lon > 180)) {
+            throw Object.assign(new Error('longitude must be between -180 and 180'), { status: 400 });
+        }
+        const dup = await query('SELECT 1 FROM rigs WHERE rig_id = $1', [rigId]);
+        if (dup.rows.length) throw Object.assign(new Error('rig already exists'), { status: 409 });
+
+        // Per-rig ingest identity (audit #1): honour an admin-supplied token, else
+        // generate a strong one server-side so the "leave blank to auto-generate" promise
+        // is real (the backend no longer stores null). Revealed ONCE in the response below;
+        // never listed by /config/rigs. ingest.authorize() prefers this per-rig token over
+        // the shared INGEST_TOKEN, so a tokened rig is bound to its own credential.
+        const deviceToken = (b.deviceToken && String(b.deviceToken).trim())
+            || crypto.randomBytes(24).toString('hex');
+        await query(
+            `INSERT INTO rigs (rig_id, name, section, asset_unit, field, latitude, longitude, device_token, status, schema_version)
+             VALUES ($1,$2,'Workover Services',$3,$4,$5,$6,$7,'pending','1.0')`,
+            [rigId, name, b.assetUnit || null, b.field || null, lat, lon, deviceToken]);
+        // Start its rollout at gate0 so it shows up in the governance workspace.
+        await query(
+            `INSERT INTO deployment_status (rig_id, gate, commissioning)
+             VALUES ($1,'gate0','planned') ON CONFLICT (rig_id) DO NOTHING`, [rigId]);
+        await query('INSERT INTO audit_log (actor, action, target, detail) VALUES ($1,$2,$3,$4)',
+            [req.user.username, 'rig.create', rigId, { name, assetUnit: b.assetUnit || null, field: b.field || null }]).catch(() => {});
+
+        // Reveal the device token ONCE to the creating admin so it can be set as
+        // DEVICE_TOKEN on the rig's edge node. It is not exposed again by the API.
+        return { ...(await fleet.getRig(rigId)), device_token: deviceToken };
+    }));
+    r.delete('/rigs/:id', requireRoleAudited('admin'), wrap(async (req) => {
+        const rigId = req.params.id;
+        const { rowCount } = await query('DELETE FROM rigs WHERE rig_id = $1', [rigId]);
+        if (!rowCount) throw Object.assign(new Error('rig not found'), { status: 404 });
+        await query('INSERT INTO audit_log (actor, action, target, detail) VALUES ($1,$2,$3,$4)',
+            [req.user.username, 'rig.delete', rigId, {}]).catch(() => {});
+        return { ok: true };
+    }));
+    // Rotate a rig's per-rig ingest token (audit #1). Admin-only + audited. Returns the
+    // new token ONCE; rotating invalidates the old DEVICE_TOKEN on that rig's edge node.
+    r.post('/rigs/:id/rotate-token', requireRoleAudited('admin'), wrap(async (req) => {
+        const rigId = req.params.id;
+        const deviceToken = crypto.randomBytes(24).toString('hex');
+        const { rowCount } = await query('UPDATE rigs SET device_token = $1 WHERE rig_id = $2', [deviceToken, rigId]);
+        if (!rowCount) throw Object.assign(new Error('rig not found'), { status: 404 });
+        await query('INSERT INTO audit_log (actor, action, target, detail) VALUES ($1,$2,$3,$4)',
+            [req.user.username, 'rig.rotate_token', rigId, {}]).catch(() => {});
+        return { device_token: deviceToken };
+    }));
+
+    // ----- Platform settings (proposal §6.5) — read (auth), write (admin, audited) -----
+    r.get('/settings', wrap(() => settings.getSettings()));
+    r.patch('/settings', requireRoleAudited('admin'),
+        wrap((req) => settings.setSettings(req.body, req.user.username)));
+
+    // ----- User presence / liveness (proposal §6.5) -----
+    r.get('/presence', wrap(() => presence.list()));
+    r.post('/presence/ping', wrap(async (req) => { await presence.touch(req.user, req.ip); return { ok: true }; }));
 
     // ----- Governance & rollout workspace -----
     r.get('/governance', wrap(() => gov.getGovernance()));
@@ -316,20 +454,25 @@ function buildApiRouter() {
     // ----- Config registry (proposal §6.1) -----
     r.get('/config/tags', wrap(() => TAGS));
     r.get('/config/rigs', wrap(async () => (await query(
-        'SELECT rig_id, name, section, field, latitude, longitude, commissioned_at, schema_version FROM rigs ORDER BY rig_id')).rows));
+        `SELECT rig_id, name, section, asset_unit AS "assetUnit", field, latitude, longitude,
+                commissioned_at, schema_version, (device_token IS NOT NULL) AS "hasToken"
+         FROM rigs ORDER BY rig_id`)).rows));
 
     // ----- Reporting (proposal §6.1) — JSON (period-aware, audit #29) + CSV -----
     r.get('/reports/fleet', wrap((req) => gov.getFleetReportPeriod(req.query.period)));
-    r.get('/reports/fleet.csv', async (_req, res) => {
+    r.get('/reports/fleet.csv', async (req, res) => {
         try {
-            const rows = await gov.getFleetReport();
-            const cols = ['rig_id', 'name', 'field', 'status', 'health_score', 'metric_count', 'last_data_at', 'active_activity', 'alarm_active', 'alarm_p1', 'gate', 'adoption_pct', 'commissioning'];
+            // Period-aware export (audit #29 / finding #3): match the JSON report's window
+            // instead of always emitting the snapshot. Columns are derived from the row
+            // shape since snapshot vs daily/weekly/monthly rows carry different fields.
+            const { period, rows } = await gov.getFleetReportPeriod(req.query.period);
+            const cols = rows.length ? Object.keys(rows[0]) : ['rig_id'];
             const csv = [cols.join(',')].concat(rows.map((row) => cols.map((c) => {
                 const v = row[c] == null ? '' : String(row[c]).replace(/"/g, '""');
                 return /[",\n]/.test(v) ? `"${v}"` : v;
             }).join(','))).join('\n');
             res.setHeader('Content-Type', 'text/csv');
-            res.setHeader('Content-Disposition', 'attachment; filename="crmf-fleet-report.csv"');
+            res.setHeader('Content-Disposition', `attachment; filename="crmf-fleet-report-${period || 'snapshot'}.csv"`);
             res.send(csv);
         } catch (e) { console.error('[reports] csv error:', e.message); res.status(500).json({ error: 'report failed' }); }
     });
@@ -351,6 +494,9 @@ let shuttingDown = false;
 async function main() {
     await waitForDb();
     await seedAll();
+    // Seed platform settings defaults (retention/update-rate/offline/latency) and
+    // sync the live offline threshold from whatever is persisted (proposal §6.5).
+    await settings.seedDefaults();
 
     // Offline sweeper: flip rigs to offline once their data ages out, push deltas.
     sweepTimer = setInterval(async () => {
