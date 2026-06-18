@@ -55,11 +55,23 @@ the backend `Secret` (`crmf-secrets.PGPASSWORD`) and the DB stay in lockstep.
 Create these in namespace `crmf`:
 
 ```bash
-# Application role "crmf" (must match crmf-secrets.PGPASSWORD used by the backend)
+# DB OWNER role "crmf" — bootstraps and OWNS the schema (NOT the backend's login user)
 kubectl -n crmf create secret generic crmf-db-app \
   --type=kubernetes.io/basic-auth \
   --from-literal=username=crmf \
-  --from-literal=password='REPLACE_WITH_APP_PASSWORD'
+  --from-literal=password='REPLACE_WITH_OWNER_PASSWORD'
+
+# Least-privilege APP role "crmf_app" — the role the BACKEND connects as (audit #2;
+# Helm config.PGUSER=crmf_app). It CANNOT tamper with the append-only audit_log. CNPG
+# managed.roles (00-cluster.yaml) sets crmf_app's login password from THIS Secret, which
+# MUST equal crmf-secrets.PGPASSWORD or the backend crash-loops on auth. In a full Vault
+# deploy this is materialised automatically by the crmf-db-app-login ExternalSecret
+# (vault/01-secretstore.yaml) from the SAME Vault key as PGPASSWORD — create it by hand
+# ONLY when not using ESO/Vault.
+kubectl -n crmf create secret generic crmf-db-app-login \
+  --type=kubernetes.io/basic-auth \
+  --from-literal=username=crmf_app \
+  --from-literal=password='REPLACE_WITH_SAME_VALUE_AS_crmf-secrets.PGPASSWORD'
 
 # Superuser (postgres) — needed so CREATE EXTENSION timescaledb succeeds at init
 kubectl -n crmf create secret generic crmf-db-superuser \
@@ -73,8 +85,10 @@ kubectl -n crmf create secret generic crmf-backup-s3 \
   --from-literal=SECRET_ACCESS_KEY='REPLACE_WITH_S3_SECRET_KEY'
 ```
 
-> Keep `crmf-db-app.password` identical to `crmf-secrets.PGPASSWORD` (owned by
-> the backend agent) — both describe the same `crmf` SQL role.
+> The BACKEND connects as the least-privilege role **crmf_app** (audit #2), NOT the owner.
+> Keep `crmf-db-app-login.password` identical to `crmf-secrets.PGPASSWORD` — that is the
+> credential the backend actually uses. `crmf-db-app` is only the schema OWNER/bootstrap
+> role (`crmf`); `crmf-db-superuser` is `postgres` (extension creation).
 
 Provision the bucket in MinIO before first backup:
 ```bash

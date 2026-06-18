@@ -33,9 +33,31 @@ function phaseAt(tt) {
     return { phase: 'RIH', elapsed: 0, dur: 20, cycleIndex };
 }
 
+// Monotonic seq base so a sim RESTART never replays seqs the backend already saw
+// (the central rejects seq <= last_seq for replay idempotency). Epoch seconds only
+// ever grow, mirroring the real edge agent persisting its seq across restarts.
+const SEQ_BASE = Math.floor(Date.now() / 1000);
+
+// Each rig ROTATES its job through a small set of 3 wells every ~150 s, so
+// well_runs transitions accumulate PAST runs with real telemetry for offline EDR
+// replay. The base job + two siblings keep the names realistic ("GS-{block}#{n}").
+const JOB_ROTATE_SECONDS = Number(process.env.JOB_ROTATE_SECONDS || 150);
+function wellSetFor(n) {
+    const block = 10 + n;
+    const base = 3 + (n % 5);                 // historical base job number
+    // Base job and two siblings on the same block (stable, distinct names).
+    return [`GS-${block}#${base}`, `GS-${block}#${base + 5}`, `GS-${block}#${base + 9}`];
+}
+// Current job for rig n at sim-time t: stable within each JOB_ROTATE_SECONDS window.
+function jobAt(rig, t) {
+    const idx = Math.floor(t / JOB_ROTATE_SECONDS) % rig.wells.length;
+    return rig.wells[idx];
+}
+
 // Per-rig runtime state.
 const rigs = [];
 for (let n = 1; n <= ACTIVE; n++) {
+    const wells = wellSetFor(n);
     rigs.push({
         id: `AHWR-50-${n}`,
         offset: (n * 7) % CYCLE_LEN,         // desync the cycles
@@ -46,7 +68,8 @@ for (let n = 1; n <= ACTIVE; n++) {
         alarmActive: false,
         degraded: n % 7 === 0,               // missing-tag rig -> lower completeness score
         flaky: n === ACTIVE,                 // last rig drops offline periodically
-        well: `GS-${10 + n}#${3 + (n % 5)}`,
+        wells,                               // 3-well rotation set for this rig
+        well: wells[0],                      // current well (updated each tick by jobAt)
         sealCountdown: (n * 3) % BATCH_SECONDS,
     });
 }
@@ -109,6 +132,37 @@ function snapshot(rig, t) {
         'cat_engine.fuel_rate': r(osc(t, 110, 20, 70)),
         'cat_engine.fuel_temp': r(osc(t, 40, 3, 300)),
         'cat_engine.battery_voltage': r(osc(t, 26, 1, 120), 2),
+
+        // --- Richer equipment status (mirrors the edge rig_data shape) so the
+        //     central per-rig HMI panels show full equipment state. Enums per the
+        //     edge field map. Booleans are emitted as 0/1 (telemetry is numeric). ---
+        'drilling.operation_mode': ({ RIH: 2, POOH: 3, CIRCULATE: 1, MAKE_UP: 0, BREAK_OUT: 0 }[wf.phase]) ?? 1,
+        'drilling.delta_torque': r(osc(t, 500, 200, 40)),
+        'htd.status': (pumping || wf.phase === 'RIH' || wf.phase === 'POOH') ? 2 : 1,
+        'htd.torque_command': r(osc(t, 8000, 3000, 70) + 200),
+        'htd.work_mode': 1, 'htd.rotation_status': 1, 'htd.gear_status': 2,
+        'htd.ibop_status': 3, 'htd.elevator_status': 3, 'htd.brake_status': 4, 'htd.tilt_status': 2,
+        'htd.vertical_speed': r(osc(t, 0, 0.3, 30), 2),
+        'pct.status': 2, 'pct.op_mode': 1,
+        'pct.sequence': wf.phase === 'MAKE_UP' ? 1 : wf.phase === 'BREAK_OUT' ? 2 : 0,
+        'pct.spinner_floating': 1, 'pct.spinner_makeup_torque': r(makeupTorque * 0.9),
+        'pct.rotation_makeup_pressure': r(osc(t, 280, 20, 70)),
+        'pct.clamp_up_pressure': r(osc(t, 190, 20, 70)), 'pct.clamp_up_status': 4,
+        'pct.clamp_low_status': 4, 'pct.dolly_status': 6,
+        'hpu.status': 2,
+        'hpu.pdw_pump_status': 1, 'hpu.pdw_pump_flow': r(osc(t, 70, 15, 60)), 'hpu.pdw_pump_press': r(osc(t, 210, 15, 70)),
+        'hpu.htd_pump1_status': 2, 'hpu.htd_pump1_flow': r(osc(t, 55, 12, 60)), 'hpu.htd_pump1_press': r(osc(t, 200, 15, 70)),
+        'hpu.htd_pump2_status': 1, 'hpu.htd_pump2_flow': r(osc(t, 45, 12, 62)), 'hpu.htd_pump2_press': r(osc(t, 185, 15, 72)),
+        'hpu.oil_filter_1': 0, 'hpu.oil_filter_2': 1, 'hpu.oil_filter_3': 0,
+        'cat_engine.status': 2, 'cat_engine.fuel_pressure': r(osc(t, 12.5, 1, 90), 1),
+        'cat_engine.run_hours': r(4200 + t / 3600, 1), 'cat_engine.total_hours': r(23400 + t / 3600, 1),
+        'cat_engine.source_cmd': 2,
+        'cwk.status': 1, 'cwk.clamp_status': 4, 'cwk.clamp_pressure': r(osc(t, 85, 10, 70)), 'cwk.clamp_force': r(osc(t, 500, 40, 70)),
+        'acs.status': 1, 'acs.crownsaver': r(osc(t, 2200, 200, 60)), 'acs.floorsaver': r(osc(t, 1800, 150, 60)),
+        'acs.bottomsaver': r(osc(t, 1500, 120, 60)), 'acs.upper_tag': 2400, 'acs.lower_tag': 200,
+        'wellcontrol.annular_open': 0, 'wellcontrol.annular_close': 1,
+        'wellcontrol.pipe_ram_open': 0, 'wellcontrol.pipe_ram_close': 1,
+        'wellcontrol.blind_ram_open': 0, 'wellcontrol.blind_ram_close': 1, 'wellcontrol.shear_ram_open': 0,
     };
 
     // Degraded rig: drop many EXPECTED tags so its completeness (and health score)
@@ -176,6 +230,10 @@ function tick() {
         // Flaky rig: 40s offline every ~3 min so it flips offline then recovers.
         if (rig.flaky && (t % 180) >= 140) { rig.sealCountdown = 0; rig.batch = { channels: [], events: [] }; continue; }
 
+        // Rotate the rig's current job (stable within each JOB_ROTATE_SECONDS window)
+        // so well_runs transitions accumulate PAST runs for offline EDR replay.
+        rig.well = jobAt(rig, t);
+
         const { v, events } = snapshot(rig, t);
         rig.batch.channels.push({ ts: new Date().toISOString(), values: v });
         for (const e of events) rig.batch.events.push({ ts: new Date().toISOString(), ...e });
@@ -185,7 +243,7 @@ function tick() {
             // Activity event once per batch.
             if (rig._wf) rig.batch.events.push({ ts: new Date().toISOString(), type: 'activity', payload: { phase: rig._wf.phase, job: rig.well } });
             const batch = {
-                seq: rig.seq++, deviceId: rig.id, schemaVersion: '1.0',
+                seq: SEQ_BASE + (rig.seq++), deviceId: rig.id, schemaVersion: '1.0',
                 createdAt: new Date().toISOString(),
                 channels: rig.batch.channels, events: rig.batch.events,
             };

@@ -32,6 +32,10 @@ The central platform (`central/`) is built, security-hardened and audited (see
 
 - 🟡 **Alarm notifications** — webhook + email dispatch on P1/escalation is now implemented
   (`central/backend/lib/notify.js`); SMS is via a webhook→gateway, no direct SMS provider.
+- ✅ **Per-rig remote HMI mirror** — the central rig drill-down now mirrors the full edge operator
+  HMI (read-only tabs: Dashboard, Equipment, Well Control/BOP, Trends/EDR, Workover, Alarms, Daily
+  Report, Maintenance) fed by `GET /api/rigs/:id/live` which reconstructs the edge `rig_data` shape
+  from central telemetry. Left nav is collapsible. Remaining: historical **scrub-back replay** UI.
 - 🔴 **Scaffold-only platform services** (ship at `replicas: 0` / placeholder image): in-house
   **ETP 2.0 server + WITSML 1.4.1 store**, **ML inference** (HPU condition / hookload anomaly /
   NPT classifier — MLflow/KServe), **Kafka derived-channels stream processor**, **MQTT→Kafka bridge**.

@@ -26,6 +26,10 @@ services:
     volumes:
       - crmf_pgdata:/var/lib/postgresql/data
       - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      # Audit #2: runs AFTER init.sql (lexical "zz-") to give the least-privilege role
+      # crmf_app a login password, so the backend connects as crmf_app (not the owner)
+      # and cannot tamper with the append-only audit_log. Fresh-volume init only.
+      - ./db/app-role-password.sh:/docker-entrypoint-initdb.d/zz-app-role-password.sh:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${PGUSER:-crmf} -d ${PGDATABASE:-crmf}"]
       interval: 10s
@@ -48,7 +52,12 @@ services:
       - PORT=6000
       - PGHOST=timescaledb
       - PGPORT=5432
-      - PGUSER=${PGUSER:-crmf}
+      # Audit #2: connect as the LEAST-PRIVILEGE app role crmf_app, NOT the schema owner
+      # (${PGUSER:-crmf}). crmf_app has DML on operational tables + INSERT-only on audit_log
+      # and CANNOT drop/bypass the append-only audit trigger, so the audit trail is
+      # tamper-evident. crmf_app's password is set to ${PGPASSWORD} by db/app-role-password.sh
+      # at DB init. The owner role (PGUSER) still bootstraps the schema in the db service.
+      - PGUSER=crmf_app
       - PGPASSWORD=${PGPASSWORD:?set PGPASSWORD in .env}
       - PGDATABASE=${PGDATABASE:-crmf}
       - JWT_SECRET=${JWT_SECRET:?set JWT_SECRET in .env}
@@ -71,9 +80,33 @@ services:
       - NOTIFY_MIN_SEVERITY=${NOTIFY_MIN_SEVERITY:-P1}
       - NOTIFY_COOLDOWN_SEC=${NOTIFY_COOLDOWN_SEC:-120}
       - NOTIFY_DEMO_WEBHOOK_URL=${NOTIFY_DEMO_WEBHOOK_URL:-http://notify-sink:9020/hook}
+      # --- Windows domain / Active Directory login (AUTH contract) ---
+      # Demo defaults target the bundled `openldap` test directory so AD/LDAP login
+      # works out of the box; in production override these in .env to point at the
+      # real Domain Controller (AD over LDAPS). Local admin still works alongside.
+      - AUTH_MODE=${AUTH_MODE:-both}             # local | ldap | both
+      - LDAP_URL=${LDAP_URL:-ldap://openldap:1389}
+      - LDAP_BIND_DN=${LDAP_BIND_DN:-cn=admin,dc=ongc,dc=local}
+      - LDAP_BIND_PASSWORD=${LDAP_BIND_PASSWORD:-adminpassword}
+      - LDAP_SEARCH_BASE=${LDAP_SEARCH_BASE:-ou=users,dc=ongc,dc=local}
+      - LDAP_SEARCH_FILTER=${LDAP_SEARCH_FILTER:-(|(uid={username})(cn={username})(sAMAccountName={username}))}
+      - LDAP_DOMAIN=${LDAP_DOMAIN:-ONGC}
+      # Demo: directory groups may not surface as memberOf without the memberof overlay,
+      # so default LDAP users to operator (real ONGC AD maps crmf-admins/operators/viewers).
+      - LDAP_DEFAULT_ROLE=${LDAP_DEFAULT_ROLE:-operator}
+      - LDAP_ROLE_ADMIN=${LDAP_ROLE_ADMIN:-crmf-admins}
+      - LDAP_ROLE_OPERATOR=${LDAP_ROLE_OPERATOR:-crmf-operators}
+      - LDAP_ROLE_VIEWER=${LDAP_ROLE_VIEWER:-crmf-viewers}
+      - LDAP_STARTTLS=${LDAP_STARTTLS:-}
+      - LDAP_TLS_REJECT_UNAUTHORIZED=${LDAP_TLS_REJECT_UNAUTHORIZED:-false}
     depends_on:
       timescaledb:
         condition: service_healthy
+      # Demo: wait for the bundled test directory so the first AD/LDAP login succeeds.
+      # Resolves to a no-op outside the demo profile (openldap then isn't created).
+      openldap:
+        condition: service_started
+        required: false
     # Exposed so real rig-edge sync agents can reach /ingest over the WAN.
     # In production this sits behind the API gateway / MQTT broker on the VPN.
     ports:
@@ -114,6 +147,41 @@ services:
     depends_on:
       crmf-backend:
         condition: service_healthy
+
+  # DEMO ONLY: test Windows-domain directory — a Bitnami OpenLDAP server standing in
+  # for the ONGC Active Directory Domain Controller, so the AD/LDAP login path is
+  # demonstrable end-to-end without a real DC. Mirrors the edge stack's `openldap`.
+  # Root: dc=ongc,dc=local  |  Admin bind: cn=admin,dc=ongc,dc=local / adminpassword
+  # Seeded users (uid=user, under ou=users): driller1/Driller@123, toolpusher1/Push@123,
+  # viewer1/View@123. The bitnami image seeds ONE group, so all demo users are placed in
+  # "crmf-operators" => they map to the OPERATOR role (LDAP_ROLE_OPERATOR), demonstrating
+  # group->role mapping. (Per-user role groups would need a custom LDAP_CUSTOM_LDIF; a real
+  # ONGC AD already has crmf-admins/operators/viewers.)
+  # Try it:  log in at the portal with driller1 / Driller@123  (source: ldap, role: operator).
+  openldap:
+    # Bitnami moved deprecated tags to the "bitnamilegacy" namespace (2025); same image/env.
+    image: ${OPENLDAP_IMAGE:-bitnamilegacy/openldap:2.6}
+    container_name: crmf_openldap
+    hostname: openldap
+    restart: unless-stopped
+    profiles: ["demo"]
+    environment:
+      - LDAP_PORT_NUMBER=1389
+      - LDAP_ROOT=${LDAP_ROOT:-dc=ongc,dc=local}
+      - LDAP_ADMIN_USERNAME=${LDAP_ADMIN_USERNAME:-admin}
+      - LDAP_ADMIN_PASSWORD=${LDAP_BIND_PASSWORD:-adminpassword}
+      # Reliable seeding via a custom LDIF (the image's env-based auto-seed is flaky
+      # across versions). Defines ou=users + driller1/toolpusher1/viewer1 + groups.
+      - LDAP_CUSTOM_LDIF_DIR=/ldifs
+      - LDAP_SKIP_DEFAULT_TREE=yes
+    volumes:
+      - ./openldap/seed.ldif:/ldifs/seed.ldif:ro
+    healthcheck:
+      test: ["CMD-SHELL", "ldapsearch -x -H ldap://127.0.0.1:1389 -b dc=ongc,dc=local -s base >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
 
   # DEMO ONLY: webhook receiver standing in for an enterprise endpoint
   # (Slack/Teams/PagerDuty/SMS-gateway). The backend POSTs P1 alarm alerts here;

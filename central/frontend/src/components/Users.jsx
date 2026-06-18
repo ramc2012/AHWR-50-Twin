@@ -61,7 +61,7 @@ export default function Users() {
     };
 
     return (
-        <Box>
+        <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
             <Stack direction="row" alignItems="center" spacing={2} mb={2}>
                 <Typography variant="h5" fontWeight={800} sx={{ flexGrow: 1 }}>User &amp; Access Management</Typography>
                 <Button variant="contained" startIcon={<Add />} onClick={() => setAddOpen(true)}>Add user</Button>
@@ -73,9 +73,9 @@ export default function Users() {
             </Alert>
             {err && <Alert severity="error" sx={{ mb: 2 }} onClose={() => setErr('')}>{err}</Alert>}
 
-            <Paper>
-                <TableContainer>
-                    <Table size="small">
+            <Paper sx={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+                <TableContainer sx={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
+                    <Table size="small" stickyHeader>
                         <TableHead><TableRow>
                             <TableCell>Username</TableCell><TableCell>Display name</TableCell>
                             <TableCell>Role</TableCell><TableCell align="center">Enabled</TableCell>

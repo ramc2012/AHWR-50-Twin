@@ -5,8 +5,18 @@ const { query } = require('./db');
 const { EXPECTED_METRICS, KEY_METRICS, TAG_BY_METRIC } = require('./tags');
 
 const FRESH_SEC = Number(process.env.CENTRAL_LATENCY_TARGET || 30); // proposal <30 s
-const OFFLINE_SEC = Number(process.env.OFFLINE_SEC || 120);         // no data => offline
+// Offline threshold (no data => offline). Mutable so the Settings screen can retune
+// it live (lib/settings.js calls setOfflineSec); seeded from the env at boot.
+let OFFLINE_SEC = Number(process.env.OFFLINE_SEC || 120);
 const TS_KEY = '__ts'; // reserved per-tag last-seen map inside rig_latest.values (audit #22)
+
+// Live setter for the offline threshold, invoked by lib/settings.js when an admin
+// PATCHes offline_sec. Clamped to a sane floor so the sweeper can't be disabled.
+function setOfflineSec(n) {
+    const v = Math.round(Number(n));
+    if (Number.isFinite(v) && v >= 10) OFFLINE_SEC = v;
+    return OFFLINE_SEC;
+}
 
 // Per-rig data-quality health (0-100) from freshness (sync lag) + tag completeness.
 function computeHealth({ latestTs, presentMetrics }) {
@@ -40,6 +50,7 @@ function liveize(row) {
         rigId: row.rig_id,
         name: row.name,
         section: row.section,
+        assetUnit: row.asset_unit,
         field: row.field,
         latitude: row.latitude,
         longitude: row.longitude,
@@ -231,5 +242,7 @@ async function sweepOffline() {
 
 module.exports = {
     computeHealth, getFleet, getFleetRow, getFleetSummary, getRig, getHistory,
-    getAlarms, getDataQuality, sweepOffline, FRESH_SEC, OFFLINE_SEC,
+    getAlarms, getDataQuality, sweepOffline, setOfflineSec, FRESH_SEC,
+    // Expose the current threshold via a getter so callers always read the live value.
+    get OFFLINE_SEC() { return OFFLINE_SEC; },
 };

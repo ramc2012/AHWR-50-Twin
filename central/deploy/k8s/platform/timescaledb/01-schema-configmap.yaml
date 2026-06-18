@@ -41,6 +41,7 @@ data:
         rig_id          TEXT PRIMARY KEY,                 -- device id, e.g. AHWR-50-3
         name            TEXT NOT NULL,
         section         TEXT,                             -- owner section
+        asset_unit      TEXT,                             -- ONGC Asset/Basin (pan-ONGC: any unit)
         field           TEXT,                             -- e.g. Ankleshwar
         latitude        DOUBLE PRECISION,
         longitude       DOUBLE PRECISION,
@@ -343,6 +344,71 @@ data:
         FOR EACH ROW EXECUTE FUNCTION audit_log_append_only();
 
     -- ---------------------------------------------------------------------
+    -- App settings (user-configurable: storage retention, update rate, offline
+    -- threshold, …) and user presence/liveness (who is currently signed in).
+    -- ---------------------------------------------------------------------
+    CREATE TABLE IF NOT EXISTS app_settings (
+        key        TEXT PRIMARY KEY,
+        value      JSONB NOT NULL,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        updated_by TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS user_sessions (
+        username   TEXT PRIMARY KEY,
+        display    TEXT,
+        role       TEXT,
+        source     TEXT,                                  -- local | ldap | ad
+        last_seen  TIMESTAMPTZ NOT NULL DEFAULT now(),
+        ip         TEXT
+    );
+    CREATE INDEX IF NOT EXISTS user_sessions_seen ON user_sessions (last_seen DESC);
+
+    -- ---------------------------------------------------------------------
+    -- Well management (WITSML-inspired: Well -> run/wellbore -> logs). A well is a
+    -- first-class lifecycle entity; a "well_run" links telemetry to a well over a
+    -- time window (a rig working that well), so a well's recorded data — incl. past
+    -- runs for offline EDR replay — is queryable by well. (Ref: WellView/Peloton,
+    -- Pason DataHub, WITSML data model.)
+    -- ---------------------------------------------------------------------
+    CREATE TABLE IF NOT EXISTS wells (
+        well_id        TEXT PRIMARY KEY,                 -- UWI / well name, e.g. GS-11#4
+        name           TEXT NOT NULL,
+        uwi            TEXT,                             -- unique well identifier / API no.
+        well_type      TEXT,                             -- production|injection|exploration|appraisal|workover
+        status         TEXT NOT NULL DEFAULT 'planned',  -- planned|drilling|completed|producing|workover|suspended|abandoned
+        field          TEXT,
+        asset_unit     TEXT,
+        latitude       DOUBLE PRECISION,
+        longitude      DOUBLE PRECISION,
+        spud_date      DATE,
+        td_date        DATE,
+        total_depth    DOUBLE PRECISION,                 -- m
+        operator       TEXT,
+        block_lease    TEXT,
+        current_rig_id TEXT REFERENCES rigs(rig_id) ON DELETE SET NULL,
+        notes          TEXT,
+        created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+        updated_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS wells_asset ON wells (asset_unit);
+
+    -- A run = a rig working a well over [started_at, ended_at]. Telemetry on rig_id
+    -- within that window belongs to this well — the basis for per-well stored data
+    -- and offline past-run EDR replay. ended_at NULL = the currently-active run.
+    CREATE TABLE IF NOT EXISTS well_runs (
+        id          BIGSERIAL PRIMARY KEY,
+        well_id     TEXT REFERENCES wells(well_id) ON DELETE CASCADE,
+        rig_id      TEXT REFERENCES rigs(rig_id) ON DELETE SET NULL,
+        job_no      TEXT,
+        started_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+        ended_at    TIMESTAMPTZ,
+        summary     TEXT
+    );
+    CREATE INDEX IF NOT EXISTS well_runs_well ON well_runs (well_id, started_at DESC);
+    CREATE INDEX IF NOT EXISTS well_runs_rig_active ON well_runs (rig_id) WHERE ended_at IS NULL;
+
+    -- ---------------------------------------------------------------------
     -- Least-privilege application role (audit #2).
     -- The bootstrap/owner role (crmf, a superuser) creates the schema, but the
     -- running application SHOULD connect as crmf_app in production. crmf_app is a
@@ -369,7 +435,8 @@ data:
     GRANT SELECT, INSERT, UPDATE, DELETE ON
         rigs, rig_latest, telemetry, events, connections, tags,
         deployment_status, escalations, decisions, value_metrics,
-        maintenance_record, users
+        maintenance_record, users, notification_channels, notifications,
+        app_settings, user_sessions, wells, well_runs
         TO crmf_app;
 
     -- The continuous aggregate is read-only for the app.

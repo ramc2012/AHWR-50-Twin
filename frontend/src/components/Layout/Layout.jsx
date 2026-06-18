@@ -18,7 +18,8 @@ import {
     Cable,
     RefreshCw,
     ClipboardList,
-    Gauge
+    Gauge,
+    MapPin
 } from 'lucide-react';
 import {
     Box,
@@ -55,6 +56,7 @@ const menuItems = [
     { text: 'Activity', icon: <Activity size={20} />, path: '/activity' },
     { text: 'Alarms', icon: <Bell size={20} />, path: '/alarms' },
     { text: 'Operations', icon: <ClipboardList size={20} />, path: '/operations' },
+    { text: 'Well', icon: <MapPin size={20} />, path: '/well' },
     { text: 'Reports', icon: <FileText size={20} />, path: '/reports' },
     { text: 'Maintenance', icon: <HeartPulse size={20} />, path: '/maintenance' },
     { text: 'Efficiency', icon: <Gauge size={20} />, path: '/efficiency' },
@@ -106,6 +108,8 @@ export default function Layout() {
 
     // Well & Rig State
     const [wellInfo, setWellInfo] = useState({ well: 'WELL-001', rig: 'RIG-ALPHA' });
+    // Active well from the Well registry — drives the top-bar RIG/WELL display when set.
+    const [activeWell, setActiveWell] = useState(null);
     const [isDialogOpen, setIsDialogOpen] = useState(false);
     const [tempInfo, setTempInfo] = useState({ well: '', rig: '' });
     const [infoError, setInfoError] = useState('');
@@ -121,6 +125,16 @@ export default function Layout() {
                 if (config.wellInfo) setWellInfo(config.wellInfo);
             })
             .catch(err => console.error("Failed to load rig info:", err));
+
+        // Active well: drives the top-bar RIG/WELL when a well is started.
+        // Poll it (no socket event for it) so the bar reflects start/complete.
+        const loadActiveWell = () => {
+            axios.get('/api/wells/active')
+                .then(({ data }) => setActiveWell(data || null))
+                .catch(err => console.error("Failed to load active well:", err));
+        };
+        loadActiveWell();
+        const activeWellPoll = setInterval(loadActiveWell, 5000);
 
         // Real-time Updates
         const handleLayoutUpdate = (config) => {
@@ -150,6 +164,7 @@ export default function Layout() {
 
         return () => {
             // Remove ONLY our own handlers; do NOT disconnect the shared socket here.
+            clearInterval(activeWellPoll);
             socket.off('dashboard_layout_update', handleLayoutUpdate);
             socket.off('connect', handleConnect);
             socket.off('disconnect', handleDisconnect);
@@ -200,6 +215,11 @@ export default function Layout() {
     };
 
     const currentPage = navItems.find(item => item.path === location.pathname);
+
+    // When a well is active in the Well registry, the top bar reflects it.
+    // Otherwise fall back to the admin-editable dashboard wellInfo.
+    const displayWell = activeWell?.name || wellInfo.well;
+    const displayRig = activeWell?.rig || wellInfo.rig;
 
     return (
         <Box sx={{ display: 'flex', flexDirection: 'column', minHeight: '100vh' }}>
@@ -383,12 +403,12 @@ export default function Layout() {
                         >
                             <Box sx={{ display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
                                 <Typography variant="caption" sx={{ color: '#94a3b8', fontWeight: 'bold', letterSpacing: 1, fontSize: 12, lineHeight: 1.2 }}>RIG</Typography>
-                                <Typography variant="subtitle2" sx={{ color: '#38bdf8', fontWeight: 'bold', fontSize: 16, lineHeight: 1.2 }}>{wellInfo.rig}</Typography>
+                                <Typography variant="subtitle2" sx={{ color: '#38bdf8', fontWeight: 'bold', fontSize: 16, lineHeight: 1.2 }}>{displayRig}</Typography>
                             </Box>
                             <Box sx={{ width: '1px', height: '32px', bgcolor: '#334155' }} />
                             <Box sx={{ display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
                                 <Typography variant="caption" sx={{ color: '#94a3b8', fontWeight: 'bold', letterSpacing: 1, fontSize: 12, lineHeight: 1.2 }}>WELL</Typography>
-                                <Typography variant="subtitle2" sx={{ color: '#38bdf8', fontWeight: 'bold', fontSize: 16, lineHeight: 1.2 }}>{wellInfo.well}</Typography>
+                                <Typography variant="subtitle2" sx={{ color: activeWell ? '#4ade80' : '#38bdf8', fontWeight: 'bold', fontSize: 16, lineHeight: 1.2 }}>{displayWell}</Typography>
                             </Box>
                             {user?.role === 'admin' && (
                                 <IconButton size="small" onClick={(event) => { event.stopPropagation(); handleEditClick(); }} sx={{ color: '#38bdf8', bgcolor: 'rgba(56, 189, 248, 0.1)', ml: { xs: 0, sm: 1 }, '&:hover': { bgcolor: 'rgba(56, 189, 248, 0.2)' } }}>

@@ -25,17 +25,17 @@ export default function ConfigRegistry() {
     const groups = tags.reduce((acc, t) => { (acc[t.group] = acc[t.group] || []).push(t); return acc; }, {});
 
     return (
-        <Box>
+        <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
             <Typography variant="h5" fontWeight={800} mb={2}>Configuration Registry</Typography>
             {err && <Alert severity="error" sx={{ mb: 2 }} onClose={() => setErr('')}>{err}</Alert>}
-            <Paper>
-                <Tabs value={tab} onChange={(_e, v) => setTab(v)} sx={{ borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
+            <Paper sx={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+                <Tabs value={tab} onChange={(_e, v) => setTab(v)} sx={{ borderBottom: '1px solid rgba(255,255,255,0.06)', flex: '0 0 auto' }}>
                     <Tab label={`Standard tag dictionary (${tags.length})`} />
                     <Tab label={`Rig master (${rigs.length})`} />
                 </Tabs>
 
                 {tab === 0 && (
-                    <Box sx={{ p: 2 }}>
+                    <Box sx={{ p: 2, flex: 1, minHeight: 0, overflow: 'auto' }}>
                         <Typography variant="caption" color="text.secondary">
                             Single source of truth for the 100-channel standard tag set (proposal §4.4, §6.1). Expected tags count toward each rig's data-completeness score.
                         </Typography>
@@ -69,7 +69,7 @@ export default function ConfigRegistry() {
                 )}
 
                 {tab === 1 && (
-                    <TableContainer>
+                    <TableContainer sx={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
                         <Table size="small" stickyHeader>
                             <TableHead><TableRow>
                                 <TableCell>Rig ID</TableCell><TableCell>Name</TableCell><TableCell>Section</TableCell>

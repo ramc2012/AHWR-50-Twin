@@ -46,7 +46,7 @@ export default function Governance() {
     const addDec = guard(async () => { if (!dec.title) return; await api.addDecision(dec); setDec({ title: '', detail: '' }); });
 
     return (
-        <Box>
+        <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
             <Typography variant="h5" fontWeight={800} mb={2}>Governance &amp; Rollout Workspace</Typography>
             {err && <Alert severity="error" sx={{ mb: 2 }} onClose={() => setErr('')}>{err}</Alert>}
 
@@ -57,7 +57,7 @@ export default function Governance() {
                 <Grid item xs={6} md={3}><KpiCard label="Open escalations" value={g.summary.openEscalations} color={g.summary.openEscalations ? 'warning.main' : 'success.main'} /></Grid>
             </Grid>
 
-            <Grid container spacing={2}>
+            <Grid container spacing={2} sx={{ flex: 1, minHeight: 0, alignContent: 'flex-start' }}>
                 {/* Stage-gate funnel */}
                 <Grid item xs={12} md={5}>
                     <Paper sx={{ p: 2, height: '100%' }}>
@@ -114,10 +114,10 @@ export default function Governance() {
                 </Grid>
 
                 {/* Rollout table */}
-                <Grid item xs={12}>
-                    <Paper>
+                <Grid item xs={12} sx={{ flex: 1, minHeight: 0, display: 'flex' }}>
+                    <Paper sx={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
                         <Typography variant="h6" sx={{ p: 2, pb: 1 }}>Rig rollout status {editable ? '' : '(read-only)'}</Typography>
-                        <TableContainer sx={{ maxHeight: 460 }}>
+                        <TableContainer sx={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
                             <Table size="small" stickyHeader>
                                 <TableHead><TableRow>
                                     <TableCell>Rig</TableCell><TableCell>Stage-gate</TableCell><TableCell>Commissioning</TableCell>

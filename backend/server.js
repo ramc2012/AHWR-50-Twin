@@ -22,6 +22,7 @@ const health = require('./lib/health');
 const witsml = require('./lib/witsml');
 const etp = require('./lib/etp');
 const efficiency = require('./lib/efficiency');
+const wells = require('./lib/wells');
 const edrCatalog = require('../shared/edrMetrics.json');
 
 const PORT = Number(process.env.PORT || 5000);
@@ -1161,10 +1162,37 @@ app.get('/api/connections', auth.requireAuth, (req, res) => res.json(workover.ge
 app.get('/api/torqueturn/current', auth.requireAuth, (req, res) => res.json(workover.getTorqueTurnLive()));
 
 // --- Workover: Daily report ---
-app.get('/api/report/daily', auth.requireAuth, (req, res) => res.json(workover.getDailyReport(req.query.date)));
-app.get('/api/report/header', auth.requireAuth, (req, res) => res.json(workover.getHeader()));
+app.get('/api/report/daily', auth.requireAuth, (req, res) => {
+    const rep = workover.getDailyReport(req.query.date);
+    const wh = wells.getHeader();                 // active well overrides the manual header
+    if (wh) rep.header = { ...rep.header, ...wh };
+    res.json(rep);
+});
+app.get('/api/report/header', auth.requireAuth, (req, res) => res.json(wells.getHeader() || workover.getHeader()));
 app.put('/api/report/header', auth.requireAuth, auth.requireRole('admin', 'operator'), async (req, res) => {
     res.json({ success: true, header: await workover.setHeader(req.body || {}) });
+});
+
+// --- Well registry + lifecycle (store data by well) ---
+app.get('/api/wells', auth.requireAuth, (req, res) => res.json(wells.getWells()));
+app.get('/api/wells/active', auth.requireAuth, (req, res) => res.json(wells.getActiveWell() || null));
+app.get('/api/wells/service-types', auth.requireAuth, (req, res) => res.json(wells.getServiceTypes()));
+app.get('/api/wells/:id/summary', auth.requireAuth, (req, res) => res.json(wells.getWellSummary(req.params.id)));
+app.post('/api/wells', auth.requireAuth, auth.requireRole('admin', 'operator'), (req, res) => {
+    try { res.json({ success: true, well: wells.createWell(req.body || {}, req.user.username) }); }
+    catch (e) { res.status(e.status || 400).json({ error: e.message }); }
+});
+app.put('/api/wells/:id', auth.requireAuth, auth.requireRole('admin', 'operator'), (req, res) => {
+    try { res.json({ success: true, well: wells.updateWell(req.params.id, req.body || {}, req.user.username) }); }
+    catch (e) { res.status(e.status || 400).json({ error: e.message }); }
+});
+app.post('/api/wells/:id/start', auth.requireAuth, auth.requireRole('admin', 'operator'), (req, res) => {
+    try { res.json({ success: true, well: wells.startWell(req.params.id, req.user.username) }); }
+    catch (e) { res.status(e.status || 400).json({ error: e.message }); }
+});
+app.post('/api/wells/:id/complete', auth.requireAuth, auth.requireRole('admin', 'operator'), (req, res) => {
+    try { res.json({ success: true, well: wells.completeWell(req.params.id, req.user.username) }); }
+    catch (e) { res.status(e.status || 400).json({ error: e.message }); }
 });
 
 // --- Sync agent (store-and-forward, outbound only) ---
@@ -1198,11 +1226,11 @@ app.put('/api/efficiency/config', auth.requireAuth, auth.requireRole('admin'), a
 
 // --- WITSML 1.4.1 export (interoperability, export only) ---
 app.get('/api/witsml/well', auth.requireAuth, (req, res) => {
-    res.type('application/xml').send(witsml.wells(workover.getHeader()));
+    res.type('application/xml').send(witsml.wells(wells.getHeader() || workover.getHeader()));
 });
 app.get('/api/witsml/log', auth.requireAuth, (req, res) => {
     const minutes = Math.min(60, Math.max(1, Number(req.query.minutes) || 2));
-    res.type('application/xml').send(witsml.logs(workover.getHeader(), sync.getRecent(minutes * 60)));
+    res.type('application/xml').send(witsml.logs(wells.getHeader() || workover.getHeader(), sync.getRecent(minutes * 60)));
 });
 
 // --- Variables mapping (protocol-aware sources) ---

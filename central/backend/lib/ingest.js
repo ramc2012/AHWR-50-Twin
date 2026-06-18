@@ -179,13 +179,14 @@ async function ingestBatch({ rigId, token, schemaVersion }, batch) {
     let points = 0;
     let registered = false;
     let alarmTransition = null;   // rising-edge info for the notification dispatcher
+    let activeJob = null;         // job/well this batch is working (for well-run tracking)
     try {
         await client.query('BEGIN');
 
         // Look up the rig WITHOUT creating it, so an unauthorized unknown device
         // cannot auto-enroll a fake rig (audit #1).
         const { rows: existing } = await client.query(
-            `SELECT rig_id, device_token, last_seq, alarm_active, alarm_p1, alarm_highest
+            `SELECT rig_id, device_token, last_seq, alarm_active, alarm_p1, alarm_highest, active_job
              FROM rigs WHERE rig_id = $1`, [rigId]);
         let rig = existing[0] || null;
 
@@ -283,7 +284,12 @@ async function ingestBatch({ rigId, token, schemaVersion }, batch) {
         }
         if (activity) {
             if (activity.phase || activity.activity) { sets.push(`active_activity = $${++i}`); vals.push(activity.phase || activity.activity); }
-            if (activity.job) { sets.push(`active_job = $${++i}`); vals.push(activity.job); }
+            if (activity.job) { sets.push(`active_job = $${++i}`); vals.push(activity.job); activeJob = String(activity.job); }
+        }
+        // Resolve the job for well-run tracking: the activity payload's job wins;
+        // otherwise fall back to whatever active_job the rig already has on record.
+        if (!activeJob) {
+            activeJob = (rig && rig.active_job) ? String(rig.active_job) : null;
         }
         await client.query(`UPDATE rigs SET ${sets.join(', ')} WHERE rig_id = $1`, vals);
 
@@ -299,7 +305,7 @@ async function ingestBatch({ rigId, token, schemaVersion }, batch) {
         client.release();
     }
 
-    return { ok: true, rigId, points, events: events.length, seq, alarmTransition };
+    return { ok: true, rigId, points, events: events.length, seq, alarmTransition, activeJob };
 }
 
 module.exports = { ingestBatch, EXPECTED_METRICS };

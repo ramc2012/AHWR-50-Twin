@@ -8,6 +8,12 @@ services:
     image: influxdb:2.7
     container_name: romii_influxdb
     restart: unless-stopped
+    # Resource bounds (audit remediation): the edge compose set no limits, so a
+    # runaway InfluxDB compaction could starve the rig node. InfluxDB is the heaviest
+    # edge consumer (TSM cache); tune to the box. Limits below suit a 4c/16GB rig PC.
+    cpus: 2.0
+    mem_limit: 2g
+    mem_reservation: 512m
     environment:
       - DOCKER_INFLUXDB_INIT_MODE=setup
       - DOCKER_INFLUXDB_INIT_USERNAME=${INFLUX_USERNAME:-admin}
@@ -33,8 +39,13 @@ services:
     container_name: romii_telegraf
     hostname: telegraf
     restart: unless-stopped
+    cpus: 0.5
+    mem_limit: 512m
+    mem_reservation: 128m
     # Hot-reload telegraf.conf when the backend rewrites it (no Docker socket needed).
-    command: telegraf --config /etc/telegraf/telegraf.conf --watch-config=poll
+    # --config-directory loads telegraf.d/ (the outputs.health liveness probe) alongside
+    # the backend-managed telegraf.conf, so the managed PLC section is never disturbed.
+    command: telegraf --config /etc/telegraf/telegraf.conf --config-directory /etc/telegraf/telegraf.d --watch-config=poll
     volumes:
       - ./telegraf:/etc/telegraf
     environment:
@@ -42,6 +53,17 @@ services:
       - INFLUX_TOKEN=${INFLUX_TOKEN}
       - INFLUX_ORG=${INFLUX_ORG:-romii_org}
       - INFLUX_BUCKET=${INFLUX_BUCKET:-romii_bucket}
+    # Liveness (audit remediation: telegraf previously had NO healthcheck). The
+    # outputs.health plugin (telegraf/telegraf.d/health.conf) serves 200 while the agent
+    # and output pipeline are alive, 503 if the metric buffer wedges — so Docker now
+    # flips a hung-but-running collector to 'unhealthy' instead of only acting on a full
+    # crash. Data-freshness is separately scored by the backend /api/health/edge.
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8888/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
     depends_on:
       influxdb:
         condition: service_healthy
@@ -52,6 +74,9 @@ services:
       dockerfile: backend/Dockerfile
     container_name: romii_backend
     restart: unless-stopped
+    cpus: 1.5
+    mem_limit: 1g
+    mem_reservation: 256m
     environment:
       - NODE_ENV=production
       - PORT=5000
@@ -107,8 +132,15 @@ services:
       dockerfile: frontend/Dockerfile
     container_name: romii_frontend
     restart: unless-stopped
+    cpus: 0.5
+    mem_limit: 256m
+    mem_reservation: 64m
     ports:
-      - "${FRONTEND_PORT:-8080}:80"
+      # Loopback-only by default: the HMI is published on 127.0.0.1 so it is not
+      # exposed on all host interfaces. To reach it from operator workstations on
+      # the rig LAN, set FRONTEND_BIND (e.g. the rig NIC's IP) or front it with the
+      # rig firewall — don't drop the 127.0.0.1 prefix to bind 0.0.0.0 blindly.
+      - "${FRONTEND_BIND:-127.0.0.1}:${FRONTEND_PORT:-8080}:80"
     depends_on:
       backend:
         condition: service_healthy

@@ -180,7 +180,12 @@ securityContext:
 config:
   PGHOST: crmf-timescaledb-rw
   PGPORT: "5432"
-  PGUSER: crmf
+  # Audit #2: connect as the least-privilege crmf_app role (NOT the schema owner). Under
+  # CloudNativePG the schema runs as `postgres`, so only crmf_app holds table privileges
+  # and crmf_app cannot drop/bypass the append-only audit_log trigger. crmf_app's login
+  # password is provisioned by the CNPG cluster's managed.roles
+  # (deploy/k8s/platform/timescaledb/00-cluster.yaml) and MUST equal crmf-secrets PGPASSWORD.
+  PGUSER: crmf_app
   PGDATABASE: crmf
   PORT: "6000"
   OFFLINE_SEC: "120"
