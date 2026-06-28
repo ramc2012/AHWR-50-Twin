@@ -118,6 +118,33 @@ services:
       retries: 5
       start_period: 25s
 
+  # Read-only MCP server: exposes fleet status / rig drill-down / alarms /
+  # governance / reports to AI systems over MCP (streamable HTTP at /mcp).
+  # Mints a viewer-role JWT, so the central RBAC blocks any write.
+  crmf-mcp:
+    build:
+      context: ./mcp-server
+      dockerfile: Dockerfile
+    container_name: crmf_mcp
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - BACKEND_URL=http://crmf-backend:6000
+      - JWT_SECRET=${JWT_SECRET:?set JWT_SECRET in .env}
+      - MCP_API_KEY=${MCP_API_KEY:-}
+      # TLS: serve HTTPS (required for Cowork / claude.ai connectors).
+      - TLS_CERT_FILE=/certs/mcp.crt
+      - TLS_KEY_FILE=/certs/mcp.key
+    volumes:
+      - ./certs:/certs:ro
+    ports:
+      # Point AI clients at https://127.0.0.1:8766/mcp
+      - "${MCP_CENTRAL_BIND:-127.0.0.1}:${MCP_CENTRAL_PORT:-8766}:3000"
+    depends_on:
+      crmf-backend:
+        condition: service_healthy
+
   # Fleet portal (React/Vite/MUI) behind nginx — proxies /api and /socket.io.
   crmf-frontend:
     build:

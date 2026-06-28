@@ -37,3 +37,6 @@ images/
 *.tar
 *.tar.sha256
 
+
+# self-signed MCP TLS certs (local)
+certs/

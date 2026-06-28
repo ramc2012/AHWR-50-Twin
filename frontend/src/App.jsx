@@ -2,6 +2,7 @@ import { lazy, Suspense } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import Layout from './components/Layout/Layout';
 const RigOverview = lazy(() => import('./components/RigOverview/RigOverview'));
+const RigConsoleOverview = lazy(() => import('./components/RigOverview/RigConsoleOverview'));
 const WellControlDashboard = lazy(() => import('./components/WellControl/WellControlDashboard'));
 const EdrDashboard = lazy(() => import('./components/EDR/EdrDashboard'));
 const FishingDashboard = lazy(() => import('./components/Fishing/FishingDashboard'));
@@ -43,7 +44,8 @@ function App() {
 
                         <Route element={<ProtectedRoute />}>
                             <Route path="/" element={<Layout />}>
-                                <Route index element={screen(RigOverview)} />
+                                <Route index element={screen(RigConsoleOverview)} />
+                                <Route path="overview-classic" element={screen(RigOverview)} />
                                 <Route path="engine" element={<Navigate to="/equipment" replace />} />
                                 <Route path="wellcontrol" element={screen(WellControlDashboard)} />
                                 <Route path="fishing" element={screen(FishingDashboard)} />

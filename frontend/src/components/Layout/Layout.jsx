@@ -19,7 +19,8 @@ import {
     RefreshCw,
     ClipboardList,
     Gauge,
-    MapPin
+    MapPin,
+    KeyRound
 } from 'lucide-react';
 import {
     Box,
@@ -46,6 +47,8 @@ import { useAuth } from '../../context/AuthContext';
 import { useNavigate } from 'react-router-dom';
 import { socket, connectSocket } from '../../socket';
 import AlarmStrip from '../Alarms/AlarmStrip';
+import { AlarmProvider } from '../../context/AlarmContext';
+import ChangePasswordDialog from '../Account/ChangePasswordDialog';
 import ThemeSwitcher from './ThemeSwitcher';
 import axios from '../../api';
 
@@ -70,10 +73,11 @@ export default function Layout() {
     const navigate = useNavigate();
 
     const [menuAnchor, setMenuAnchor] = useState(null);
+    const [pwdOpen, setPwdOpen] = useState(false);
     const [connected, setConnected] = useState(socket.connected);
 
     // Live rig parameters for the top bar
-    const [liveParams, setLiveParams] = useState({ opMode: 0, acsStatus: 0, holeDepth: 0, bitDepth: 0 });
+    const [liveParams, setLiveParams] = useState({ opMode: 0, acsStatus: 0, holeDepth: 0, bitDepth: 0, activity: '', productive: true, stale: false });
 
     const getOpModeLabel = (code) => {
         switch (Number(code)) {
@@ -158,6 +162,9 @@ export default function Layout() {
                 acsStatus: data.acs?.status || 0,
                 holeDepth: data.drilling?.hole_depth || 0,
                 bitDepth: data.drilling?.bit_depth || 0,
+                activity: data._activity?.label || '',
+                productive: data._activity?.productive !== false,
+                stale: !!data._meta?.stale,
             });
         };
         socket.on('rig_data', handleRigData);
@@ -222,6 +229,7 @@ export default function Layout() {
     const displayRig = activeWell?.rig || wellInfo.rig;
 
     return (
+        <AlarmProvider>
         <Box sx={{ display: 'flex', flexDirection: 'column', minHeight: '100vh' }}>
             <CssBaseline />
 
@@ -246,8 +254,15 @@ export default function Layout() {
                         px: { xs: 1.5, sm: 2, md: 3 }
                     }}
                 >
-                    {/* App Name */}
-                    <Typography variant="h6" noWrap sx={{ fontWeight: 'bold', color: '#38bdf8', mr: { xs: 0.5, md: 1 }, fontSize: { xs: '1rem', sm: '1.25rem' } }}>
+                    {/* App Name — click to go to the Overview */}
+                    <Typography
+                        variant="h6" noWrap
+                        onClick={() => navigate('/')}
+                        role="button" tabIndex={0}
+                        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') navigate('/'); }}
+                        title="Go to Rig Overview"
+                        sx={{ fontWeight: 'bold', color: '#38bdf8', mr: { xs: 0.5, md: 1 }, fontSize: { xs: '1rem', sm: '1.25rem' }, cursor: 'pointer', '&:hover': { opacity: 0.85 } }}
+                    >
                         AHWR-50 Twin
                     </Typography>
 
@@ -369,6 +384,23 @@ export default function Layout() {
                                 <Typography component="span" variant="caption" sx={{ ml: 0.5, color: '#64748b', fontSize: 11 }}>m</Typography>
                             </Typography>
                         </Box>
+                        {/* ACTIVITY (workover phase) */}
+                        {liveParams.activity ? (
+                            <Box sx={{ display: 'flex', flexDirection: 'column', justifyContent: 'center', textAlign: 'center', bgcolor: '#1e293b', px: { xs: 1, sm: 2.5 }, height: 60, borderRadius: 1, border: '1px solid #334155', minWidth: 120 }}>
+                                <Typography variant="caption" sx={{ color: '#94a3b8', fontWeight: 'bold', letterSpacing: 1, fontSize: 12, lineHeight: 1.2 }}>ACTIVITY</Typography>
+                                <Typography noWrap variant="subtitle2" sx={{ color: liveParams.productive ? '#4ade80' : '#fbbf24', fontWeight: 'bold', fontSize: 15, lineHeight: 1.2 }}>
+                                    {String(liveParams.activity).toUpperCase()}
+                                </Typography>
+                            </Box>
+                        ) : null}
+                        {/* LIVE / STALE feed indicator */}
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, px: 0.5 }}>
+                            <Box sx={{ width: 9, height: 9, borderRadius: '50%', bgcolor: !connected ? '#ef4444' : (liveParams.stale ? '#fbbf24' : '#22c55e'), boxShadow: `0 0 6px ${!connected ? '#ef4444' : (liveParams.stale ? '#fbbf24' : '#22c55e')}`, animation: (connected && !liveParams.stale) ? 'romiiLivePulse 1.6s ease-in-out infinite' : 'none' }} />
+                            <Typography variant="caption" sx={{ color: '#cbd5e1', fontWeight: 'bold', letterSpacing: 1, fontSize: 12 }}>
+                                {!connected ? 'OFFLINE' : (liveParams.stale ? 'STALE' : 'LIVE')}
+                            </Typography>
+                            <style>{'@keyframes romiiLivePulse{0%,100%{opacity:1}50%{opacity:.25}}'}</style>
+                        </Box>
                     </Box>
 
 
@@ -419,12 +451,19 @@ export default function Layout() {
                         
                         <ThemeSwitcher />
 
+                        <IconButton onClick={() => setPwdOpen(true)} sx={{ color: '#94a3b8', '&:hover': { color: '#38bdf8', bgcolor: 'rgba(56,189,248,0.1)' } }}
+                            title={user?.username ? `${user.username} — change password` : 'Change password'}>
+                            <KeyRound size={19} />
+                        </IconButton>
+
                         <IconButton onClick={handleLogout} sx={{ color: '#ef4444', '&:hover': { bgcolor: 'rgba(239, 68, 68, 0.1)' } }} title="Logout">
                             <LogOut size={20} />
                         </IconButton>
                     </Box>
                 </Toolbar>
             </AppBar>
+
+            <ChangePasswordDialog open={pwdOpen} onClose={() => setPwdOpen(false)} />
 
             {/* Persistent global alarm strip — shown on every route, directly below the AppBar. */}
             <Box
@@ -497,5 +536,6 @@ export default function Layout() {
                 <Outlet />
             </Box>
         </Box>
+        </AlarmProvider>
     );
 }

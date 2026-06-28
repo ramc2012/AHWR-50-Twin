@@ -3,10 +3,11 @@ import {
     Box, Typography, Paper, Button, Tabs, Tab, Table, TableBody, TableCell,
     TableContainer, TableHead, TableRow, TableSortLabel, Chip, Tooltip, useTheme
 } from '@mui/material';
-import { ShieldAlert, Check, History as HistoryIcon, Star } from 'lucide-react';
+import { ShieldAlert, Check, History as HistoryIcon, Star, SlidersHorizontal } from 'lucide-react';
 import axios from '../../api';
 import { socket } from '../../socket';
 import { useAuth } from '../../context/AuthContext';
+import AlarmSettingsTable from './AlarmSettingsTable';
 import { priorityColor, stateLabel, priorityRank } from '../../utils/alarms';
 import { formatDuration, formatClock, secondsSince } from '../../utils/format';
 
@@ -251,6 +252,7 @@ export default function AlarmsPage() {
     const theme = useTheme();
     const { user } = useAuth();
     const canWrite = user?.role === 'admin' || user?.role === 'operator';
+    const isAdmin = user?.role === 'admin';
 
     const [tab, setTab] = useState(0);
     const [active, setActive] = useState([]);
@@ -333,11 +335,13 @@ export default function AlarmsPage() {
                 <Tabs value={tab} onChange={(e, v) => { setTab(v); if (v === 1) loadHistory(); }} textColor="primary" indicatorColor="primary">
                     <Tab icon={<ShieldAlert size={16} />} iconPosition="start" label="Active" sx={{ color: tab === 0 ? theme.palette.primary.main : theme.palette.text.secondary, textTransform: 'none', minHeight: 44 }} />
                     <Tab icon={<HistoryIcon size={16} />} iconPosition="start" label="History" sx={{ color: tab === 1 ? theme.palette.primary.main : theme.palette.text.secondary, textTransform: 'none', minHeight: 44 }} />
+                    <Tab icon={<SlidersHorizontal size={16} />} iconPosition="start" label="Settings" sx={{ color: tab === 2 ? theme.palette.primary.main : theme.palette.text.secondary, textTransform: 'none', minHeight: 44 }} />
                 </Tabs>
             </Box>
 
             {tab === 0 && <ActiveTable rows={active} canWrite={canWrite} onAck={handleAck} onAckAll={handleAckAll} />}
             {tab === 1 && <HistoryTable rows={history} />}
+            {tab === 2 && <AlarmSettingsTable canEdit={isAdmin} />}
         </Box>
     );
 }

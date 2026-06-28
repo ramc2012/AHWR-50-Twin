@@ -6,7 +6,7 @@
 services:
   influxdb:
     image: influxdb:2.7
-    container_name: romii_influxdb
+    container_name: AHWR_influxdb
     restart: unless-stopped
     # Resource bounds (audit remediation): the edge compose set no limits, so a
     # runaway InfluxDB compaction could starve the rig node. InfluxDB is the heaviest
@@ -36,7 +36,7 @@ services:
 
   telegraf:
     image: telegraf:1.29
-    container_name: romii_telegraf
+    container_name: AHWR_telegraf
     hostname: telegraf
     restart: unless-stopped
     cpus: 0.5
@@ -72,7 +72,7 @@ services:
     build:
       context: .
       dockerfile: backend/Dockerfile
-    container_name: romii_backend
+    container_name: AHWR_backend
     restart: unless-stopped
     cpus: 1.5
     mem_limit: 1g
@@ -126,11 +126,43 @@ services:
         condition: service_healthy
     # No host port: the backend is reachable only via the frontend's nginx proxy.
 
+  # Read-only MCP server: exposes the edge twin's telemetry/alarms/KPIs/history
+  # to AI systems over the Model Context Protocol (streamable HTTP at /mcp).
+  # It mints a viewer-role JWT, so the backend RBAC blocks any write.
+  mcp-edge:
+    build:
+      context: ./edge-mcp-server
+      dockerfile: Dockerfile
+    container_name: AHWR_mcp_edge
+    restart: unless-stopped
+    cpus: 0.25
+    mem_limit: 192m
+    mem_reservation: 48m
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - BACKEND_URL=http://backend:5000
+      - JWT_SECRET=${JWT_SECRET:?set JWT_SECRET in .env}
+      - MCP_API_KEY=${MCP_API_KEY:-}   # bearer guard on /mcp (set in .env)
+      # TLS: serve HTTPS (required for Cowork / claude.ai connectors). Certs are
+      # mounted read-only below; swap in a CA-signed cert for production.
+      - TLS_CERT_FILE=/certs/mcp.crt
+      - TLS_KEY_FILE=/certs/mcp.key
+    volumes:
+      - ./certs:/certs:ro
+    ports:
+      # Loopback-only by default (same posture as the HMI). Point AI clients at
+      # https://127.0.0.1:8765/mcp ; set MCP_EDGE_BIND to expose on the LAN.
+      - "${MCP_EDGE_BIND:-127.0.0.1}:${MCP_EDGE_PORT:-8765}:3000"
+    depends_on:
+      backend:
+        condition: service_healthy
+
   frontend:
     build:
       context: .
       dockerfile: frontend/Dockerfile
-    container_name: romii_frontend
+    container_name: AHWR_frontend
     restart: unless-stopped
     cpus: 0.5
     mem_limit: 256m
@@ -149,7 +181,7 @@ services:
   # Enabled only with:  docker compose --profile demo up
   mock:
     build: ./mock
-    container_name: romii_mock
+    container_name: AHWR_mock
     restart: unless-stopped
     profiles: ["demo"]
     environment:
@@ -166,7 +198,7 @@ services:
   # opcua input can be validated end-to-end. Stands in for an OPC UA protocol device.
   opc-plc:
     image: mcr.microsoft.com/iotedge/opc-plc:2.12.29
-    container_name: romii_opc_plc
+    container_name: AHWR_opc_plc
     hostname: opc-plc
     restart: unless-stopped
     profiles: ["demo"]
@@ -176,7 +208,7 @@ services:
   # independent of the S7comm collector (which fails closed without a real PLC).
   telegraf-opcua:
     image: telegraf:1.29
-    container_name: romii_telegraf_opcua
+    container_name: AHWR_telegraf_opcua
     restart: unless-stopped
     profiles: ["demo"]
     command: telegraf --config /etc/telegraf/opcua.conf
@@ -196,7 +228,7 @@ services:
   #   viewer1/View@123 (rig-viewers). Admin bind: cn=admin,dc=ahwr,dc=local / adminpassword.
   openldap:
     build: ./ldap-test
-    container_name: romii_openldap
+    container_name: AHWR_openldap
     hostname: openldap
     restart: unless-stopped
     profiles: ["demo"]
@@ -208,7 +240,7 @@ services:
   # Lets the edge store-and-forward loop be demonstrated end-to-end. Demo profile only.
   sync-sink:
     build: ./sync-sink
-    container_name: romii_sync_sink
+    container_name: AHWR_sync_sink
     restart: unless-stopped
     profiles: ["demo"]
     environment:
@@ -218,7 +250,7 @@ services:
   # Local-demo ETP 2.0 server stub (stands in for the CRMF ETP server). Demo profile only.
   etp-sink:
     build: ./etp-sink
-    container_name: romii_etp_sink
+    container_name: AHWR_etp_sink
     restart: unless-stopped
     profiles: ["demo"]
     environment:

@@ -32,7 +32,9 @@ import {
     Ruler,
     Settings,
     SlidersHorizontal,
-    Trash2
+    Trash2,
+    ZoomIn,
+    ZoomOut
 } from 'lucide-react';
 import axios from '../../api';
 import { socket } from '../../socket';
@@ -167,7 +169,9 @@ const loadPersisted = (storageKey, defaultStrips, defaultReadouts) => {
     const fallback = {
         strips: normalizeStrips(defaultStrips),
         indexMode: 'time',
-        readouts: normalizeReadouts(defaultReadouts)
+        readouts: normalizeReadouts(defaultReadouts),
+        timeWinIdx: undefined,
+        depthSpanIdx: undefined
     };
     if (!storageKey) return fallback;
     try {
@@ -180,10 +184,14 @@ const loadPersisted = (storageKey, defaultStrips, defaultReadouts) => {
         const readouts = Array.isArray(parsed?.readouts)
             ? normalizeReadouts(parsed.readouts)
             : fallback.readouts;
+        const validIdx = (v, len) => (Number.isInteger(v) && v >= 0 && v < len) ? v : undefined;
         return {
             strips: strips.length ? strips : fallback.strips,
             indexMode: parsed?.indexMode === 'depth' ? 'depth' : 'time',
-            readouts
+            readouts,
+            // Persisted period (time window / depth span) selections.
+            timeWinIdx: validIdx(parsed?.timeWinIdx, TIME_WINDOWS.length),
+            depthSpanIdx: validIdx(parsed?.depthSpanIdx, DEPTH_SPANS.length)
         };
     } catch (e) {
         return fallback;
@@ -1086,21 +1094,21 @@ export default function EdrView({
     // Configurable TOP readouts (full mode). Defaults to the rightReadouts prop.
     const [readouts, setReadouts] = useState(initial.readouts);
 
-    const [timeWinIdx, setTimeWinIdx] = useState(isCompact ? 0 : 1);
-    const [depthSpanIdx, setDepthSpanIdx] = useState(2);
+    const [timeWinIdx, setTimeWinIdx] = useState(initial.timeWinIdx ?? (isCompact ? 0 : 1));
+    const [depthSpanIdx, setDepthSpanIdx] = useState(initial.depthSpanIdx ?? 2);
     const [scrollOffset, setScrollOffset] = useState(0); // ms back in time, or m up in depth
     const [configStrip, setConfigStrip] = useState(null);
 
     const [data, setData] = useState([]); // [{ timestamp, depth, values:{channelId:value} }]
     const dragRef = useRef(null);
 
-    // Persist strip config + index mode + readout selection (same storageKey).
+    // Persist strip config + index mode + readout selection + period selection.
     useEffect(() => {
         if (!storageKey) return;
         try {
-            localStorage.setItem(storageKey, JSON.stringify({ strips, indexMode, readouts }));
+            localStorage.setItem(storageKey, JSON.stringify({ strips, indexMode, readouts, timeWinIdx, depthSpanIdx }));
         } catch (e) { /* best effort */ }
-    }, [storageKey, strips, indexMode, readouts]);
+    }, [storageKey, strips, indexMode, readouts, timeWinIdx, depthSpanIdx]);
 
     // Set of channels we need to fetch (all pens + readouts + depth band).
     const neededChannels = useMemo(() => {
@@ -1252,16 +1260,33 @@ export default function EdrView({
     const scrollBack = useCallback(() => scrollByAmount(scrollStep), [scrollByAmount, scrollStep]);   // older / shallower
     const scrollFwd = useCallback(() => scrollByAmount(-scrollStep), [scrollByAmount, scrollStep]);    // newer / deeper
 
-    // --- Mouse-wheel continuous scroll (non-passive so we can preventDefault) ---
+    // --- Zoom (change the visible time window / depth span) ---
+    const periodLen = indexMode === 'time' ? TIME_WINDOWS.length : DEPTH_SPANS.length;
+    const periodIdx = indexMode === 'time' ? timeWinIdx : depthSpanIdx;
+    const atMaxZoomIn = periodIdx <= 0;                 // smallest window selected
+    const atMaxZoomOut = periodIdx >= periodLen - 1;    // largest window selected
+    const zoomBy = useCallback((dir) => {
+        // dir -1 = zoom IN (smaller window, more detail); +1 = zoom OUT (larger window).
+        if (indexMode === 'time') setTimeWinIdx((i) => Math.max(0, Math.min(TIME_WINDOWS.length - 1, i + dir)));
+        else setDepthSpanIdx((i) => Math.max(0, Math.min(DEPTH_SPANS.length - 1, i + dir)));
+    }, [indexMode]);
+
+    // --- Mouse-wheel: scroll, or Ctrl/⌘+wheel to zoom (non-passive for preventDefault) ---
     const stripAreaRef = useRef(null);
     const wheelStepRef = useRef(wheelStep);
     wheelStepRef.current = wheelStep;
+    const zoomRef = useRef(zoomBy);
+    zoomRef.current = zoomBy;
     useEffect(() => {
         const el = stripAreaRef.current;
         if (!el) return undefined;
         const onWheel = (e) => {
             // Block the page from scrolling while the pointer is over the strips.
             e.preventDefault();
+            if (e.ctrlKey || e.metaKey) {                 // Ctrl/⌘ + wheel = zoom
+                zoomRef.current(e.deltaY < 0 ? -1 : 1);   // wheel up = zoom in
+                return;
+            }
             // wheel up (deltaY < 0) => back into history; wheel down => toward live.
             const dir = e.deltaY < 0 ? 1 : -1;
             setScrollOffset(o => clampOffset(o + dir * wheelStepRef.current));
@@ -1386,6 +1411,26 @@ export default function EdrView({
                             </Button>
                         );
                     })}
+                </Box>
+
+                {/* Zoom in / out — steps the visible window (also Ctrl/⌘ + wheel) */}
+                <Box sx={{ display: 'flex', gap: 0.5, alignItems: 'center' }}>
+                    <MuiTooltip title="Zoom out — larger window">
+                        <span>
+                            <IconButton size="small" onClick={() => zoomBy(1)} disabled={atMaxZoomOut}
+                                sx={{ color: subText, border: `1px solid ${border}`, borderRadius: 1, p: 0.4, '&:hover': { color: accent, borderColor: accent } }}>
+                                <ZoomOut size={16} />
+                            </IconButton>
+                        </span>
+                    </MuiTooltip>
+                    <MuiTooltip title="Zoom in — smaller window">
+                        <span>
+                            <IconButton size="small" onClick={() => zoomBy(-1)} disabled={atMaxZoomIn}
+                                sx={{ color: subText, border: `1px solid ${border}`, borderRadius: 1, p: 0.4, '&:hover': { color: accent, borderColor: accent } }}>
+                                <ZoomIn size={16} />
+                            </IconButton>
+                        </span>
+                    </MuiTooltip>
                 </Box>
 
                 <Box sx={{ flex: 1 }} />

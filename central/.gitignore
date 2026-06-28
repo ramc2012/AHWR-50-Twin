@@ -3,3 +3,6 @@ dist/
 .env
 *.log
 .DS_Store
+
+# self-signed MCP TLS certs (local)
+certs/

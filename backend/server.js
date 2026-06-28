@@ -22,6 +22,7 @@ const health = require('./lib/health');
 const witsml = require('./lib/witsml');
 const etp = require('./lib/etp');
 const efficiency = require('./lib/efficiency');
+const kpi = require('./lib/kpi');
 const wells = require('./lib/wells');
 const edrCatalog = require('../shared/edrMetrics.json');
 
@@ -460,9 +461,11 @@ const queryData = async () => {
             data._torqueturn = workover.getTorqueTurnLive();
             const al = alarms.evaluate(data, now);
             data._alarms = al.counts;
+            data._alarmMap = alarms.getActiveMap();   // dataKey -> alarm, for per-widget latch/blink
             if (al.changed) io.emit('alarms', al);
             maintenance.updateHours(data, now);
             data._efficiency = efficiency.update(data, now, { jointMade: !!tt.connectionMade });
+            data._kpi = kpi.update(data, now);   // derived drilling KPIs (server-computed; client just consumes)
             // Store-and-forward: queue telemetry + events for sync to central
             sync.enqueueTelemetry(data, now);
             if (al.changed) sync.enqueueEvent('alarm', al.counts, now);
@@ -470,7 +473,9 @@ const queryData = async () => {
         } else {
             data._activity = workover.getCurrent();
             data._alarms = alarms.snapshot().counts;
+            data._alarmMap = alarms.getActiveMap();
             data._efficiency = efficiency.compute(data);
+            data._kpi = kpi.compute(data);
         }
 
         latestRigData = data;
@@ -820,6 +825,30 @@ app.delete('/api/users/:id', auth.requireAuth, auth.requireRole('admin'), async 
     res.json({ success: true });
 });
 
+// API: Self-service password change (any authenticated LOCAL user).
+// Verifies the current password before setting the new one. Domain (LDAP/AD)
+// users have no local password — they must change it in their directory.
+app.post('/api/me/password', auth.requireAuth, async (req, res) => {
+    const { currentPassword, newPassword } = req.body || {};
+    const me = users.find(u => u.id == req.user.sub) || users.find(u => u.username === req.user.username);
+    if (!me) return res.status(404).json({ error: 'Account not found' });
+    if (me.source === 'ldap' || !me.password) {
+        return res.status(400).json({ error: 'Domain (Active Directory) accounts must change their password in Windows / your domain, not here.' });
+    }
+    if (!currentPassword || !auth.verifyPassword(currentPassword, me.password)) {
+        return res.status(400).json({ error: 'Current password is incorrect' });
+    }
+    if (!newPassword || String(newPassword).length < 8) {
+        return res.status(400).json({ error: 'New password must be at least 8 characters' });
+    }
+    if (auth.verifyPassword(newPassword, me.password)) {
+        return res.status(400).json({ error: 'New password must be different from the current one' });
+    }
+    me.password = auth.hashPassword(newPassword);
+    await saveUsers();
+    res.json({ success: true });
+});
+
 // --- Dashboard Persistence ---
 const DASHBOARD_FULL_CONFIG_FILE = path.join(DATA_DIR, 'dashboard_layout.json');
 const DASHBOARD_AUDIT_FILE = path.join(DATA_DIR, 'dashboard_layout_audit.json');
@@ -1151,9 +1180,56 @@ app.post('/api/alarms/:id/ack', auth.requireAuth, auth.requireRole('admin', 'ope
     const snap = alarms.snapshot(); io.emit('alarms', snap);
     res.json({ success: ok, ...snap });
 });
+// Catalog of every alarmable parameter (raw tags + derived/computed KPIs), so the
+// alarm-settings UI can offer them all. Auto-derived from (1) the variables
+// registry and (2) the live telemetry payload, so new inputs/KPIs appear here
+// automatically once they're in the feed or the registry.
+const _titleCase = (s) => String(s).replace(/_/g, ' ').replace(/\b\w/g, (m) => m.toUpperCase());
+function flattenNumericLeaves(obj, prefix, out) {
+    for (const [k, v] of Object.entries(obj || {})) {
+        // Skip alarm/meta plumbing at the top level — not meaningful to alarm on.
+        if (prefix === '' && (k === '_meta' || k === '_alarmMap' || k === '_alarms')) continue;
+        const path = prefix ? `${prefix}.${k}` : k;
+        if (v != null && typeof v === 'object' && !Array.isArray(v)) flattenNumericLeaves(v, path, out);
+        else if (typeof v === 'number' && Number.isFinite(v)) out[path] = v;
+        else if (typeof v === 'boolean') out[path] = v ? 1 : 0;
+    }
+    return out;
+}
+app.get('/api/alarms/catalog', auth.requireAuth, (req, res) => {
+    const live = flattenNumericLeaves(latestRigData, '', {});
+    const byKey = new Map();
+    // 1) Known variables (authoritative labels/units/derived flag).
+    for (const v of variables.getVariables()) {
+        byKey.set(v.id, {
+            dataKey: v.id,
+            label: v.label || v.id,
+            unit: v.unit || '',
+            group: v.measurement || String(v.id).split('.')[0],
+            derived: v.sourceType === 'derived',
+            value: Object.prototype.hasOwnProperty.call(live, v.id) ? live[v.id] : null,
+        });
+    }
+    // 2) Anything live in the payload but not in the registry — chiefly the
+    //    computed _efficiency.* KPIs and other derived blocks.
+    for (const [k, val] of Object.entries(live)) {
+        if (byKey.has(k)) { byKey.get(k).value = val; continue; }
+        const seg = k.split('.');
+        byKey.set(k, { dataKey: k, label: _titleCase(seg[seg.length - 1]), unit: '', group: seg[0], derived: k.startsWith('_'), value: val });
+    }
+    const list = [...byKey.values()].sort((a, b) => (a.group + ' ' + a.label).localeCompare(b.group + ' ' + b.label));
+    res.json(list);
+});
+
 app.get('/api/alarms/config', auth.requireAuth, (req, res) => res.json(alarms.getConfig()));
 app.put('/api/alarms/config', auth.requireAuth, auth.requireRole('admin'), async (req, res) => {
-    try { res.json({ success: true, config: await alarms.setConfig(req.body) }); }
+    try {
+        const config = await alarms.setConfig(req.body);
+        // Disabling/removing a rule prunes its active alarm — push the fresh snapshot
+        // so the strip/widgets clear immediately instead of waiting for a change tick.
+        io.emit('alarms', alarms.snapshot());
+        res.json({ success: true, config });
+    }
     catch (e) { res.status(e.status || 400).json({ error: e.message }); }
 });
 

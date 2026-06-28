@@ -143,11 +143,70 @@ function ackAll(user, nowMs = Date.now()) {
 const getActive = () => snapshot();
 const getHistory = (limit = 200) => events.slice(-limit).reverse();
 const getConfig = () => config;
+
+// dataKey -> alarm presentation, so individual dashboard widgets can latch/blink
+// the offending parameter. On the (rare) collision of two rules on one dataKey,
+// keep the more important one to show: unacked beats acked, then lower priority rank.
+function getActiveMap() {
+    const map = {};
+    const moreImportant = (a, b) => {
+        const ua = a.state !== 'ACK', ub = b.state !== 'ACK';
+        if (ua !== ub) return ua;
+        return PRIORITY_RANK[a.priority] < PRIORITY_RANK[b.priority];
+    };
+    for (const a of active.values()) {
+        const cur = map[a.dataKey];
+        if (!cur || moreImportant(a, cur)) {
+            map[a.dataKey] = { id: a.id, priority: a.priority, state: a.state, condition: a.condition, value: a.value, limit: a.limit, label: a.label, unit: a.unit };
+        }
+    }
+    return map;
+}
+
+// Coerce a single config row from the settings UI into a clean rule.
+function sanitizeEntry(e) {
+    if (!e || typeof e !== 'object') return null;
+    const key = String(e.key || '').trim();
+    const dataKey = String(e.dataKey || '').trim();
+    if (!key || !dataKey) return null;
+    const numOrNull = (v) => (v === '' || v == null || !Number.isFinite(Number(v))) ? null : Number(v);
+    return {
+        key, dataKey,
+        label: String(e.label || key),
+        unit: e.unit == null ? '' : String(e.unit),
+        hi: numOrNull(e.hi), hiHi: numOrNull(e.hiHi), lo: numOrNull(e.lo), loLo: numOrNull(e.loLo),
+        deadband: Math.max(0, Number(e.deadband) || 0),
+        onDelaySec: Math.max(0, Number(e.onDelaySec) || 0),
+        priority: ['P1', 'P2', 'P3'].includes(e.priority) ? e.priority : 'P3',
+        enabled: e.enabled !== false,
+    };
+}
+
 async function setConfig(next) {
     if (!Array.isArray(next)) throw Object.assign(new Error('config must be an array'), { status: 400 });
-    config = next;
+    const seen = new Set();
+    const cleaned = [];
+    for (const e of next) {
+        const s = sanitizeEntry(e);
+        if (!s) throw Object.assign(new Error('each alarm needs a key and dataKey'), { status: 400 });
+        if (seen.has(s.key)) throw Object.assign(new Error(`duplicate alarm key: ${s.key}`), { status: 400 });
+        seen.add(s.key); cleaned.push(s);
+    }
+    config = cleaned;
+    // Prune active/pending alarms whose rule was just removed or disabled, so the
+    // operator turning an alarm off actually clears it (evaluate() skips disabled).
+    const live = new Map(cleaned.map((c) => [c.key, c]));
+    for (const id of [...active.keys()]) {
+        const c = live.get(id);
+        if (!c || !c.enabled) {
+            const rec = active.get(id);
+            active.delete(id);
+            logEvent({ ts: new Date().toISOString(), type: 'RTN', key: id, label: rec ? rec.label : id, note: 'config-change' });
+        }
+    }
+    for (const id of [...pending.keys()]) { const c = live.get(id); if (!c || !c.enabled) pending.delete(id); }
     await writeJson(CONFIG_FILE, config);
     return config;
 }
 
-module.exports = { evaluate, ack, ackAll, getActive, getHistory, getConfig, setConfig, snapshot };
+module.exports = { evaluate, ack, ackAll, getActive, getActiveMap, getHistory, getConfig, setConfig, snapshot };
