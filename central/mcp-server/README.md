@@ -2,9 +2,16 @@
 
 A [Model Context Protocol](https://modelcontextprotocol.io) server that exposes the **CRMF central facility** (fleet monitoring) to AI systems — **read-only**.
 
-It mints a `viewer`-role JWT (signed with the central `JWT_SECRET`), so the central RBAC rejects any write. Transport is **streamable HTTP** (stateless JSON) at `POST /mcp`.
+It uses a dedicated opaque `MCP_BACKEND_TOKEN`. The central backend recognizes
+that credential as `mcp-readonly` and rejects every non-safe HTTP method before
+route handling. The MCP process never receives the central JWT signing secret.
+Transport is **streamable HTTP** (stateless JSON) at `POST /mcp`.
 
-**Security:** serves **HTTPS** when `TLS_CERT_FILE`/`TLS_KEY_FILE` are set (required for Cowork / claude.ai connectors), requires an **API key** (`MCP_API_KEY` → `Authorization: Bearer <key>`), and **audit-logs** every request. Self-signed cert mounted for local use; use a CA-signed cert in production. Endpoint: `https://127.0.0.1:8766/mcp`.
+**Security:** serves HTTPS, requires authenticated access, validates Host and
+Origin, rate-limits requests, and records the authenticated client id. API-key
+mode is intended for loopback/trusted-workstation use. Remote multi-user
+deployments use OAuth resource-server mode with issuer, audience, JWKS, and
+scope validation.
 
 ## Tools (all read-only)
 
@@ -36,8 +43,20 @@ docker compose --profile demo up -d --build      # brings up timescaledb, backen
 # MCP endpoint: http://127.0.0.1:8766/mcp
 ```
 
-Config (env): `JWT_SECRET` (shared with central backend, required), `BACKEND_URL` (default `http://crmf-backend:6000`),
-`MCP_API_KEY` (optional bearer guard), `MCP_CENTRAL_BIND`/`MCP_CENTRAL_PORT` (default `127.0.0.1:8766`).
+Required local config: `MCP_BACKEND_TOKEN` (same opaque value on backend and
+MCP, minimum 32 characters), `MCP_API_KEY`, and `BACKEND_URL`.
+`MCP_API_KEY_ID` labels the client in audit records; `MCP_API_KEYS_JSON`
+supports multiple client-id/key pairs.
+
+Network controls: `MCP_ALLOWED_HOSTS`, `MCP_ALLOWED_ORIGINS`,
+`MCP_RATE_LIMIT_PER_MINUTE`, `MCP_TRUST_PROXY`,
+`MCP_CENTRAL_BIND`/`MCP_CENTRAL_PORT`.
+
+Remote OAuth mode uses `MCP_AUTH_MODE=oauth`, `MCP_PUBLIC_URL` (the full public
+MCP endpoint, such as `https://mcp.example.com/mcp`),
+`MCP_OAUTH_ISSUER`, `MCP_OAUTH_AUDIENCE`, `MCP_OAUTH_JWKS_URL`, and
+`MCP_OAUTH_SCOPES`. The server publishes protected-resource metadata and
+returns a standards-compatible `WWW-Authenticate` challenge.
 
 ## Scope
 

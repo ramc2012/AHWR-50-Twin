@@ -4,6 +4,7 @@
 // on top in production. Roles: admin | operator | viewer.
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
+const crypto = require('crypto');
 const { query } = require('./db');
 const { verifyOidc } = require('./oidc');
 const ldap = require('./ldap');
@@ -20,6 +21,12 @@ const TOKEN_TTL = process.env.TOKEN_TTL || '12h';
 const OIDC_ENABLED = process.env.OIDC_ENABLED === 'true';
 const AUTH_MODE = (process.env.AUTH_MODE || 'local').toLowerCase();   // local | ldap | both
 const ROLE_RANK = { viewer: 1, operator: 2, admin: 3 };
+const MCP_BACKEND_TOKEN = process.env.MCP_BACKEND_TOKEN || '';
+const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
+
+if (MCP_BACKEND_TOKEN && MCP_BACKEND_TOKEN.length < 32) {
+    throw new Error('MCP_BACKEND_TOKEN must be at least 32 characters when configured.');
+}
 
 // Issue a signed portal JWT for an authenticated principal (local or directory).
 function issueToken(user) {
@@ -80,6 +87,16 @@ function verify(token) {
     try { return jwt.verify(token, JWT_SECRET); } catch { return null; }
 }
 
+function secureEqual(actual, expected) {
+    const a = Buffer.from(String(actual));
+    const b = Buffer.from(String(expected));
+    return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
+function isMcpServiceToken(token) {
+    return MCP_BACKEND_TOKEN.length >= 32 && secureEqual(token, MCP_BACKEND_TOKEN);
+}
+
 // Auth middleware. Tries the local JWT first (existing behaviour); when
 // OIDC_ENABLED, falls back to verifying a Keycloak bearer token. Async-safe.
 function requireAuth(req, res, next) {
@@ -87,6 +104,18 @@ function requireAuth(req, res, next) {
         const hdr = req.headers.authorization || '';
         const token = hdr.startsWith('Bearer ') ? hdr.slice(7) : null;
         if (!token) return res.status(401).json({ error: 'unauthorized' });
+
+        if (isMcpServiceToken(token)) {
+            if (!SAFE_METHODS.has(req.method)) {
+                return res.status(403).json({ error: 'MCP service credential is read-only' });
+            }
+            req.user = {
+                username: 'mcp-readonly', display: 'MCP Read-Only',
+                role: 'viewer', source: 'service',
+            };
+            req.authKind = 'mcp-service';
+            return next();
+        }
 
         let user = verify(token);
         if (!user && OIDC_ENABLED) user = await verifyOidc(token);

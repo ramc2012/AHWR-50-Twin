@@ -61,6 +61,7 @@ services:
       - PGPASSWORD=${PGPASSWORD:?set PGPASSWORD in .env}
       - PGDATABASE=${PGDATABASE:-crmf}
       - JWT_SECRET=${JWT_SECRET:?set JWT_SECRET in .env}
+      - MCP_BACKEND_TOKEN=${MCP_BACKEND_TOKEN:?set MCP_BACKEND_TOKEN in .env}
       - ADMIN_PASSWORD=${ADMIN_PASSWORD:-admin123}
       # Fail-closed ingest auth (#1): a non-empty demo token ships by default so the
       # bundled fleet-sim authenticates. Both backend and fleet-sim below get the SAME
@@ -120,19 +121,34 @@ services:
 
   # Read-only MCP server: exposes fleet status / rig drill-down / alarms /
   # governance / reports to AI systems over MCP (streamable HTTP at /mcp).
-  # Mints a viewer-role JWT, so the central RBAC blocks any write.
+  # Its opaque service credential is accepted by the backend only for safe methods.
   crmf-mcp:
     build:
       context: ./mcp-server
       dockerfile: Dockerfile
     container_name: crmf_mcp
     restart: unless-stopped
+    cpus: 0.25
+    mem_limit: 192m
+    mem_reservation: 48m
     environment:
       - NODE_ENV=production
       - PORT=3000
       - BACKEND_URL=http://crmf-backend:6000
-      - JWT_SECRET=${JWT_SECRET:?set JWT_SECRET in .env}
+      - MCP_BACKEND_TOKEN=${MCP_BACKEND_TOKEN:?set MCP_BACKEND_TOKEN in .env}
+      - MCP_AUTH_MODE=${MCP_AUTH_MODE:-api-key}
       - MCP_API_KEY=${MCP_API_KEY:-}
+      - MCP_API_KEY_ID=${MCP_API_KEY_ID:-local}
+      - MCP_API_KEYS_JSON=${MCP_API_KEYS_JSON:-}
+      - MCP_ALLOWED_HOSTS=${MCP_ALLOWED_HOSTS:-127.0.0.1,localhost,[::1]}
+      - MCP_ALLOWED_ORIGINS=${MCP_ALLOWED_ORIGINS:-}
+      - MCP_RATE_LIMIT_PER_MINUTE=${MCP_RATE_LIMIT_PER_MINUTE:-120}
+      - MCP_TRUST_PROXY=${MCP_TRUST_PROXY:-false}
+      - MCP_PUBLIC_URL=${MCP_PUBLIC_URL:-}
+      - MCP_OAUTH_ISSUER=${MCP_OAUTH_ISSUER:-}
+      - MCP_OAUTH_AUDIENCE=${MCP_OAUTH_AUDIENCE:-}
+      - MCP_OAUTH_JWKS_URL=${MCP_OAUTH_JWKS_URL:-}
+      - MCP_OAUTH_SCOPES=${MCP_OAUTH_SCOPES:-mcp:tools}
       # TLS: serve HTTPS (required for Cowork / claude.ai connectors).
       - TLS_CERT_FILE=/certs/mcp.crt
       - TLS_KEY_FILE=/certs/mcp.key

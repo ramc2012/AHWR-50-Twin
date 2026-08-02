@@ -4,7 +4,7 @@ ENV NODE_ENV=production
 WORKDIR /app
 
 COPY backend/package*.json ./
-RUN npm install --omit=dev --no-audit --no-fund && npm cache clean --force
+RUN npm ci --omit=dev && npm cache clean --force
 
 COPY backend/. .
 

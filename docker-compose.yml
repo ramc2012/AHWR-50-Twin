@@ -86,6 +86,9 @@ services:
       - INFLUX_ORG=${INFLUX_ORG:-romii_org}
       - INFLUX_BUCKET=${INFLUX_BUCKET:-romii_bucket}
       - JWT_SECRET=${JWT_SECRET:?set JWT_SECRET in .env}
+      # Opaque read-only credential accepted only for safe HTTP methods. Unlike
+      # JWT_SECRET, possession cannot be used to mint operator/admin tokens.
+      - MCP_BACKEND_TOKEN=${MCP_BACKEND_TOKEN:?set MCP_BACKEND_TOKEN in .env}
       - ADMIN_USERNAME=${ADMIN_USERNAME:-admin}
       - ADMIN_PASSWORD=${ADMIN_PASSWORD:?set ADMIN_PASSWORD in .env}
       - DATA_SOURCE=${DATA_SOURCE:-plc}
@@ -128,7 +131,7 @@ services:
 
   # Read-only MCP server: exposes the edge twin's telemetry/alarms/KPIs/history
   # to AI systems over the Model Context Protocol (streamable HTTP at /mcp).
-  # It mints a viewer-role JWT, so the backend RBAC blocks any write.
+  # Its opaque service credential is accepted by the backend only for safe methods.
   mcp-edge:
     build:
       context: ./edge-mcp-server
@@ -142,8 +145,21 @@ services:
       - NODE_ENV=production
       - PORT=3000
       - BACKEND_URL=http://backend:5000
-      - JWT_SECRET=${JWT_SECRET:?set JWT_SECRET in .env}
-      - MCP_API_KEY=${MCP_API_KEY:-}   # bearer guard on /mcp (set in .env)
+      - MCP_BACKEND_TOKEN=${MCP_BACKEND_TOKEN:?set MCP_BACKEND_TOKEN in .env}
+      - MCP_AUTH_MODE=${MCP_AUTH_MODE:-api-key}
+      - MCP_API_KEY=${MCP_API_KEY:-}
+      - MCP_API_KEY_ID=${MCP_API_KEY_ID:-local}
+      - MCP_API_KEYS_JSON=${MCP_API_KEYS_JSON:-}
+      - MCP_ALLOWED_HOSTS=${MCP_ALLOWED_HOSTS:-127.0.0.1,localhost,[::1]}
+      - MCP_ALLOWED_ORIGINS=${MCP_ALLOWED_ORIGINS:-}
+      - MCP_RATE_LIMIT_PER_MINUTE=${MCP_RATE_LIMIT_PER_MINUTE:-120}
+      - MCP_TRUST_PROXY=${MCP_TRUST_PROXY:-false}
+      # OAuth resource-server settings are used only when MCP_AUTH_MODE=oauth.
+      - MCP_PUBLIC_URL=${MCP_PUBLIC_URL:-}
+      - MCP_OAUTH_ISSUER=${MCP_OAUTH_ISSUER:-}
+      - MCP_OAUTH_AUDIENCE=${MCP_OAUTH_AUDIENCE:-}
+      - MCP_OAUTH_JWKS_URL=${MCP_OAUTH_JWKS_URL:-}
+      - MCP_OAUTH_SCOPES=${MCP_OAUTH_SCOPES:-mcp:tools}
       # TLS: serve HTTPS (required for Cowork / claude.ai connectors). Certs are
       # mounted read-only below; swap in a CA-signed cert for production.
       - TLS_CERT_FILE=/certs/mcp.crt
