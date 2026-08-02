@@ -163,7 +163,11 @@ function closeDowntime(id, { by } = {}) {
 }
 const getDowntime = (limit = 200) => downtime.slice(-limit).reverse();
 
+// Current cumulative run-hours per asset ({ assetId: hours }), as cached by the
+// last updateHours() tick. Consumed by lib/runlog.js for its snapshots.
+const getHours = () => ({ ...lastHours });
+
 module.exports = {
-    REASON_CODES, ASSETS, updateHours, getSummary, getPM, serviceTask,
+    REASON_CODES, ASSETS, updateHours, getSummary, getPM, serviceTask, getHours,
     logCalibration, getCalibrations, logDowntime, closeDowntime, getDowntime,
 };
