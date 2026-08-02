@@ -28,7 +28,9 @@ const NPT_REASONS = ['Weather', 'Equipment Failure', 'Waiting on Parts', 'Waitin
 
 const ACTIVITY_LOG = 'activity_log.json';
 const ACTIVITY_STATE = 'activity_state.json';
-const MAX_LOG = 5000;
+// Activity log cap. A workover tour generates a lot of state changes; 5 000
+// overflowed in ~1-3 weeks, silently discarding the rig's own history.
+const MAX_LOG = Number(process.env.WORKOVER_MAX_LOG || 100000);
 
 let state = readJson(ACTIVITY_STATE, null) || { current: null, manualOverride: null, lastBlock: null };
 let log = readJson(ACTIVITY_LOG, []);
@@ -102,7 +104,10 @@ function getLog(date) {
 // ---------------------------------------------------------------------------
 const CONNECTIONS = 'connections.json';
 const TT_LIMITS = { minTorque: 8000, maxTorque: 16000, dumpTorque: 17000, unit: 'daN·m' };
-const MAX_CONN = 5000;
+// Connection records cap. At 100-300 joints/day this overflowed in 2-7 weeks —
+// on a rig whose entire job is running and pulling tubing, that is the most
+// valuable record being deleted. ~1 year of tripping at 300 joints/day.
+const MAX_CONN = Number(process.env.WORKOVER_MAX_CONN || 120000);
 
 let conn = readJson(CONNECTIONS, null) || { jointCounter: 0, records: [], limits: TT_LIMITS };
 if (!conn.limits) conn.limits = TT_LIMITS;

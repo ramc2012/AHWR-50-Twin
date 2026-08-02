@@ -22,8 +22,13 @@ const health = require('./lib/health');
 const witsml = require('./lib/witsml');
 const etp = require('./lib/etp');
 const efficiency = require('./lib/efficiency');
+const cmms = require('./lib/cmms');
+const instruments = require('./lib/instruments');
+const runlog = require('./lib/runlog');
 const kpi = require('./lib/kpi');
 const wells = require('./lib/wells');
+const wellArchive = require('./lib/wellArchive');
+const wellReport = require('./lib/wellReport');
 const edrCatalog = require('../shared/edrMetrics.json');
 
 const PORT = Number(process.env.PORT || 5000);
@@ -180,6 +185,47 @@ app.post('/api/config/plc', auth.requireAuth, auth.requireRole('admin'), async (
     }
 });
 
+// --- Per-well tagging of the historian -------------------------------------
+// A workover rig moves from well to well, so telemetry is only meaningful when
+// it is scoped BY WELL. The active well (and rig) are written into Telegraf's
+// [global_tags] block, which stamps them onto every point sent to InfluxDB.
+// Telegraf hot-reloads the file (--watch-config), so no restart is needed.
+// Queries can then filter/group by r.well, and a well's data can be exported or
+// archived on its own.
+const WELL_TAGS_START = '# WELL_TAGS_START';
+const WELL_TAGS_END = '# WELL_TAGS_END';
+// InfluxDB line-protocol tag values: keep it simple and injection-proof.
+const safeTagValue = (v) => String(v || '').replace(/[^A-Za-z0-9 _.\-/]/g, '').trim().slice(0, 64);
+
+function applyWellTags() {
+    try {
+        if (!fs.existsSync(CONFIG_PATH)) return null;
+        const content = fs.readFileSync(CONFIG_PATH, 'utf8');
+        const s = content.indexOf(WELL_TAGS_START);
+        const e = content.indexOf(WELL_TAGS_END);
+        if (s === -1 || e === -1) return null;   // markers absent -> nothing to manage
+
+        const active = wells.getActiveWell();
+        const wellName = safeTagValue(active && active.name);
+        const rigName = safeTagValue((active && active.rig) || process.env.DEVICE_ID);
+
+        const lines = [
+            '  # Managed by the backend — rewritten when a well is started/completed.',
+            `  well = "${wellName || 'UNASSIGNED'}"`,
+        ];
+        if (rigName) lines.push(`  rig = "${rigName}"`);
+
+        const next = `${content.substring(0, s + WELL_TAGS_START.length)}\n${lines.join('\n')}\n${content.substring(e)}`;
+        if (next !== content) {
+            fs.writeFileSync(CONFIG_PATH, next);
+            console.log(`Telegraf well tag set to "${wellName || 'UNASSIGNED'}" (hot-reload).`);
+        }
+        return wellName || null;
+    } catch (err) {
+        console.error('Failed to apply well tags to telegraf.conf:', err.message);
+        return null;
+    }
+}
 // Physics loop (runs on each data update). All weights are in tonnes-force
 // (consistent with the PLC "Weight on Hook -Ton" tag); depths are in metres.
 const updatePhysics = (rigData) => {
@@ -261,6 +307,10 @@ app.get('/api/drilling/state', auth.requireAuth, (req, res) => {
 // Telegraf config + device-config persistence paths.
 const CONFIG_PATH = process.env.TELEGRAF_CONFIG_PATH || path.join(DATA_DIR, 'telegraf', 'telegraf.conf');
 const DB_PATH = path.join(DATA_DIR, 'plc_config.json');
+
+// Stamp the current well onto the historian at boot, so a restart never leaves
+// the tag stale. (Declared after CONFIG_PATH, which it reads.)
+applyWellTags();
 
 const getModbusConfig = () => readJsonSync(DB_PATH, { slaves: [] });
 const saveModbusConfig = (config) => writeJsonAtomic(DB_PATH, config);
@@ -464,6 +514,8 @@ const queryData = async () => {
             data._alarmMap = alarms.getActiveMap();   // dataKey -> alarm, for per-widget latch/blink
             if (al.changed) io.emit('alarms', al);
             maintenance.updateHours(data, now);
+            // Run-hour ledger + periodic equipment-health snapshots (live-derived).
+            runlog.update(data, maintenance.getHours(), now);
             data._efficiency = efficiency.update(data, now, { jointMade: !!tt.connectionMade });
             data._kpi = kpi.update(data, now);   // derived drilling KPIs (server-computed; client just consumes)
             // Store-and-forward: queue telemetry + events for sync to central
@@ -563,10 +615,30 @@ app.get('/api/history', auth.requireAuth, async (req, res) => {
       |> yield(name: "last")
   `;
 
+    // Peak-preserving ("envelope") mode. Decimating with last() alone hides
+    // short-lived events: a 4-second standpipe spike or a hookload overpull is
+    // invisible at any window beyond a few minutes. With ?envelope=1 we also
+    // return the min and max within each bucket as `<metric>.min` / `.max`,
+    // so a chart can shade the true range behind the sampled line.
+    const wantEnvelope = String(req.query.envelope || '') === '1' || String(req.query.envelope || '') === 'true';
+    const envelopeQuery = `
+    import "types"
+    from(bucket: "${INFLUX_BUCKET}")
+      ${rangeFilter}
+      |> filter(fn: (r) => ${measurementFilter})
+      ${metricFilter}
+      |> filter(fn: (r) => types.isType(v: r._value, type: "float") or types.isType(v: r._value, type: "int") or types.isType(v: r._value, type: "uint"))
+      |> aggregateWindow(every: ${windowPeriod}, fn: min, createEmpty: false)
+      |> yield(name: "min")
+  `;
+    const envelopeQueryMax = envelopeQuery.replace('fn: min', 'fn: max').replace('name: "min"', 'name: "max"');
+
     try {
         const history = [];
-        await new Promise((resolve, reject) => {
-            queryApi.queryRows(fluxQuery, {
+        // Run one query and collect its rows. `suffix` distinguishes the
+        // envelope passes so they become separate `<metric>.min` / `.max` keys.
+        const runQuery = (q, suffix = '') => new Promise((resolve, reject) => {
+            queryApi.queryRows(q, {
                 next(row, tableMeta) {
                     const o = tableMeta.toObject(row);
                     let meas = o._measurement;
@@ -581,19 +653,22 @@ app.get('/api/history', auth.requireAuth, async (req, res) => {
                     history.push({
                         time: o._time,
                         measurement: meas,
-                        field: f,
+                        field: f + suffix,
                         value
                     });
                 },
-                error(error) {
-                    console.error(error);
-                    reject(error);
-                },
-                complete() {
-                    resolve();
-                }
+                error(error) { console.error(error); reject(error); },
+                complete() { resolve(); }
             });
         });
+
+        await runQuery(fluxQuery);
+        if (wantEnvelope) {
+            await Promise.all([
+                runQuery(envelopeQuery, '.min'),
+                runQuery(envelopeQueryMax, '.max'),
+            ]);
+        }
 
         // Group by timestamp for the chart
         const grouped = {};
@@ -1221,7 +1296,19 @@ app.get('/api/alarms/catalog', auth.requireAuth, (req, res) => {
     res.json(list);
 });
 
-app.get('/api/alarms/config', auth.requireAuth, (req, res) => res.json(alarms.getConfig()));
+// Alarm rules, annotated with whether the tag they watch is ACTUALLY ARRIVING.
+// A rule whose dataKey has no live source can never fire — the engine skips
+// non-finite values — so it silently looks like protection that isn't there.
+// Surfacing `sourcePresent` lets the settings UI flag it instead.
+app.get('/api/alarms/config', auth.requireAuth, (req, res) => {
+    const cfg = alarms.getConfig();
+    res.json(cfg.map((c) => {
+        const v = validate.resolveDotted
+            ? validate.resolveDotted(latestRigData, c.dataKey)
+            : String(c.dataKey || '').split('.').reduce((o, k) => (o == null ? undefined : o[k]), latestRigData);
+        return { ...c, sourcePresent: Number.isFinite(Number(v)) };
+    }));
+});
 app.put('/api/alarms/config', auth.requireAuth, auth.requireRole('admin'), async (req, res) => {
     try {
         const config = await alarms.setConfig(req.body);
@@ -1253,7 +1340,132 @@ app.put('/api/report/header', auth.requireAuth, auth.requireRole('admin', 'opera
 app.get('/api/wells', auth.requireAuth, (req, res) => res.json(wells.getWells()));
 app.get('/api/wells/active', auth.requireAuth, (req, res) => res.json(wells.getActiveWell() || null));
 app.get('/api/wells/service-types', auth.requireAuth, (req, res) => res.json(wells.getServiceTypes()));
-app.get('/api/wells/:id/summary', auth.requireAuth, (req, res) => res.json(wells.getWellSummary(req.params.id)));
+// Well record: elapsed time / NPT / activity / joints / depth (from the workover
+// layer) PLUS diesel + engine hours for the well, read from the historian.
+app.get('/api/wells/:id/summary', auth.requireAuth, async (req, res) => {
+    const summary = wells.getWellSummary(req.params.id);
+    if (!summary) return res.json(null);
+    const w = wells.getWell(req.params.id);
+    let consumption = null;
+    try { consumption = await wellArchive.getWellConsumption(w && w.startedAt, w && w.completedAt); }
+    catch (e) { console.error('well consumption failed:', e.message); }
+    res.json({ ...summary, consumption });
+});
+
+// Per-well 1-minute archive buckets (permanent record, outlives the raw window).
+app.get('/api/wells/archives', auth.requireAuth, async (req, res) => {
+    try { res.json(await wellArchive.listArchives()); }
+    catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.get('/api/wells/archive/status', auth.requireAuth, (req, res) => res.json(wellArchive.getStatus()));
+
+// --- Archive export / import -----------------------------------------------
+const sendArchive = (res, data, filename, format) => {
+    if (format === 'json') {
+        res.setHeader('Content-Type', 'application/json');
+        res.setHeader('Content-Disposition', `attachment; filename="${filename}.json"`);
+        return res.end(JSON.stringify(data, null, 1));
+    }
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}.csv"`);
+    if (data.truncated) res.setHeader('X-Export-Truncated', 'true');
+    res.end(wellArchive.toCsv(data));
+};
+
+// NOTE: the /api/wells/archive/* routes must be registered BEFORE
+// /api/wells/:id/export, or "archive" is swallowed as a well id.
+// Export any archive bucket directly (well_* or import_*).
+app.get('/api/wells/archive/export', auth.requireAuth, async (req, res) => {
+    try {
+        const bucket = await wellArchive.assertArchiveBucket(req.query.bucket);
+        const data = await wellArchive.queryWide(bucket, {
+            metrics: req.query.metrics,
+            start: req.query.start || '-100y',
+            stop: req.query.stop || 'now()',
+            every: req.query.every,
+        });
+        sendArchive(res, { ...data, bucket }, bucket, req.query.format === 'json' ? 'json' : 'csv');
+    } catch (e) {
+        res.status(e.status || 500).json({ error: e.message });
+    }
+});
+
+// What is inside an archive (time extent + signal list), and its data.
+app.get('/api/wells/archive/describe', auth.requireAuth, async (req, res) => {
+    try { res.json(await wellArchive.describeArchive(req.query.bucket)); }
+    catch (e) { res.status(e.status || 500).json({ error: e.message }); }
+});
+app.get('/api/wells/archive/data', auth.requireAuth, async (req, res) => {
+    try {
+        const bucket = await wellArchive.assertArchiveBucket(req.query.bucket);
+        res.json(await wellArchive.queryWide(bucket, {
+            metrics: req.query.metrics,
+            start: req.query.start || '-100y',
+            stop: req.query.stop || 'now()',
+            every: req.query.every,
+        }));
+    } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
+});
+
+// Export one well: tier=raw (full-rate, only while it is inside the 90-day
+// window) or tier=archive (the permanent 1-minute record).
+app.get('/api/wells/:id/export', auth.requireAuth, async (req, res) => {
+    const well = wells.getWell(req.params.id);
+    if (!well) return res.status(404).json({ error: 'well not found' });
+    const format = req.query.format === 'json' ? 'json' : 'csv';
+    const tier = req.query.tier === 'raw' ? 'raw' : 'archive';
+    try {
+        const data = await wellArchive.exportWell(well, {
+            tier,
+            metrics: req.query.metrics,
+            start: req.query.start,
+            stop: req.query.stop,
+            every: req.query.every,
+        });
+        const stamp = (data.from || '').slice(0, 10);
+        sendArchive(res, data, `${well.name}_${tier === 'raw' ? 'raw' : '1min'}_${stamp}`, format);
+    } catch (e) {
+        res.status(e.status || 500).json({ error: e.message });
+    }
+});
+
+// Day-by-day well report: operations log, maintenance log, activity/NPT and
+// run hours per day, plus an equipment health summary for the whole job.
+app.get('/api/wells/:id/report', auth.requireAuth, async (req, res) => {
+    const well = wells.getWell(req.params.id);
+    if (!well) return res.status(404).json({ error: 'well not found' });
+    try {
+        let consumption = null;
+        try { consumption = await wellArchive.getWellConsumption(well.startedAt, well.completedAt); }
+        catch (e) { console.error('report consumption failed:', e.message); }
+        const report = wellReport.buildWellReport(well, {
+            latestRigData,
+            summary: wells.getWellSummary(req.params.id),
+            consumption,
+        });
+        if (!report) return res.status(400).json({ error: 'well has not been started yet' });
+        res.json(report);
+    } catch (e) {
+        res.status(e.status || 500).json({ error: e.message });
+    }
+});
+
+// Import previously exported history. Lands in its own import_<label> bucket so
+// it can never be mistaken for live data.
+app.post('/api/wells/import',
+    auth.requireAuth, auth.requireRole('admin', 'operator'),
+    express.json({ limit: process.env.IMPORT_MAX_SIZE || '64mb' }),
+    async (req, res) => {
+        try {
+            const r = await wellArchive.importHistory({
+                label: req.body.label,
+                csv: req.body.csv,
+                rows: req.body.rows,
+            });
+            console.log(`Historical import: ${r.pointsWritten} points -> ${r.bucket}`);
+            res.json(r);
+        } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
+    });
 app.post('/api/wells', auth.requireAuth, auth.requireRole('admin', 'operator'), (req, res) => {
     try { res.json({ success: true, well: wells.createWell(req.body || {}, req.user.username) }); }
     catch (e) { res.status(e.status || 400).json({ error: e.message }); }
@@ -1263,12 +1475,25 @@ app.put('/api/wells/:id', auth.requireAuth, auth.requireRole('admin', 'operator'
     catch (e) { res.status(e.status || 400).json({ error: e.message }); }
 });
 app.post('/api/wells/:id/start', auth.requireAuth, auth.requireRole('admin', 'operator'), (req, res) => {
-    try { res.json({ success: true, well: wells.startWell(req.params.id, req.user.username) }); }
-    catch (e) { res.status(e.status || 400).json({ error: e.message }); }
+    try {
+        const well = wells.startWell(req.params.id, req.user.username);
+        applyWellTags();                       // tag raw points with the well too
+        // Open this well's permanent 1-minute archive bucket (best effort — a
+        // historian hiccup must not block starting the job).
+        wellArchive.ensureWellBucket(well.name)
+            .catch((e) => console.error('well archive bucket failed:', e.message));
+        res.json({ success: true, well });
+    } catch (e) { res.status(e.status || 400).json({ error: e.message }); }
 });
 app.post('/api/wells/:id/complete', auth.requireAuth, auth.requireRole('admin', 'operator'), (req, res) => {
-    try { res.json({ success: true, well: wells.completeWell(req.params.id, req.user.username) }); }
-    catch (e) { res.status(e.status || 400).json({ error: e.message }); }
+    try {
+        const well = wells.completeWell(req.params.id, req.user.username);
+        applyWellTags();
+        // Drain the remaining backlog so the well's archive is whole.
+        wellArchive.finalize(well)
+            .catch((e) => console.error('well archive finalize failed:', e.message));
+        res.json({ success: true, well });
+    } catch (e) { res.status(e.status || 400).json({ error: e.message }); }
 });
 
 // --- Sync agent (store-and-forward, outbound only) ---
@@ -1348,6 +1573,76 @@ app.post('/api/maintenance/downtime/:id/close', auth.requireAuth, auth.requireRo
     catch (e) { res.status(e.status || 400).json({ error: e.message }); }
 });
 
+// --- CMMS: work orders, shift logbook, major overhauls ---
+const cmmsWrite = [auth.requireAuth, auth.requireRole('admin', 'operator')];
+const cmmsHandle = (fn) => (req, res) => {
+    try { res.json(fn(req)); }
+    catch (e) { res.status(e.status || 400).json({ error: e.message }); }
+};
+
+// Vocabularies for the UI dropdowns.
+app.get('/api/cmms/meta', auth.requireAuth, (req, res) => res.json({
+    woTypes: cmms.WO_TYPES, woStatus: cmms.WO_STATUS, woPriority: cmms.WO_PRIORITY,
+    failureCodes: cmms.FAILURE_CODES, logCategories: cmms.LOG_CATEGORIES,
+    logTypes: cmms.LOG_TYPES, logCategoriesByType: cmms.LOG_CATEGORIES_BY_TYPE,
+    logCategoryLabels: cmms.LOG_CATEGORY_LABELS,
+    shifts: cmms.SHIFTS, overhaulStatus: cmms.OVERHAUL_STATUS,
+    assets: maintenance.ASSETS.map((a) => ({ id: a.id, name: a.name, category: a.category })),
+    snapshotDelayMin: Math.round(runlog.SNAPSHOT_DELAY_MS / 60000),
+}));
+
+// Run-hour log: live-derived run sessions per equipment, with ONE settled
+// health snapshot taken a few minutes after each start.
+app.get('/api/cmms/runhours/status', auth.requireAuth, (req, res) => res.json(runlog.getStatus(maintenance.getHours())));
+app.get('/api/cmms/runhours/sessions', auth.requireAuth, (req, res) => res.json(runlog.listSessions(req.query)));
+app.get('/api/cmms/runhours/snapshots', auth.requireAuth, (req, res) => res.json(runlog.listSnapshots(req.query)));
+app.get('/api/cmms/runhours/daily', auth.requireAuth, (req, res) => res.json(runlog.listDaily(req.query)));
+app.get('/api/cmms/runhours/history/:assetId', auth.requireAuth, (req, res) => res.json(runlog.getAssetHistory(req.params.assetId)));
+
+// Instruments register + calibration control
+app.get('/api/cmms/instruments/meta', auth.requireAuth, (req, res) => res.json({
+    types: instruments.INSTRUMENT_TYPES, results: instruments.CAL_RESULTS,
+    statuses: instruments.INSTRUMENT_STATUS, dueSoonDays: instruments.DUE_SOON_DAYS,
+    assets: maintenance.ASSETS.map((a) => ({ id: a.id, name: a.name })),
+}));
+app.get('/api/cmms/instruments/summary', auth.requireAuth, (req, res) => res.json(instruments.getSummary()));
+app.get('/api/cmms/instruments', auth.requireAuth, cmmsHandle((req) => instruments.listInstruments(req.query)));
+app.post('/api/cmms/instruments', ...cmmsWrite, cmmsHandle((req) => ({
+    success: true, instrument: instruments.createInstrument(req.body, req.user.username),
+})));
+app.patch('/api/cmms/instruments/:id', ...cmmsWrite, cmmsHandle((req) => ({
+    success: true, instrument: instruments.updateInstrument(req.params.id, req.body),
+})));
+app.get('/api/cmms/instruments/:id/calibrations', auth.requireAuth, cmmsHandle((req) => instruments.listCalibrations({ instrumentId: req.params.id })));
+app.post('/api/cmms/instruments/:id/calibrations', ...cmmsWrite, cmmsHandle((req) => ({
+    success: true, ...instruments.addCalibration(req.params.id, req.body, req.user.username),
+})));
+app.get('/api/cmms/summary', auth.requireAuth, (req, res) => res.json(cmms.getCmmsSummary()));
+
+// Work orders (preventive / breakdown / overhaul / inspection)
+app.get('/api/cmms/work-orders', auth.requireAuth, cmmsHandle((req) => cmms.listWorkOrders(req.query)));
+app.post('/api/cmms/work-orders', ...cmmsWrite, cmmsHandle((req) => ({
+    success: true, workOrder: cmms.createWorkOrder({ ...req.body, by: req.user.username }),
+})));
+app.patch('/api/cmms/work-orders/:id', ...cmmsWrite, cmmsHandle((req) => ({
+    success: true, workOrder: cmms.updateWorkOrder(req.params.id, req.body, req.user.username),
+})));
+
+// Shift logbook
+app.get('/api/cmms/logbook', auth.requireAuth, cmmsHandle((req) => cmms.listLogbook(req.query)));
+app.post('/api/cmms/logbook', ...cmmsWrite, cmmsHandle((req) => ({
+    success: true, entry: cmms.addLogEntry({ ...req.body, by: req.user.username }),
+})));
+
+// Major overhauls
+app.get('/api/cmms/overhauls', auth.requireAuth, cmmsHandle((req) => cmms.listOverhauls(req.query)));
+app.post('/api/cmms/overhauls', ...cmmsWrite, cmmsHandle((req) => ({
+    success: true, overhaul: cmms.createOverhaul({ ...req.body, by: req.user.username }),
+})));
+app.patch('/api/cmms/overhauls/:id', ...cmmsWrite, cmmsHandle((req) => ({
+    success: true, overhaul: cmms.updateOverhaul(req.params.id, req.body, req.user.username),
+})));
+
 // --- Authentication API ---
 const loginLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
@@ -1414,6 +1709,25 @@ server.listen(PORT, () => {
 // Periodically flush drilling state off the hot loop.
 const flushTimer = setInterval(flushDrillingState, Number(process.env.STATE_FLUSH_MS || 5000));
 
+// Roll the raw historian up into the ACTIVE well's permanent 1-minute archive.
+// Runs off the hot path; a persisted watermark makes it safe to miss ticks or
+// restart mid-well. Overlap-guarded so a slow pass can't stack up.
+let archiveBusy = false;
+const archiveTimer = setInterval(async () => {
+    if (archiveBusy) return;
+    const active = wells.getActiveWell();
+    if (!active) return;
+    archiveBusy = true;
+    try {
+        const r = await wellArchive.archiveTick(active);
+        if (r && !r.skipped && r.points) console.log(`Well archive: ${r.points} pts -> ${r.bucket} (${r.from} .. ${r.to})`);
+    } catch (e) {
+        console.error('Well archive tick failed:', e.message);
+    } finally {
+        archiveBusy = false;
+    }
+}, Number(process.env.WELL_ARCHIVE_INTERVAL_MS || 60000));
+
 process.on('unhandledRejection', (reason) => console.error('Unhandled promise rejection:', reason));
 process.on('uncaughtException', (err) => console.error('Uncaught exception:', err));
 
@@ -1425,6 +1739,7 @@ const shutdown = async (signal) => {
     pollStopped = true;
     if (pollTimer) clearTimeout(pollTimer);
     clearInterval(flushTimer);
+    clearInterval(archiveTimer);
     try { await flushDrillingState(); } catch (e) { /* best effort */ }
     io.close();
     server.close(() => { console.log('HTTP server closed.'); process.exit(0); });

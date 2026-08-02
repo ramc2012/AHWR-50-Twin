@@ -20,7 +20,10 @@ services:
       - DOCKER_INFLUXDB_INIT_PASSWORD=${INFLUX_PASSWORD:?set INFLUX_PASSWORD in .env}
       - DOCKER_INFLUXDB_INIT_ORG=${INFLUX_ORG:-romii_org}
       - DOCKER_INFLUXDB_INIT_BUCKET=${INFLUX_BUCKET:-romii_bucket}
-      - DOCKER_INFLUXDB_INIT_RETENTION=${INFLUX_RETENTION:-30d}
+      # Raw-data retention. NOTE: this only applies at FIRST init of a new
+      # volume; on an existing bucket the retention must be updated in place
+      # (see README / `influx bucket update --retention`).
+      - DOCKER_INFLUXDB_INIT_RETENTION=${INFLUX_RETENTION:-90d}
       - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=${INFLUX_TOKEN:?set INFLUX_TOKEN in .env}
     volumes:
       - influxdb_data:/var/lib/influxdb2
