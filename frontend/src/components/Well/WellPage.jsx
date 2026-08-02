@@ -3,15 +3,18 @@ import {
     Box, Typography, Paper, Grid, Button, TextField, Table, TableBody,
     TableCell, TableContainer, TableHead, TableRow, Dialog, DialogTitle,
     DialogContent, DialogActions, Snackbar, Alert, Chip, MenuItem,
-    FormControl, InputLabel, Select, Tooltip, Divider
+    FormControl, InputLabel, Select, Tooltip, Divider, Tabs, Tab
 } from '@mui/material';
 import { useTheme, alpha } from '@mui/material/styles';
 import {
-    MapPin, Plus, Play, CheckCircle, Edit2, Target, Clock, Ruler, Layers, Activity
+    MapPin, Plus, Play, CheckCircle, Edit2, Target, Clock, Ruler, Layers, Activity,
+    Database, FileText
 } from 'lucide-react';
 import axios from '../../api';
 import { useAuth } from '../../context/AuthContext';
 import { secondsSince, formatDuration } from '../../utils/format';
+import WellDataArchive from './WellDataArchive';
+import WellReport from './WellReport';
 
 const POLL_MS = 5000;
 
@@ -64,6 +67,7 @@ export default function WellPage() {
     const [wells, setWells] = useState([]);
     const [activeWell, setActiveWell] = useState(null);
     const [summary, setSummary] = useState(null);
+    const [tab, setTab] = useState(0);
     const [serviceTypes, setServiceTypes] = useState([]);
     const [notification, setNotification] = useState({ open: false, message: '', severity: 'success' });
 
@@ -425,6 +429,21 @@ export default function WellPage() {
                     </Table>
                 </TableContainer>
             </Paper>
+
+            {/* Report and archive tools for the wells above */}
+            <Paper sx={{ ...paperSx, px: 1 }}>
+                <Tabs
+                    value={tab} onChange={(e, v) => setTab(v)} variant="scrollable" scrollButtons="auto"
+                    sx={{ minHeight: 42, '& .MuiTab-root': { minHeight: 42, fontSize: 12.5, textTransform: 'none' } }}
+                >
+                    <Tab icon={<FileText size={15} />} iconPosition="start" label="Well Report" />
+                    <Tab icon={<Database size={15} />} iconPosition="start" label="Data Export & Archive" />
+                </Tabs>
+            </Paper>
+            <Box sx={{ mt: -1 }}>
+                {tab === 0 && <WellReport wells={wells} />}
+                {tab === 1 && <WellDataArchive wells={wells} />}
+            </Box>
 
             {/* New / Edit Well dialog */}
             <Dialog open={formOpen} onClose={() => setFormOpen(false)} maxWidth="md" fullWidth

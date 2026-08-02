@@ -3,12 +3,17 @@ import {
     Box, Typography, Paper, Grid, Button, TextField, Table, TableBody,
     TableCell, TableContainer, TableHead, TableRow, Dialog, DialogTitle,
     DialogContent, DialogActions, Snackbar, Alert, Chip, MenuItem,
-    FormControl, InputLabel, Select
+    FormControl, InputLabel, Select, Tabs, Tab
 } from '@mui/material';
-import { HeartPulse, Wrench, SlidersHorizontal, AlertTriangle, Plus } from 'lucide-react';
+import { HeartPulse, Wrench, SlidersHorizontal, AlertTriangle, Plus, BookOpen, Hammer, ClipboardList, Gauge, Activity } from 'lucide-react';
 import axios from '../../api';
 import { useAuth } from '../../context/AuthContext';
 import { formatHours } from '../../utils/format';
+import WorkOrders from './WorkOrders';
+import Logbook from './Logbook';
+import Overhauls from './Overhauls';
+import RunHours from './RunHours';
+import Instruments from './Instruments';
 
 const POLL_MS = 12000;
 
@@ -114,6 +119,10 @@ export default function MaintenancePage() {
     const [downtime, setDowntime] = useState([]);
     const [reasonCodes, setReasonCodes] = useState([]);
     const [notification, setNotification] = useState({ open: false, message: '', severity: 'success' });
+    // CMMS: tab selection, vocabularies and roll-up counters.
+    const [tab, setTab] = useState(0);
+    const [cmmsMeta, setCmmsMeta] = useState({});
+    const [cmms, setCmms] = useState({ workOrders: {}, overhauls: {}, logbook: {} });
 
     // Dialog state.
     const [serviceTask, setServiceTask] = useState(null);
@@ -130,11 +139,13 @@ export default function MaintenancePage() {
         axios.get('/api/maintenance/pm').then((r) => setPm(r.data || [])).catch((e) => console.error('pm load failed:', e));
         axios.get('/api/maintenance/calibrations').then((r) => setCalibrations(r.data || [])).catch((e) => console.error('calibrations load failed:', e));
         axios.get('/api/maintenance/downtime').then((r) => setDowntime(r.data || [])).catch((e) => console.error('downtime load failed:', e));
+        axios.get('/api/cmms/summary').then((r) => setCmms(r.data || {})).catch((e) => console.error('cmms summary load failed:', e));
     }, []);
 
     useEffect(() => {
         refresh();
         axios.get('/api/maintenance/reason-codes').then((r) => setReasonCodes(r.data || [])).catch((e) => console.error('reason-codes load failed:', e));
+        axios.get('/api/cmms/meta').then((r) => setCmmsMeta(r.data || {})).catch((e) => console.error('cmms meta load failed:', e));
         const id = setInterval(refresh, POLL_MS);
         return () => clearInterval(id);
     }, [refresh]);
@@ -215,15 +226,41 @@ export default function MaintenancePage() {
     return (
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
             <Typography variant="h6" sx={{ fontWeight: 'bold', color: '#38bdf8', display: 'flex', alignItems: 'center', gap: 1 }}>
-                <HeartPulse size={22} /> Maintenance &amp; Asset Health
+                <HeartPulse size={22} /> Maintenance Management (CMMS)
             </Typography>
 
             {/* KPI row */}
             <Grid container spacing={2}>
-                <Grid item xs={12} sm={4}><KpiCard label="Overdue" value={counts.overdue ?? 0} color="#ef4444" /></Grid>
-                <Grid item xs={12} sm={4}><KpiCard label="Due Soon" value={counts.dueSoon ?? 0} color="#f59e0b" /></Grid>
-                <Grid item xs={12} sm={4}><KpiCard label="Open Downtime" value={counts.openDowntime ?? 0} color="#38bdf8" /></Grid>
+                <Grid item xs={6} sm={4} md={2}><KpiCard label="PM Overdue" value={counts.overdue ?? 0} color="#ef4444" /></Grid>
+                <Grid item xs={6} sm={4} md={2}><KpiCard label="PM Due Soon" value={counts.dueSoon ?? 0} color="#f59e0b" /></Grid>
+                <Grid item xs={6} sm={4} md={2}><KpiCard label="Open WOs" value={cmms.workOrders?.open ?? 0} color="#38bdf8" /></Grid>
+                <Grid item xs={6} sm={4} md={2}><KpiCard label="Breakdowns" value={cmms.workOrders?.breakdownOpen ?? 0} color="#ef4444" /></Grid>
+                <Grid item xs={6} sm={4} md={2}><KpiCard label="Overhauls" value={(cmms.overhauls?.active ?? 0) + (cmms.overhauls?.planned ?? 0)} color="#a78bfa" /></Grid>
+                <Grid item xs={6} sm={4} md={2}><KpiCard label="Open Downtime" value={counts.openDowntime ?? 0} color="#f97316" /></Grid>
             </Grid>
+
+            {/* CMMS module tabs */}
+            <Box sx={{ borderBottom: 1, borderColor: '#334155' }}>
+                <Tabs value={tab} onChange={(e, v) => setTab(v)} textColor="primary" indicatorColor="primary" variant="scrollable" scrollButtons="auto">
+                    <Tab icon={<HeartPulse size={16} />} iconPosition="start" label="Asset Health & PM" sx={{ color: tab === 0 ? '#38bdf8' : '#94a3b8', textTransform: 'none', minHeight: 46 }} />
+                    <Tab icon={<ClipboardList size={16} />} iconPosition="start" label="Work Orders" sx={{ color: tab === 1 ? '#38bdf8' : '#94a3b8', textTransform: 'none', minHeight: 46 }} />
+                    <Tab icon={<Hammer size={16} />} iconPosition="start" label="Major Overhauls" sx={{ color: tab === 2 ? '#38bdf8' : '#94a3b8', textTransform: 'none', minHeight: 46 }} />
+                    <Tab icon={<Gauge size={16} />} iconPosition="start" label="Run Hours" sx={{ color: tab === 3 ? '#38bdf8' : '#94a3b8', textTransform: 'none', minHeight: 46 }} />
+                    <Tab icon={<SlidersHorizontal size={16} />} iconPosition="start" label="Instruments" sx={{ color: tab === 4 ? '#38bdf8' : '#94a3b8', textTransform: 'none', minHeight: 46 }} />
+                    <Tab icon={<Activity size={16} />} iconPosition="start" label="Operations Log" sx={{ color: tab === 5 ? '#38bdf8' : '#94a3b8', textTransform: 'none', minHeight: 46 }} />
+                    <Tab icon={<BookOpen size={16} />} iconPosition="start" label="Maintenance Log" sx={{ color: tab === 6 ? '#38bdf8' : '#94a3b8', textTransform: 'none', minHeight: 46 }} />
+                </Tabs>
+            </Box>
+
+            {tab === 1 && <WorkOrders meta={cmmsMeta} canWrite={canWrite} onChanged={refresh} showNote={showNote} />}
+            {tab === 2 && <Overhauls meta={cmmsMeta} canWrite={canWrite} onChanged={refresh} showNote={showNote} />}
+            {tab === 3 && <RunHours />}
+            {tab === 4 && <Instruments canWrite={canWrite} showNote={showNote} />}
+            {tab === 5 && <Logbook logType="OPERATIONS" meta={cmmsMeta} canWrite={canWrite} onChanged={refresh} showNote={showNote} />}
+            {tab === 6 && <Logbook logType="MAINTENANCE" meta={cmmsMeta} canWrite={canWrite} onChanged={refresh} showNote={showNote} />}
+
+            {tab === 0 && (
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
 
             {/* Asset health cards */}
             <Box>
@@ -418,6 +455,8 @@ export default function MaintenancePage() {
                     </Table>
                 </TableContainer>
             </Paper>
+            </Box>
+            )}
 
             {/* Service dialog */}
             <Dialog open={Boolean(serviceTask)} onClose={() => setServiceTask(null)} PaperProps={{ sx: { bgcolor: '#1e293b', color: 'white', minWidth: 420 } }}>
