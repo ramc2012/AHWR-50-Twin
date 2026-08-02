@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useTheme } from '@mui/material';
 import { useNavigate } from 'react-router-dom';
 import { socket } from '../../socket';
@@ -7,23 +7,30 @@ import { useAlarms, ALARM_BLINK } from '../../context/AlarmContext';
 import { priorityColor } from '../../utils/alarms';
 
 // ===========================================================================
-// RigConsoleOverview — "DrillBit Twin"-style professional rig overview.
+// RigConsoleOverview — WORKOVER / well-service rig console.
 //
-// Faithful to the reference mock (branded header · annunciator ticker ·
-// trip-stat wellbore · rig-floor schematic with 8 equipment cards · crown/
-// floor-saver derrick · 4-pressure BOP bar · 3 primary gauges · working-day
-// trend ribbons), but wired entirely to THIS app's live feed:
-//   live values -> socket 'rig_data' (+ /api/rig/latest), incl. backend-
-//                  computed `_efficiency` / `_activity` blocks
-//   alarms      -> socket 'alarms'   (+ /api/alarms)
-//   rig/well    -> /api/dashboard/layout (wellInfo) + /api/wells/active
+// This rig is a workover (well-service) unit, NOT a drilling rig: a telescoping
+// guyed mast, a hydraulic top drive (HTD), a power casing tong (PCT), a catwalk
+// (CWK), an anti-collision/travel-limit system (ACS), an HPU and a CAT genset.
+// The layout is: annunciator ticker · string & activity column · workover mast
+// schematic flanked by equipment summary cards · well-control bar · primary
+// instruments · working-day (06:00->06:00 IST) trend ribbons.
 //
-// Safety rule (repo README): safety-critical signals (BOP pressures, WOB,
-// depth) are never fabricated — they read "—" on a stale/dead feed (`sv()`).
-// Metrics with no sensor in this feed (H2S / LEL gas) are NOT invented; the
-// WELL CONTROL card surfaces real wellhead pressures + computed kick/loss
-// confidence instead. Derived KPIs (MSE, ECD, annular velocity, CO₂,
-// overpull) are computed from real telemetry with documented formulas.
+// Data:
+//   live      -> socket 'rig_data' (+ /api/rig/latest), incl. server-computed
+//                `_activity`, `_kpi`, `_efficiency`
+//   alarms    -> socket 'alarms' (+ /api/alarms), per-parameter blink/latch
+//   history   -> /api/history seeds the working-day trends from 06:00 IST
+//   rig/well  -> /api/dashboard/layout (wellInfo) + /api/wells/active
+//
+// Honesty rules (repo README):
+//   * Safety-critical signals are never fabricated — `sv()` renders "—" when
+//     the feed is stale/dead, and well-control values are additionally gated on
+//     `well_control.available`.
+//   * Nothing without a real tag is invented. Formation layers, choke/kill
+//     manifolds and a synthesized kill pressure were REMOVED for this reason.
+//   * ACS savers are shown as raw clearances (mm) and are NOT threshold-
+//     coloured, because no acs.* alarm rule exists in the backend config.
 // ===========================================================================
 
 const DARK = { bg: '#0a0d14', bg2: '#10141f', bg3: '#070a10', line: '#1f2736', line2: '#2c3648', txt: '#e9eef7', txt2: '#8593a9', txt3: '#525d72' };
@@ -33,12 +40,17 @@ const ACCENT = { a1: '#ff9d2e', a2: '#27cfe6', b1: '#a9ef34', b2: '#9a8bff', ok:
 const MONO = "'JetBrains Mono', ui-monospace, monospace";
 const SANS = "'Space Grotesk', -apple-system, BlinkMacSystemFont, sans-serif";
 
-// Derived KPIs (MSE, ECD, annular velocity, etc.) are computed SERVER-SIDE and
-// arrive on raw._kpi — this component only consumes them.
-const PSI_PER_BAR = 14.5038;             // SPP gauge fallback only
-const CROWN_LIMIT_M = 38;                // travel envelope (crown-saver)
-const FLOOR_LIMIT_M = 2.5;               // travel envelope (floor-saver)
-const MAST_MAX_M = 50;
+// drawworks.block_position is in FEET (backend/server.js converts with 0.3048).
+const FT_TO_M = 0.3048;
+// CONFIGURED mast travel — not telemetry. Used only to scale the mast drawing.
+const MAST_TRAVEL_FT = 90;
+
+// Workover activity codes (backend/lib/workover.js).
+const ACT_COLOR = {
+    RIH: ACCENT.a2, POOH: ACCENT.a1, MAKE_UP: ACCENT.b1, BREAK_OUT: ACCENT.warn,
+    CIRCULATE: ACCENT.info, SWAB: ACCENT.b2, FISHING: ACCENT.b2,
+    RIG_UP: ACCENT.ok, RIG_DOWN: ACCENT.ok, IDLE: '#7c8aa0', WAIT: ACCENT.crit,
+};
 
 // ---- math helpers ---------------------------------------------------------
 const polar = (cx, cy, r, deg) => { const a = (deg - 90) * Math.PI / 180; return { x: cx + r * Math.cos(a), y: cy + r * Math.sin(a) }; };
@@ -50,33 +62,105 @@ const arc = (cx, cy, r, a0, a1) => {
 const clamp01 = (x) => Math.max(0, Math.min(1, x));
 const fmt = (v, d = 0) => Number(v).toFixed(d);
 const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
-
-const spark = (arrIn, w, h) => {
-    const a = (arrIn && arrIn.length > 1) ? arrIn : [0, 0];
-    const min = Math.min(...a), max = Math.max(...a), rng = (max - min) || 1;
-    const pts = a.map((v, i) => [(i / (a.length - 1)) * w, h - ((v - min) / rng) * (h - 3) - 1.5]);
-    const line = pts.map((p, i) => (i ? 'L' : 'M') + p[0].toFixed(1) + ' ' + p[1].toFixed(1)).join(' ');
-    return { line, area: line + ' L ' + w + ' ' + h + ' L 0 ' + h + ' Z' };
-};
-
-const opModeLabel = (code) => ({ 1: 'DRILLING', 2: 'TRIP IN', 3: 'TRIP OUT', 4: 'CASING' }[Number(code)] || 'IDLE');
 const hhmmss = (iso) => { const d = iso ? new Date(iso) : null; return (!d || isNaN(d.getTime())) ? '--:--:--' : d.toLocaleTimeString('en-GB', { hour12: false }); };
 
+// Sparkline over a FIXED time domain [t0,t1] (the working day), so the trace
+// fills in left-to-right across the tour instead of rescaling to "since load".
+const sparkDay = (pts, w, h, t0, t1) => {
+    if (!Array.isArray(pts) || pts.length < 2) return { line: '', area: '' };
+    const vs = pts.map((p) => p.v);
+    const min = Math.min(...vs), max = Math.max(...vs), rng = (max - min) || 1;
+    const span = (t1 - t0) || 1;
+    const xy = pts.map((p) => [
+        clamp01((p.t - t0) / span) * w,
+        h - ((p.v - min) / rng) * (h - 3) - 1.5,
+    ]);
+    const line = xy.map((p, i) => (i ? 'L' : 'M') + p[0].toFixed(1) + ' ' + p[1].toFixed(1)).join(' ');
+    const lastX = xy[xy.length - 1][0];
+    return { line, area: `${line} L ${lastX.toFixed(1)} ${h} L ${xy[0][0].toFixed(1)} ${h} Z` };
+};
+
+// ---- status decoders (mirror the equipment dashboards exactly) ------------
+const UNK = { text: '---', color: '#64748b' };
+const dec = (map) => (v) => map[Number(v)] || UNK;
+const S = {
+    // 0 OFF / 1 ON IDLE / 2 ON  (HPU, HTD, PCT)
+    onIdleOn: dec({ 0: { text: 'OFF', color: '#64748b' }, 1: { text: 'IDLE', color: '#38bdf8' }, 2: { text: 'ON', color: '#4ade80' } }),
+    engine: dec({
+        [-1]: UNK, 0: { text: 'READY', color: '#38bdf8' }, 1: { text: 'RUNNING', color: '#38bdf8' },
+        2: { text: 'DONE', color: '#4ade80' }, 3: { text: 'EMERGENCY', color: '#ef4444' },
+        4: { text: 'NOT READY', color: '#fbbf24' }, 5: { text: 'FAULT', color: '#ef4444' },
+        6: { text: 'RUN+FAULT', color: '#f97316' }, 7: { text: 'STOP FORCED', color: '#ef4444' },
+    }),
+    pctSeq: dec({
+        0: { text: 'OFF', color: '#64748b' }, 1: { text: 'MAKE-UP', color: '#38bdf8' },
+        2: { text: 'BREAK-OUT', color: '#fbbf24' }, 3: { text: 'RESET', color: '#94a3b8' },
+        4: { text: 'FAULT', color: '#ef4444' },
+    }),
+    cwkPark: dec({ 0: { text: 'NOT IN PARK', color: '#fbbf24' }, 1: { text: 'PARKED', color: '#4ade80' } }),
+    carrier: dec({
+        1: { text: 'STOP', color: '#94a3b8' }, 2: { text: 'PARK POS', color: '#4ade80' },
+        3: { text: 'WORK POS', color: '#4ade80' }, 4: { text: 'LIFTING', color: '#38bdf8' },
+        5: { text: 'LOWERING', color: '#38bdf8' }, 6: { text: 'FAULT', color: '#ef4444' },
+    }),
+    clamp: dec({
+        0: { text: 'NONE', color: '#64748b' }, 1: { text: 'OPENING', color: '#38bdf8' },
+        2: { text: 'CLOSING', color: '#38bdf8' }, 3: { text: 'OPEN', color: '#4ade80' },
+        4: { text: 'CLOSED', color: '#fbbf24' }, 5: { text: 'FAULT', color: '#ef4444' },
+    }),
+    elevator: dec({
+        0: UNK, 1: { text: 'OPENING', color: '#38bdf8' }, 2: { text: 'CLOSING', color: '#38bdf8' },
+        3: { text: 'OPEN', color: '#4ade80' }, 4: { text: 'CLOSED', color: '#fbbf24' }, 5: { text: 'FAULT', color: '#ef4444' },
+    }),
+    rotation: dec({ 0: { text: 'STOPPED', color: '#94a3b8' }, 1: { text: 'FWD', color: '#4ade80' }, 2: { text: 'BWD', color: '#fbbf24' }, 3: { text: 'NEUTRAL', color: '#94a3b8' } }),
+    acs: dec({ 0: UNK, 1: { text: 'ON', color: '#4ade80' }, 2: { text: 'OFF', color: '#64748b' }, 3: { text: 'DISABLED', color: '#ef4444' } }),
+    acsCal: dec({
+        [-1]: UNK, 1: { text: 'CALIBRATING', color: '#38bdf8' }, 2: { text: 'NOT CALIBRATED', color: '#fbbf24' },
+        3: { text: 'CALIBRATED', color: '#4ade80' }, 10: { text: 'MOVE UP', color: '#38bdf8' }, 11: { text: 'MOVE DOWN', color: '#38bdf8' },
+    }),
+    gear: (v) => {
+        const n = Number(v);
+        if (n === -1) return { text: 'FAULT', color: '#ef4444' };
+        if (n >= 1 && n <= 4) return { text: `GEAR ${n}`, color: '#4ade80' };
+        if (n >= 5 && n <= 8) return { text: `G${n - 4} REGEN`, color: '#38bdf8' };
+        return UNK;
+    },
+};
+
+// Working-day trend ribbons. `metric` is the backend /api/history key
+// (measurement.field); `get` reads the same signal from the live payload so
+// live samples can be appended on top of the seeded history.
 const TREND_DEFS = [
-    { id: 'hookLoad', label: 'HOOK LOAD', unit: 't', color: ACCENT.a1, d: 0, get: (r) => num(r.drawworks?.hook_load) },
-    { id: 'rpm', label: 'ROTARY RPM', unit: 'rpm', color: ACCENT.a2, d: 0, get: (r) => num(r.drilling?.rpm) },
-    { id: 'rop', label: 'ROP', unit: 'm/h', color: ACCENT.ok, d: 1, get: (r) => num(r.drilling?.rop) },
-    { id: 'wob', label: 'WOB', unit: 't', color: ACCENT.b1, d: 1, get: (r) => num(r.drilling?.wob) },
-    { id: 'torque', label: 'TORQUE', unit: 'kN·m', color: ACCENT.b2, d: 1, get: (r) => num(r.htd?.torque) / 100 },
-    { id: 'genLoad', label: 'GENSET LOAD', unit: '%', color: ACCENT.warn, d: 0, get: (r) => num(r.cat_engine?.load) },
-    { id: 'flowOut', label: 'FLOW RET', unit: '%', color: ACCENT.info, d: 0, get: (r) => num(r.mudpump?.flow_out) },
+    { id: 'hookLoad', label: 'HOOK LOAD', unit: 't', color: ACCENT.a1, d: 0, metric: 'drawworks.hook_load', get: (r) => num(r.drawworks?.hook_load) },
+    { id: 'blockPos', label: 'BLOCK POS', unit: 'ft', color: ACCENT.a2, d: 1, metric: 'drawworks.block_position', get: (r) => num(r.drawworks?.block_position) },
+    { id: 'htdRpm', label: 'HTD RPM', unit: 'rpm', color: ACCENT.ok, d: 0, metric: 'htd.rpm', get: (r) => num(r.htd?.rpm) },
+    { id: 'htdTorque', label: 'HTD TORQUE', unit: 'daN·m', color: ACCENT.b2, d: 0, metric: 'htd.torque', get: (r) => num(r.htd?.torque) },
+    { id: 'pctTorque', label: 'PCT MAKE-UP', unit: 'daN·m', color: ACCENT.b1, d: 0, metric: 'pct.makeup_torque', get: (r) => num(r.pct?.makeup_torque) },
+    { id: 'hpuPress', label: 'HPU PRESS', unit: 'bar', color: ACCENT.info, d: 0, metric: 'hpu.discharge_pressure', get: (r) => num(r.hpu?.discharge_pressure) },
+    { id: 'genLoad', label: 'GENSET LOAD', unit: '%', color: ACCENT.warn, d: 0, metric: 'cat_engine.load', get: (r) => num(r.cat_engine?.load) },
+    { id: 'tubingP', label: 'TUBING PRESS', unit: 'bar', color: ACCENT.crit, d: 0, metric: 'wellhead.tubing_pressure', get: (r) => num(r.wellhead?.tubing_pressure) },
 ];
-const TREND_MAX = 60;
+const TREND_MAX_POINTS = 1500;
+
+// --- Working day: 06:00 -> 06:00, anchored to IST -------------------------
+// Anchored EXPLICITLY to IST (+05:30) rather than the viewer's local clock, so
+// the window is always the RIG's working day (the backend container runs UTC and
+// a central viewer may sit in another timezone).
+const IST_OFFSET_MS = (5 * 60 + 30) * 60 * 1000;
+const WORKDAY_START_HOUR = 6;
+const computeWorkingDay = (nowMs = Date.now()) => {
+    const ist = nowMs + IST_OFFSET_MS;          // IST wall-clock as if UTC
+    const d = new Date(ist);
+    let startIst = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), WORKDAY_START_HOUR, 0, 0, 0);
+    if (ist < startIst) startIst -= 24 * 60 * 60 * 1000;   // before 06:00 -> previous tour
+    const dayStart = startIst - IST_OFFSET_MS;
+    return { dayStart, dayEnd: dayStart + 24 * 60 * 60 * 1000 };
+};
 
 export default function RigConsoleOverview() {
     const muiTheme = useTheme();
     const navigate = useNavigate();
-    const isDark = muiTheme.palette.mode !== 'light';   // follows the global theme switcher
+    const isDark = muiTheme.palette.mode !== 'light';
     const c = isDark ? DARK : LIGHT;
     const A = ACCENT;
 
@@ -93,23 +177,72 @@ export default function RigConsoleOverview() {
 
     const [raw, setRaw] = useState({});
     const [alarms, setAlarms] = useState([]);
-    const [identity, setIdentity] = useState({ rig: 'RIG-ALPHA', well: 'WELL-001' });
+    const [identity, setIdentity] = useState({ rig: '', well: '' });
     const [feed, setFeed] = useState({ connected: socket.connected, stale: false, hasData: false });
+
+    // Working-day trend series: { id: [{t,v}] }, seeded from /api/history.
+    const [workingDay, setWorkingDay] = useState(() => computeWorkingDay());
     const histRef = useRef(Object.fromEntries(TREND_DEFS.map((t) => [t.id, []])));
     const [, setTick] = useState(0);
 
     const pushHist = useCallback((data) => {
+        const now = Date.now();
         const h = histRef.current;
-        TREND_DEFS.forEach((t) => { const arr = h[t.id]; arr.push(t.get(data)); if (arr.length > TREND_MAX) arr.shift(); });
+        TREND_DEFS.forEach((t) => {
+            const v = t.get(data);
+            if (!Number.isFinite(v)) return;
+            const arr = h[t.id];
+            arr.push({ t: now, v });
+            if (arr.length > TREND_MAX_POINTS) arr.shift();
+        });
         setTick((x) => x + 1);
     }, []);
+
+    // Roll the window over at 06:00 IST without a manual refresh.
+    useEffect(() => {
+        const id = setInterval(() => {
+            const next = computeWorkingDay();
+            setWorkingDay((prev) => (prev.dayStart === next.dayStart ? prev : next));
+        }, 60 * 1000);
+        return () => clearInterval(id);
+    }, []);
+
+    // Seed each ribbon from history for the working day so far (re-runs on rollover).
+    useEffect(() => {
+        let cancelled = false;
+        const params = new URLSearchParams();
+        params.set('start', new Date(workingDay.dayStart).toISOString());
+        params.set('stop', new Date().toISOString());
+        params.set('metrics', TREND_DEFS.map((t) => t.metric).join(','));
+        axios.get(`/api/history?${params.toString()}`)
+            .then(({ data: rows }) => {
+                if (cancelled || !Array.isArray(rows)) return;
+                const seeded = Object.fromEntries(TREND_DEFS.map((t) => [t.id, []]));
+                rows.forEach((row) => {
+                    const t = Number(row.timestamp);
+                    if (!Number.isFinite(t)) return;
+                    TREND_DEFS.forEach((d) => {
+                        const v = Number(row[d.metric]);
+                        if (row[d.metric] != null && Number.isFinite(v)) seeded[d.id].push({ t, v });
+                    });
+                });
+                // Keep live samples already captured after the seeded window.
+                const cutoff = rows.length ? Number(rows[rows.length - 1].timestamp) : workingDay.dayStart;
+                TREND_DEFS.forEach((d) => {
+                    const liveTail = (histRef.current[d.id] || []).filter((p) => p.t > cutoff);
+                    histRef.current[d.id] = seeded[d.id].concat(liveTail);
+                });
+                setTick((x) => x + 1);
+            })
+            .catch((e) => console.error('working-day history seed failed', e));
+        return () => { cancelled = true; };
+    }, [workingDay.dayStart]);
 
     useEffect(() => {
         axios.get('/api/rig/latest')
             .then(({ data }) => { if (data && Object.keys(data).length) { setRaw(data); setFeed((p) => ({ ...p, hasData: true, stale: !!data._meta?.stale })); pushHist(data); } })
             .catch((e) => console.error('rig/latest failed', e));
         axios.get('/api/alarms').then(({ data }) => setAlarms(Array.isArray(data?.active) ? data.active : [])).catch(() => {});
-        // rig/well identity (mirror Layout): dashboard wellInfo + active well registry
         axios.get(`/api/dashboard/layout?t=${Date.now()}`).then(({ data }) => { if (data?.wellInfo) setIdentity((p) => ({ ...p, ...data.wellInfo })); }).catch(() => {});
         const loadWell = () => axios.get('/api/wells/active').then(({ data }) => { if (data?.name) setIdentity((p) => ({ ...p, well: data.name })); }).catch(() => {});
         loadWell();
@@ -127,47 +260,40 @@ export default function RigConsoleOverview() {
     }, [pushHist]);
 
     const live = feed.connected && feed.hasData && !feed.stale;
-    const sv = (v, d = 0) => (live ? fmt(v, d) : '—');
+    // Safety/derived value: never fabricate a number on a dead, stale, or absent signal.
+    const sv = (v, d = 0) => (live && Number.isFinite(Number(v)) ? fmt(v, d) : '—');
 
     // ---- alarms ------------------------------------------------------------
     const sevOf = (p) => (p === 'P1' ? A.crit : p === 'P2' ? A.warn : p === 'P3' ? A.info : A.ok);
     const tagOf = (a) => { const dk = a.dataKey || ''; const head = dk.includes('.') ? dk.split('.')[0] : (a.id || ''); return (head || 'SYS').toUpperCase().slice(0, 12); };
-    const annun = useMemo(() => [...alarms]
+    const annun = [...alarms]
         .sort((x, y) => (Date.parse(y.raisedAt) || 0) - (Date.parse(x.raisedAt) || 0))
-        .map((a) => ({ id: a.id, time: hhmmss(a.raisedAt), tag: tagOf(a), msg: a.label || a.id, sevColor: sevOf(a.priority) })), [alarms]);
+        .map((a) => ({ id: a.id, time: hhmmss(a.raisedAt), tag: tagOf(a), msg: a.label || a.id, sevColor: sevOf(a.priority) }));
     const activeCount = alarms.filter((a) => (a.priority === 'P1' || a.priority === 'P2') && a.state !== 'ACK').length;
     const ticker = annun.length ? annun.concat(annun) : [];
 
-    // ---- scalar reads ------------------------------------------------------
+    // ---- reads -------------------------------------------------------------
     const d = raw.drilling || {}, dw = raw.drawworks || {}, mp = raw.mudpump || {}, fl = raw.fluid || {};
     const hpu = raw.hpu || {}, htd = raw.htd || {}, pct = raw.pct || {}, cat = raw.cat_engine || {}, cwk = raw.cwk || {};
-    const wc = raw.well_control || {}, sf = raw.safety || {}, wh = raw.wellhead || {}, eff = raw._efficiency || {}, act = raw._activity || {};
+    const acs = raw.acs || {}, wc = raw.well_control || {}, sf = raw.safety || {}, wh = raw.wellhead || {};
+    const eff = raw._efficiency || {}, kpi = raw._kpi || {}, act = raw._activity || {}, tt = raw._torqueturn || {};
 
-    const bitDepth = num(d.bit_depth), holeDepth = num(d.hole_depth);
-    const td = Math.max(200, Math.ceil((Math.max(holeDepth, bitDepth) * 1.06) / 100) * 100);
+    const esd = num(sf.esd_active) === 1 || num(sf.lockout_active) === 1;
+    // Well-control values are only trustworthy when the backend says a BOP source exists.
+    const wcLive = live && wc.available !== false;
+    const wcv = (v, dp = 0) => (wcLive && Number.isFinite(Number(v)) ? fmt(v, dp) : '—');
 
-    // ---- derived KPIs: computed SERVER-SIDE (raw._kpi); client only consumes ----
-    const kpi = raw._kpi || {};
-    const mse = num(kpi.mse);
-    const annVel = num(kpi.ann_velocity);
-    const ecd = num(kpi.ecd);
-    const sppPsi = num(kpi.spp_psi) || (num(mp.pressure) * PSI_PER_BAR);
-    const sppDev = num(kpi.spp_dev_pct);
-    const tRatio = num(kpi.transport_ratio);
-    const co2 = num(kpi.co2_kgph);
-    const powerKw = num(kpi.power_kw);
-    const driveEff = num(kpi.drive_eff_pct);
-    const overpull = num(kpi.overpull);
-    const friction = num(kpi.friction);
-    const kickConf = num(kpi.kick_confidence);
-    const lossConf = num(kpi.loss_confidence);
+    const blockFt = num(dw.block_position);
+    const stringDepth = num(d.bit_depth);        // tubing/rod string depth on a workover rig
+    const holeDepth = num(d.hole_depth);
+    const acsCalibrated = num(acs.calibration_status) === 3;
 
-    // ---- gauges (3 across) -------------------------------------------------
+    // ---- primary instruments (workover-relevant, real alarm setpoints) -----
     const A0 = -135, A1 = 135;
     const gaugeDefs = [
-        { label: 'HOOK LOAD', unit: 't', dataKey: 'drawworks.hook_load', val: num(dw.hook_load), min: 0, max: 250, warn: 200, crit: 230, sub: ['WEIGHT ON BIT', sv(d.wob, 1), 't'], safety: true },
-        { label: 'ROTARY', unit: 'rpm', dataKey: 'drilling.rpm', val: num(d.rpm), min: 0, max: 180, warn: 150, crit: 170, sub: ['TORQUE', live ? fmt(num(htd.torque) / 100, 1) : '—', 'kN·m'] },
-        { label: 'STANDPIPE', unit: 'psi', dataKey: 'mudpump.pressure', val: sppPsi, min: 0, max: 5000, warn: 3900, crit: 4500, sub: ['TOTAL SPM', live ? fmt(mp.spm) : '—', 'spm'] },
+        { label: 'HOOK LOAD', unit: 't', dataKey: 'drawworks.hook_load', val: num(dw.hook_load), min: 0, max: 250, warn: 180, crit: 200, sub: ['BLOCK POS', sv(blockFt, 1), 'ft'], safety: true },
+        { label: 'HTD ROTARY', unit: 'rpm', dataKey: 'htd.rpm', val: num(htd.rpm), min: 0, max: 180, warn: 150, crit: 170, sub: ['TORQUE', sv(htd.torque, 0), 'daN·m'] },
+        { label: 'CIRC PRESS', unit: 'bar', dataKey: 'mudpump.pressure', val: num(mp.pressure), min: 0, max: 350, warn: 240, crit: 300, sub: ['RATE', sv(mp.spm, 1), 'spm'] },
     ];
     const gauges = gaugeDefs.map((g) => {
         const pct01 = clamp01((g.val - g.min) / (g.max - g.min));
@@ -179,7 +305,7 @@ export default function RigConsoleOverview() {
         const valColor = alarm ? alarm.color : (!live ? c.txt3 : over ? A.crit : near ? A.warn : A.ok);
         return {
             ...g, ang, valColor, alarm,
-            valueStr: g.safety ? sv(g.val, 0) : (live ? fmt(g.val, 0) : '—'),
+            valueStr: sv(g.val, 0),
             trackPath: arc(100, 100, 84, A0, A1), valuePath: arc(100, 100, 84, A0, live ? ang : A0),
             warnPath: arc(100, 100, 93, A0 + clamp01((g.warn - g.min) / (g.max - g.min)) * 270, A0 + clamp01((g.crit - g.min) / (g.max - g.min)) * 270),
             critPath: arc(100, 100, 93, A0 + clamp01((g.crit - g.min) / (g.max - g.min)) * 270, A1),
@@ -187,79 +313,129 @@ export default function RigConsoleOverview() {
         };
     });
 
-    const trends = TREND_DEFS.map((t) => ({ ...t, valueStr: live ? fmt(t.get(raw), t.d) : '—', ...spark(histRef.current[t.id], 100, 24) }));
+    const trends = TREND_DEFS.map((t) => ({
+        ...t,
+        valueStr: live ? fmt(t.get(raw), t.d) : '—',
+        ...sparkDay(histRef.current[t.id], 100, 24, workingDay.dayStart, workingDay.dayEnd),
+    }));
+    const workingDayLabel = new Date(workingDay.dayStart).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', timeZone: 'Asia/Kolkata' });
 
-    // ---- equipment cards (4 left / 4 right) --------------------------------
-    const stat = (on, onL, offL, onC = A.ok, offC = A.crit) => ({ status: on ? onL : offL, sColor: on ? onC : offC });
-    const equipment = [
-        { id: 'mse', label: 'DRILLING · MSE', side: 'l', top: '1%', color: A.ok, ...(mse > 350 ? { status: 'HIGH MSE', sColor: A.warn } : stat(num(d.rpm) > 3, 'ON OPTIMUM', 'IDLE', A.ok, A.warn)),
-          params: [{ k: 'MSE', v: live ? fmt(mse) : '—', u: 'MPa' }, { k: 'DRIVE EFF', v: live ? fmt(driveEff) : '—', u: '%' }, { k: 'ROP', v: live ? fmt(d.rop, 1) : '—', u: 'm/h' }, { k: 'WOB', v: sv(d.wob, 1), u: 't' }] },
-        { id: 'td', label: 'TOP DRIVE', side: 'r', top: '1%', color: A.a2, ...stat(num(htd.rotation_status) === 1 || num(d.rpm) > 3, 'DRILLING', 'IDLE', A.ok, A.warn),
-          params: [{ k: 'RPM', v: fmt(htd.rpm), u: '' }, { k: 'TORQUE', v: fmt(num(htd.torque) / 100, 1), u: 'kN·m' }] },
-        { id: 'dw', label: 'DRAWWORKS', side: 'l', top: '20%', color: A.a1, ...(overpull > 20 ? { status: 'OVERPULL', sColor: A.warn } : stat(num(dw.hook_load) > 1, 'RUNNING', 'IDLE', A.ok, A.warn)),
-          params: [{ k: 'HOOK LOAD', v: sv(dw.hook_load), u: 't', dk: 'drawworks.hook_load' }, { k: 'BLOCK', v: fmt(dw.block_position, 1), u: 'm' }, { k: 'OVERPULL', v: live ? fmt(overpull, 1) : '—', u: 't' }, { k: 'FRICTION', v: live ? fmt(friction, 2) : '—', u: '' }] },
-        { id: 'mp', label: 'MUD PUMPS', side: 'r', top: '20%', color: A.b1, ...stat(num(mp.spm) > 0, 'ONLINE', 'OFF', A.ok, A.warn),
-          params: [{ k: 'STANDPIPE', v: fmt(sppPsi), u: 'psi', dk: 'mudpump.pressure' }, { k: 'RATE', v: fmt(mp.spm), u: 'spm' }] },
-        { id: 'hyd', label: 'HYDRAULICS', side: 'l', top: '40%', color: A.info, ...stat(Math.abs(sppDev) < 8, 'GOOD', 'WATCH', A.ok, A.warn),
-          params: [{ k: 'ECD', v: live ? fmt(ecd) : '—', u: 'kg/m³' }, { k: 'ANN VEL', v: live ? fmt(annVel, 2) : '—', u: 'm/s' }, { k: 'SPP DEV', v: live ? fmt(sppDev) : '—', u: '%' }, { k: 'T.RATIO', v: live ? fmt(tRatio, 2) : '—', u: '' }] },
-        { id: 'pit', label: 'ACTIVE PITS', side: 'r', top: '40%', color: A.b2, ...(num(fl.tank_gain_loss) > 0.5 ? { status: 'GAIN TREND', sColor: A.warn } : stat(true, 'STABLE', 'STABLE', A.ok)),
-          params: [{ k: 'VOLUME', v: fmt(fl.total_tank_volume), u: 'm³' }, { k: 'GAIN/LOSS', v: fmt(fl.tank_gain_loss, 1), u: 'm³', dk: 'fluid.tank_gain_loss' }, { k: 'RETURN', v: fmt(mp.flow_out), u: '%' }] },
-        { id: 'wctl', label: 'WELL CONTROL', side: 'l', top: '60%', color: A.crit, ...((bop_esd(sf) || kickConf > 0.5) ? { status: bop_esd(sf) ? 'ESD' : 'WATCH', sColor: A.crit } : stat(true, 'NORMAL', 'NORMAL', A.ok)),
-          params: [{ k: 'KICK CONF', v: live ? fmt(kickConf, 2) : '—', u: '' }, { k: 'LOSS CONF', v: live ? fmt(lossConf, 2) : '—', u: '' }, { k: 'TUBING P', v: sv(wh.tubing_pressure), u: 'bar', dk: 'wellhead.tubing_pressure' }, { k: 'CASING P', v: sv(wh.casing_pressure), u: 'bar', dk: 'wellhead.casing_pressure' }] },
-        { id: 'pp', label: 'POWER PACK', side: 'r', top: '60%', color: A.warn, ...stat(num(cat.rpm) > 0, 'ON BUS', 'OFF'),
-          params: [{ k: 'POWER', v: live ? fmt(powerKw) : '—', u: 'kW' }, { k: 'FUEL', v: live ? fmt(eff.fuelLph ?? cat.fuel_rate) : '—', u: 'L/h' }, { k: 'CO₂', v: live ? fmt(co2) : '—', u: 'kg/h' }, { k: 'LOAD', v: fmt(cat.load), u: '%' }] },
-    ];
+    // ---- equipment summary cards (mirror the equipment dashboards) ---------
+    const filterOk = [1, 2, 3, 4, 5, 6, 7, 8].filter((i) => hpu[`oil_filter_${i}`] != null && num(hpu[`oil_filter_${i}`]) !== 0).length;
+    const filterMapped = [1, 2, 3, 4, 5, 6, 7, 8].filter((i) => hpu[`oil_filter_${i}`] != null).length;
+    const hpuClog = filterMapped > 0 && filterOk < filterMapped;
+    const hpuStat = hpuClog ? { text: 'FILTER CLOG', color: '#fbbf24' } : S.onIdleOn(hpu.status);
 
-    // ---- BOP / well control ------------------------------------------------
-    const ramState = (closeFlag, openFlag) => (closeFlag ? 'CLOSED' : openFlag ? 'OPEN' : 'ARMED');
-    const esd = bop_esd(sf);
+    // Circulating pump has no status enum anywhere — derive it from the real alarm setpoints.
+    const gl = Math.abs(num(fl.tank_gain_loss));
+    const circStat = !live ? UNK
+        : gl >= 3 ? { text: 'PIT ALARM', color: '#ef4444' }
+            : gl >= 1.5 ? { text: 'GAIN/LOSS', color: '#fbbf24' }
+                : num(mp.pressure) >= 300 ? { text: 'HIGH PRESS', color: '#ef4444' }
+                    : num(mp.pressure) >= 240 ? { text: 'HIGH PRESS', color: '#fbbf24' }
+                        : num(mp.spm) > 0 ? { text: 'CIRCULATING', color: '#4ade80' }
+                            : { text: 'STOPPED', color: '#64748b' };
+
+    const ramState = (closeFlag, openFlag) => (closeFlag ? 'CLOSED' : openFlag ? 'OPEN' : 'NO DATA');
     const rams = [
-        { name: 'ANNULAR', state: ramState(wc.annular_close, wc.annular_open) },
-        { name: 'UPPER PIPE', state: ramState(wc.pipe_ram_close, wc.pipe_ram_open) },
-        { name: 'LOWER PIPE', state: ramState(wc.pipe_ram_close, wc.pipe_ram_open) },
-        { name: 'BLIND/SHEAR', state: ramState(wc.blind_ram_close, wc.shear_ram_open) },
+        { name: 'ANNULAR', state: wcLive ? ramState(wc.annular_close, wc.annular_open) : 'NO DATA' },
+        { name: 'PIPE RAM', state: wcLive ? ramState(wc.pipe_ram_close, wc.pipe_ram_open) : 'NO DATA' },
+        { name: 'BLIND RAM', state: wcLive ? ramState(wc.blind_ram_close, wc.blind_ram_open) : 'NO DATA' },
     ];
-    const bopPress = [
-        { k: 'ACCUM', v: sv(wc.accumulator_pressure), u: 'psi', c: num(wc.accumulator_pressure) < 2850 ? A.warn : A.info, dk: 'well_control.accumulator_pressure' },
-        { k: 'ANNULAR', v: sv(wc.annular_pressure), u: 'psi', c: A.info },
-        { k: 'CHOKE', v: sv(wc.manifold_pressure), u: 'psi', c: A.info },
-        { k: 'KILL', v: sv(num(wc.manifold_pressure) * 1.08), u: 'psi', c: A.info },
-    ];
-    const bopStatus = esd ? 'ESD ACTIVE' : (rams.some((r) => r.state === 'CLOSED') ? 'CLOSED · MONITOR' : 'OPEN');
-    const bopColor = esd ? A.crit : A.ok;
-    const ramColor = (s) => (s === 'CLOSED' ? A.crit : s === 'OPEN' ? '#7c8aa0' : A.warn);
-    const ramFill = (s) => (s === 'CLOSED' ? A.crit : s === 'ARMED' ? A.warn : 'transparent');
+    const wcStat = !feed.connected ? { text: 'SOCKET DOWN', color: '#ef4444' }
+        : wc.available === false ? { text: 'NO BOP SOURCE', color: '#ef4444' }
+            : feed.stale ? { text: 'FEED STALE', color: '#fbbf24' }
+                : esd ? { text: 'ESD ACTIVE', color: '#ef4444' }
+                    : rams.some((r) => r.state === 'CLOSED') ? { text: 'CLOSED · MONITOR', color: '#fbbf24' }
+                        : { text: 'NORMAL', color: '#4ade80' };
 
-    // ---- wellbore ----------------------------------------------------------
-    const bitTopPct = `${(clamp01(bitDepth / td) * 100).toFixed(2)}%`;
-    const holePct = `${(clamp01(holeDepth / td) * 100).toFixed(2)}%`;
-    const tripLabel = live ? (num(d.operation_mode) === 3 ? 'PULLING OUT' : num(d.operation_mode) === 2 ? 'RUNNING IN' : (act.label || opModeLabel(d.operation_mode)).toUpperCase()) : 'NO DATA';
-    const tripColor = num(d.operation_mode) === 3 ? A.a1 : A.a2;
-    const tripStats = [
-        { k: 'ROP', v: live ? fmt(d.rop, 1) : '—', u: 'm/h', c: A.ok },
-        { k: 'BLOCK', v: live ? fmt(dw.block_position, 1) : '—', u: 'm', c: c.txt },
-        { k: 'INCL', v: live ? fmt(htd.inclination, 1) : '—', u: '°', c: A.b2 },
-        { k: 'WOB', v: sv(d.wob, 1), u: 't', c: A.a1 },
-    ];
-    const formations = [
-        { name: 'OVERBURDEN', top: 0, bot: 0.23, color: 'rgba(160,170,190,.16)' },
-        { name: 'SHALE', top: 0.23, bot: 0.52, color: 'rgba(70,166,255,.14)' },
-        { name: 'SANDSTONE', top: 0.52, bot: 0.77, color: 'rgba(255,157,46,.16)' },
-        { name: 'LIMESTONE', top: 0.77, bot: 0.92, color: 'rgba(169,239,52,.15)' },
-        { name: 'RESERVOIR', top: 0.92, bot: 1, color: 'rgba(154,139,255,.20)' },
+    const equipment = [
+        {
+            id: 'cat', label: 'CAT GENSET', side: 'l', color: A.info, route: '/equipment?tab=cat-engine', stat: S.engine(cat.status),
+            params: [
+                { k: 'LOAD', v: sv(cat.load, 0), u: '%' },
+                { k: 'RPM', v: sv(cat.rpm, 0), u: '' },
+                { k: 'COOLANT', v: sv(cat.coolant_temp, 0), u: '°C', dk: 'cat_engine.coolant_temp' },
+                { k: 'OIL PRESS', v: sv(cat.oil_pressure, 1), u: 'bar', dk: 'cat_engine.oil_pressure' },
+            ],
+        },
+        {
+            id: 'hpu', label: 'HPU', side: 'l', color: A.ok, route: '/equipment?tab=hpu', stat: hpuStat,
+            params: [
+                { k: 'DISCHARGE', v: sv(hpu.discharge_pressure, 0), u: 'bar' },
+                { k: 'OIL TEMP', v: sv(hpu.oil_temp, 1), u: '°C', dk: 'hpu.oil_temp' },
+                { k: 'OIL LEVEL', v: sv(hpu.oil_level, 0), u: '%' },
+                { k: 'FILTERS', v: live && filterMapped ? `${filterOk}/${filterMapped}` : '—', u: '' },
+            ],
+        },
+        {
+            id: 'htd', label: 'HTD TOP DRIVE', side: 'l', color: A.b2, route: '/equipment?tab=htd', stat: S.onIdleOn(htd.status),
+            params: [
+                { k: 'RPM', v: sv(htd.rpm, 0), u: '' },
+                { k: 'TORQUE', v: sv(htd.torque, 0), u: 'daN·m' },
+                { k: 'GEAR', v: live ? S.gear(htd.gear_status).text : '—', u: '' },
+                { k: 'ELEVATOR', v: live ? S.elevator(htd.elevator_status).text : '—', u: '' },
+            ],
+        },
+        {
+            id: 'pct', label: 'PCT TONG', side: 'l', color: A.a2, route: '/equipment?tab=pct',
+            stat: pct.sequence != null ? S.pctSeq(pct.sequence) : S.onIdleOn(pct.status),
+            params: [
+                { k: 'MAKE-UP', v: sv(pct.makeup_torque, 0), u: 'daN·m' },
+                { k: 'LAST', v: sv(pct.last_makeup_torque, 0), u: 'daN·m' },
+                { k: 'UP CLAMP', v: sv(pct.clamp_up_pressure, 1), u: 'bar' },
+                { k: 'LOW CLAMP', v: sv(pct.clamp_low_pressure, 1), u: 'bar' },
+            ],
+        },
+        {
+            id: 'cwk', label: 'CATWALK', side: 'r', color: A.warn, route: '/equipment?tab=cwk', stat: S.cwkPark(cwk.status),
+            params: [
+                { k: 'CARRIER', v: live ? S.carrier(cwk.carrier_status).text : '—', u: '' },
+                { k: 'CLAMP', v: live ? S.clamp(cwk.clamp_status).text : '—', u: '' },
+                { k: 'CLAMP P', v: sv(cwk.clamp_pressure, 1), u: 'bar' },
+                { k: 'CLAMP F', v: sv(cwk.clamp_force, 1), u: 'daN' },
+            ],
+        },
+        {
+            id: 'circ', label: 'CIRC PUMP', side: 'r', color: A.b1, route: '/equipment?tab=mud-pump', stat: circStat,
+            params: [
+                { k: 'PRESS', v: sv(mp.pressure, 0), u: 'bar', dk: 'mudpump.pressure' },
+                { k: 'RATE', v: sv(mp.spm, 1), u: 'spm' },
+                { k: 'TRIP TANK', v: sv(fl.trip_tank, 1), u: 'm³' },
+                { k: 'GAIN/LOSS', v: sv(fl.tank_gain_loss, 2), u: 'm³', dk: 'fluid.tank_gain_loss' },
+            ],
+        },
+        {
+            id: 'acs', label: 'ACS ANTI-COLLISION', side: 'r', color: A.crit, route: '/equipment?tab=acs',
+            stat: acsCalibrated ? S.acs(acs.status) : S.acsCal(acs.calibration_status),
+            params: [
+                { k: 'CROWNSAVER', v: sv(acs.crownsaver, 0), u: 'mm' },
+                { k: 'FLOORSAVER', v: sv(acs.floorsaver, 0), u: 'mm' },
+                { k: 'BOTTOMSAVER', v: sv(acs.bottomsaver, 0), u: 'mm' },
+                { k: 'BLOCK POS', v: sv(blockFt, 1), u: 'ft' },
+            ],
+        },
+        {
+            id: 'wctl', label: 'WELL CONTROL', side: 'r', color: A.crit, route: '/wellcontrol', stat: wcStat,
+            params: [
+                { k: 'TUBING P', v: sv(wh.tubing_pressure, 1), u: 'bar', dk: 'wellhead.tubing_pressure' },
+                { k: 'CASING P', v: sv(wh.casing_pressure, 1), u: 'bar', dk: 'wellhead.casing_pressure' },
+                { k: 'ACCUM', v: wcv(wc.accumulator_pressure, 0), u: 'psi', dk: 'well_control.accumulator_pressure' },
+                { k: 'ANNULAR', v: wcv(wc.annular_pressure, 0), u: 'psi' },
+            ],
+        },
     ];
 
     // ---- shared style fragments -------------------------------------------
     const card = { background: c.bg2, border: `1px solid ${c.line}`, borderRadius: 10 };
     const sectionLabel = { fontSize: 11, fontWeight: 700, letterSpacing: '.16em', color: c.txt2 };
-    const headChip = { display: 'flex', alignItems: 'center', gap: 8, padding: '6px 12px', borderRadius: 8, background: c.bg3, border: `1px solid ${c.line}` };
 
     const Gauge = ({ g }) => (
-        <div style={{ flex: 1, minWidth: 0, border: `1px solid ${g.alarm ? g.alarm.color : c.line}`, borderRadius: 9, background: c.bg3, padding: '10px 12px', boxShadow: g.alarm ? `0 0 0 1px ${g.alarm.color} inset` : 'none', animation: blinkAnim(g.alarm) }}>
+        <div style={{ flex: 1, minWidth: 0, border: `1px solid ${g.alarm ? g.alarm.color : c.line}`, borderRadius: 9, background: c.bg3, padding: '10px 12px', animation: blinkAnim(g.alarm) }}>
             <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between' }}>
                 <span style={{ fontSize: 11, fontWeight: 800, letterSpacing: '.08em', color: c.txt2 }}>{g.label}</span>
                 {g.alarm
-                    ? <span style={{ fontSize: 9, fontWeight: 800, letterSpacing: '.04em', color: g.alarm.color }}>{g.alarm.priority} · {g.alarm.condition}{g.alarm.state !== 'ACK' ? '' : ' ✓'}</span>
+                    ? <span style={{ fontSize: 9, fontWeight: 800, color: g.alarm.color }}>{g.alarm.priority} · {g.alarm.condition}</span>
                     : <span style={{ fontSize: 9, fontWeight: 600, color: c.txt3 }}>{g.unit}</span>}
             </div>
             <div style={{ position: 'relative', width: 188, height: 150, margin: '6px auto 0' }}>
@@ -284,20 +460,21 @@ export default function RigConsoleOverview() {
         </div>
     );
 
-    const blockY = 63 - clamp01(num(dw.block_position) / MAST_MAX_M) * 45;
-    const crownY = 63 - clamp01(CROWN_LIMIT_M / MAST_MAX_M) * 45;
-    const floorY = 63 - clamp01(FLOOR_LIMIT_M / MAST_MAX_M) * 45;
-    const blockAlarm = num(dw.block_position) >= CROWN_LIMIT_M || num(dw.block_position) <= FLOOR_LIMIT_M;
-
-    // One equipment card. Rendered in flex columns (no absolute positioning), so
-    // cards never overlap regardless of how many params each holds.
+    // Equipment summary card — click-through to the full equipment page.
     const EquipCard = (e) => (
-        <div key={e.id} style={{ background: c.bg3, border: `1px solid ${c.line}`, borderLeft: `3px solid ${e.color}`, borderRadius: 8, padding: '8px 10px', boxShadow: '0 4px 16px rgba(0,0,0,.18)' }}>
+        <div
+            key={e.id}
+            onClick={() => navigate(e.route)}
+            role="button" tabIndex={0}
+            onKeyDown={(ev) => { if (ev.key === 'Enter' || ev.key === ' ') navigate(e.route); }}
+            title={`Open ${e.label}`}
+            style={{ background: c.bg3, border: `1px solid ${c.line}`, borderLeft: `3px solid ${e.color}`, borderRadius: 8, padding: '8px 10px', boxShadow: '0 4px 16px rgba(0,0,0,.18)', cursor: 'pointer' }}
+        >
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6 }}>
-                <span style={{ fontSize: 11, fontWeight: 800, letterSpacing: '.04em', color: c.txt }}>{e.label}</span>
+                <span style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '.04em', color: c.txt }}>{e.label}</span>
                 <span style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-                    <span style={{ width: 6, height: 6, borderRadius: '50%', background: e.sColor, boxShadow: `0 0 5px ${e.sColor}` }} />
-                    <span style={{ fontSize: 8, fontWeight: 700, letterSpacing: '.02em', color: e.sColor }}>{e.status}</span>
+                    <span style={{ width: 6, height: 6, borderRadius: '50%', background: e.stat.color, boxShadow: `0 0 5px ${e.stat.color}` }} />
+                    <span style={{ fontSize: 8, fontWeight: 700, color: e.stat.color }}>{e.stat.text}</span>
                 </span>
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px 10px', marginTop: 7 }}>
@@ -310,7 +487,7 @@ export default function RigConsoleOverview() {
                                 {p.k}
                             </div>
                             <div style={{ display: 'flex', alignItems: 'baseline', gap: 2, marginTop: 2, animation: blinkAnim(pa) }}>
-                                <span style={{ fontFamily: MONO, fontSize: 16, fontWeight: 800, lineHeight: 1, color: pa ? pa.color : e.color }}>{p.v}</span>
+                                <span style={{ fontFamily: MONO, fontSize: 15, fontWeight: 800, lineHeight: 1, color: pa ? pa.color : e.color, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{p.v}</span>
                                 {p.u && <span style={{ fontSize: 8, fontWeight: 600, color: c.txt3 }}>{p.u}</span>}
                             </div>
                         </div>
@@ -320,15 +497,24 @@ export default function RigConsoleOverview() {
         </div>
     );
 
+    // ---- workover mast geometry (drawing only; MAST_TRAVEL_FT is configured) --
+    const blockPct = clamp01(blockFt / MAST_TRAVEL_FT);
+    const blockY = 98 - blockPct * 80;           // 98 = floor end of travel, 18 = crown end
+    const htdStat = S.onIdleOn(htd.status);
+    const elevStat = S.elevator(htd.elevator_status);
+    const pctSeqStat = pct.sequence != null ? S.pctSeq(pct.sequence) : UNK;
+    const cwkWorking = num(cwk.carrier_status) === 3;
+
     return (
         <div style={{ background: c.bg, color: c.txt, fontFamily: SANS, minHeight: '100%', margin: -24, display: 'flex', flexDirection: 'column' }}>
             <style>{`@keyframes annScroll{0%{transform:translateY(0)}100%{transform:translateY(-50%)}}@keyframes pulseDot{0%,100%{opacity:1}50%{opacity:.2}}`}</style>
 
-            {/* Header (brand/rig/well/depths/activity/live) lives in the app top bar
-                to avoid a duplicate row — see Layout.jsx. */}
+            {/* Brand / rig / well / activity / LIVE all live in the app top bar (Layout.jsx). */}
 
             {/* ---- annunciator ticker ---- */}
-            <div onClick={() => navigate('/alarms')} style={{ cursor: 'pointer', display: 'flex', alignItems: 'stretch', borderBottom: `1px solid ${c.line}`, background: c.bg2 }}>
+            <div onClick={() => navigate('/alarms')} role="button" tabIndex={0}
+                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') navigate('/alarms'); }}
+                style={{ cursor: 'pointer', display: 'flex', alignItems: 'stretch', borderBottom: `1px solid ${c.line}`, background: c.bg2 }}>
                 <div style={{ flex: 'none', width: 158, display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: 3, padding: '8px 16px', borderRight: `1px solid ${c.line}`, background: c.bg3 }}>
                     <span style={{ fontSize: 11, fontWeight: 800, letterSpacing: '.14em', color: A.warn }}>ANNUNCIATOR</span>
                     <span style={{ fontSize: 10, fontWeight: 600, color: c.txt3 }}>{activeCount} active · view all →</span>
@@ -357,128 +543,251 @@ export default function RigConsoleOverview() {
             {/* ---- body ---- */}
             <div style={{ display: 'flex', gap: 16, padding: 16, alignItems: 'stretch', flexWrap: 'wrap' }}>
 
-                {/* WELLBORE */}
-                <div style={{ flex: '0 0 230px', display: 'flex', flexDirection: 'column' }}>
-                    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', ...card, padding: 11 }}>
-                        <span style={{ ...sectionLabel, marginBottom: 9 }}>WELLBORE</span>
+                {/* STRING & ACTIVITY */}
+                <div style={{ flex: '0 0 240px', display: 'flex', flexDirection: 'column' }}>
+                    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', ...card, padding: 12 }}>
+                        <span style={{ ...sectionLabel, marginBottom: 10 }}>STRING &amp; ACTIVITY</span>
+
+                        {/* Current workover activity (server-detected) */}
+                        <div onClick={() => navigate('/activity')} role="button" tabIndex={0}
+                            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') navigate('/activity'); }}
+                            title="Open activity log"
+                            style={{ cursor: 'pointer', border: `1px solid ${c.line}`, borderRadius: 8, padding: '10px 11px', background: c.bg3, marginBottom: 10 }}>
+                            <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: '.12em', color: c.txt3 }}>CURRENT ACTIVITY</div>
+                            <div style={{ fontSize: 17, fontWeight: 800, letterSpacing: '.02em', marginTop: 3, color: live ? (ACT_COLOR[act.code] || c.txt) : c.txt3 }}>
+                                {live ? (act.label || act.code || 'UNKNOWN').toUpperCase() : 'NO DATA'}
+                            </div>
+                            <div style={{ display: 'flex', gap: 6, marginTop: 4, alignItems: 'center', flexWrap: 'wrap' }}>
+                                {act.npt ? <span style={{ fontSize: 8, fontWeight: 800, color: A.crit, border: `1px solid ${A.crit}`, borderRadius: 4, padding: '1px 5px' }}>NPT · {String(act.npt).toUpperCase()}</span> : null}
+                                {act.productive === false && !act.npt ? <span style={{ fontSize: 8, fontWeight: 800, color: A.warn }}>NON-PRODUCTIVE</span> : null}
+                                {act.source ? <span style={{ fontSize: 8, color: c.txt3 }}>{act.source}</span> : null}
+                            </div>
+                        </div>
+
+                        {/* String depth vs total depth */}
                         <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>
-                            {[['BIT', wellboreVal(sv(bitDepth)), A.a1], ['HOLE', wellboreVal(sv(holeDepth)), c.txt]].map(([k, v, col]) => (
-                                <div key={k} style={{ flex: 1, border: `1px solid ${c.line}`, borderRadius: 7, padding: '8px 9px', background: c.bg2 }}>
-                                    <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: '.1em', color: c.txt3 }}>{k}</div>
-                                    <div style={{ display: 'flex', alignItems: 'baseline', gap: 2 }}><span style={{ fontFamily: MONO, fontSize: 21, fontWeight: 800, lineHeight: 1, color: col }}>{v}</span><span style={{ fontSize: 9, color: c.txt3 }}>m</span></div>
-                                </div>
-                            ))}
-                        </div>
-                        <div style={{ position: 'relative', flex: 1, minHeight: 340, border: `1px solid ${c.line}`, borderRadius: 10, background: c.bg3, overflow: 'hidden' }}>
-                            {formations.map((f) => (
-                                <div key={f.name} style={{ position: 'absolute', left: 0, right: 0, top: `${f.top * 100}%`, height: `${(f.bot - f.top) * 100}%`, background: f.color, borderTop: `1px solid ${c.line}`, display: 'flex', alignItems: 'flex-start', justifyContent: 'flex-end', padding: '4px 7px' }}>
-                                    <span style={{ fontSize: 8, fontWeight: 700, letterSpacing: '.1em', color: c.txt2, opacity: .85 }}>{f.name}</span>
-                                </div>
-                            ))}
-                            <div style={{ position: 'absolute', left: 8, top: 5, fontFamily: MONO, fontSize: 8, fontWeight: 700, color: c.txt3 }}>SURFACE 0m</div>
-                            {/* trip badge */}
-                            <div style={{ position: 'absolute', right: 6, top: 16, padding: '3px 7px', borderRadius: 5, background: live ? tripColor : c.line2, textAlign: 'center' }}>
-                                <span style={{ fontSize: 9, fontWeight: 800, letterSpacing: '.03em', color: '#04171c' }}>{tripLabel}</span>
+                            <div style={{ flex: 1, border: `1px solid ${c.line}`, borderRadius: 7, padding: '8px 9px', background: c.bg2 }}>
+                                <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: '.1em', color: c.txt3 }}>STRING</div>
+                                <div style={{ display: 'flex', alignItems: 'baseline', gap: 2 }}><span style={{ fontFamily: MONO, fontSize: 20, fontWeight: 800, lineHeight: 1, color: A.a1 }}>{sv(stringDepth, 0)}</span><span style={{ fontSize: 9, color: c.txt3 }}>m</span></div>
                             </div>
-                            <div style={{ position: 'absolute', left: '38%', top: 0, bottom: 0, width: 2, background: c.line2, transform: 'translateX(-50%)' }} />
-                            <div style={{ position: 'absolute', left: '38%', top: 0, height: live ? bitTopPct : 0, width: 3, background: A.a1, transform: 'translateX(-50%)', borderRadius: 2, transition: 'height .8s linear' }} />
-                            {live && (
-                                <div style={{ position: 'absolute', left: 0, right: '24%', top: bitTopPct, transform: 'translateY(-50%)', display: 'flex', alignItems: 'center', gap: 5, padding: '0 5px', transition: 'top .8s linear' }}>
-                                    <span style={{ flex: 1, height: 2, background: A.a1, boxShadow: `0 0 8px ${A.a1}` }} />
-                                    <span style={{ width: 11, height: 11, borderRadius: '50%', background: A.a1, boxShadow: `0 0 10px ${A.a1}`, flex: 'none' }} />
-                                </div>
-                            )}
-                            <div style={{ position: 'absolute', left: 4, top: bitTopPct, transform: 'translateY(-50%) translateY(-13px)', fontFamily: MONO, fontSize: 9, fontWeight: 800, color: A.a1 }}>BIT {sv(bitDepth)}m</div>
-                            <div style={{ position: 'absolute', left: 0, right: 0, top: holePct, transform: 'translateY(-50%)', display: 'flex', alignItems: 'center', gap: 4, padding: '0 6px' }}>
-                                <span style={{ flex: 1, height: 1, background: A.info, opacity: .6 }} />
+                            <div style={{ flex: 1, border: `1px solid ${c.line}`, borderRadius: 7, padding: '8px 9px', background: c.bg2 }}>
+                                <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: '.1em', color: c.txt3 }}>TOTAL</div>
+                                <div style={{ display: 'flex', alignItems: 'baseline', gap: 2 }}><span style={{ fontFamily: MONO, fontSize: 20, fontWeight: 800, lineHeight: 1, color: c.txt }}>{sv(holeDepth, 0)}</span><span style={{ fontSize: 9, color: c.txt3 }}>m</span></div>
                             </div>
-                            <div style={{ position: 'absolute', left: 6, top: holePct, transform: 'translateY(-50%) translateY(11px)', fontFamily: MONO, fontSize: 8, fontWeight: 700, color: A.info }}>TD {sv(holeDepth)}m</div>
                         </div>
-                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, marginTop: 9 }}>
-                            {tripStats.map((sItem) => (
-                                <div key={sItem.k} style={{ border: `1px solid ${c.line}`, borderRadius: 7, padding: '7px 8px', background: c.bg2 }}>
-                                    <div style={{ fontSize: 8, fontWeight: 700, letterSpacing: '.08em', color: c.txt3 }}>{sItem.k}</div>
+
+                        {/* Pipe / tubing depth track — vertical section of the well
+                            showing how much string is in the hole right now. */}
+                        <div style={{ position: 'relative', flex: 1, minHeight: 210, marginBottom: 12, border: `1px solid ${c.line}`, borderRadius: 8, background: c.bg3, overflow: 'hidden' }}>
+                            {(() => {
+                                const scaleTd = Math.max(holeDepth, stringDepth, 1);
+                                const pipePct = clamp01(stringDepth / scaleTd) * 100;
+                                const holePct = clamp01(holeDepth / scaleTd) * 100;
+                                // Depth gridlines every 25% of the well.
+                                const grid = [0.25, 0.5, 0.75].map((f) => ({ f, d: scaleTd * f }));
+                                return (
+                                    <>
+                                        {/* casing / open hole */}
+                                        <div style={{ position: 'absolute', left: '50%', top: 0, height: `${holePct}%`, width: 26, transform: 'translateX(-50%)', background: `${A.info}14`, borderLeft: `2px solid ${A.info}66`, borderRight: `2px solid ${A.info}66` }} />
+                                        {/* depth gridlines */}
+                                        {grid.map((g) => (
+                                            <div key={g.f} style={{ position: 'absolute', left: 0, right: 0, top: `${g.f * 100}%`, borderTop: `1px dashed ${c.line}` }}>
+                                                <span style={{ position: 'absolute', right: 3, top: 1, fontFamily: MONO, fontSize: 7.5, color: c.txt3 }}>{Math.round(g.d)}m</span>
+                                            </div>
+                                        ))}
+                                        {/* the pipe/tubing string in the hole */}
+                                        <div style={{ position: 'absolute', left: '50%', top: 0, height: live ? `${pipePct}%` : 0, width: 7, transform: 'translateX(-50%)', background: `linear-gradient(180deg, ${A.a1}, ${A.a1}bb)`, borderRadius: '0 0 2px 2px', transition: 'height .8s linear' }} />
+                                        {/* string shoe / end-of-pipe marker */}
+                                        {live && (
+                                            <div style={{ position: 'absolute', left: 0, right: 0, top: `${pipePct}%`, transform: 'translateY(-50%)', display: 'flex', alignItems: 'center', gap: 4, padding: '0 4px', transition: 'top .8s linear' }}>
+                                                <span style={{ flex: 1, height: 2, background: A.a1, boxShadow: `0 0 8px ${A.a1}` }} />
+                                                <span style={{ width: 10, height: 10, borderRadius: '50%', background: A.a1, boxShadow: `0 0 10px ${A.a1}`, flex: 'none' }} />
+                                            </div>
+                                        )}
+                                        {/* labels */}
+                                        <span style={{ position: 'absolute', left: 5, top: 4, fontFamily: MONO, fontSize: 8, fontWeight: 700, color: c.txt3 }}>SURFACE 0m</span>
+                                        <span style={{ position: 'absolute', left: 5, top: `${pipePct}%`, transform: 'translateY(-50%) translateY(-11px)', fontFamily: MONO, fontSize: 9.5, fontWeight: 800, color: A.a1 }}>
+                                            PIPE {sv(stringDepth, 0)}m
+                                        </span>
+                                        <div style={{ position: 'absolute', left: 0, right: 0, top: `${holePct}%`, transform: 'translateY(-50%)', display: 'flex', alignItems: 'center', padding: '0 4px' }}>
+                                            <span style={{ flex: 1, height: 1, background: A.info, opacity: 0.65 }} />
+                                        </div>
+                                        <span style={{ position: 'absolute', left: 5, top: `${holePct}%`, transform: 'translateY(-50%) translateY(9px)', fontFamily: MONO, fontSize: 8, fontWeight: 700, color: A.info }}>
+                                            TD {sv(holeDepth, 0)}m
+                                        </span>
+                                    </>
+                                );
+                            })()}
+                        </div>
+
+                        {/* Connections (torque-turn) */}
+                        <div onClick={() => navigate('/workover')} role="button" tabIndex={0}
+                            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') navigate('/workover'); }}
+                            title="Open workover / connections"
+                            style={{ cursor: 'pointer', border: `1px solid ${c.line}`, borderRadius: 8, padding: '9px 10px', background: c.bg2, marginBottom: 10 }}>
+                            <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: '.12em', color: c.txt3, marginBottom: 5 }}>CONNECTIONS</div>
+                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px 8px' }}>
+                                <div>
+                                    <div style={{ fontSize: 8, fontWeight: 700, color: c.txt3 }}>TORQUE-TURN</div>
+                                    <div style={{ fontFamily: MONO, fontSize: 14, fontWeight: 800, color: tt.active ? A.ok : c.txt3 }}>{tt.active ? 'ACTIVE' : 'IDLE'}</div>
+                                </div>
+                                <div>
+                                    <div style={{ fontSize: 8, fontWeight: 700, color: c.txt3 }}>LAST MAKE-UP</div>
                                     <div style={{ display: 'flex', alignItems: 'baseline', gap: 2 }}>
-                                        <span style={{ fontFamily: MONO, fontSize: 14, fontWeight: 800, color: sItem.c }}>{sItem.v}</span>
-                                        {sItem.u && <span style={{ fontSize: 8, color: c.txt3 }}>{sItem.u}</span>}
+                                        <span style={{ fontFamily: MONO, fontSize: 14, fontWeight: 800, color: A.b1 }}>{sv(pct.last_makeup_torque, 0)}</span>
+                                        <span style={{ fontSize: 8, color: c.txt3 }}>daN·m</span>
                                     </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* ACS travel clearances — raw mm, deliberately NOT threshold-coloured */}
+                        <div style={{ border: `1px solid ${c.line}`, borderRadius: 8, padding: '9px 10px', background: c.bg2 }}>
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+                                <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: '.12em', color: c.txt3 }}>ACS CLEARANCE</span>
+                                {!acsCalibrated && <span style={{ fontSize: 8, fontWeight: 800, color: A.warn }}>NOT CALIBRATED</span>}
+                            </div>
+                            {[['CROWN', acs.crownsaver], ['FLOOR', acs.floorsaver], ['BOTTOM', acs.bottomsaver]].map(([k, v]) => (
+                                <div key={k} style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 6, marginTop: 3, opacity: acsCalibrated ? 1 : 0.55 }}>
+                                    <span style={{ fontSize: 9, fontWeight: 700, color: c.txt2 }}>{k}</span>
+                                    <span><span style={{ fontFamily: MONO, fontSize: 13, fontWeight: 800, color: c.txt }}>{sv(v, 0)}</span><span style={{ fontSize: 8, color: c.txt3 }}> mm</span></span>
                                 </div>
                             ))}
                         </div>
                     </div>
                 </div>
 
-                {/* RIG FLOOR & EQUIPMENT + BOP */}
-                <div style={{ flex: '1 1 540px', display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+                {/* RIG FLOOR & EQUIPMENT */}
+                <div style={{ flex: '1 1 560px', display: 'flex', flexDirection: 'column', minWidth: 0 }}>
                     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', ...card, overflow: 'hidden' }}>
-                        <span style={{ ...sectionLabel, padding: '12px 13px 2px' }}>RIG FLOOR &amp; EQUIPMENT</span>
+                        <span style={{ ...sectionLabel, padding: '12px 13px 2px' }}>WORKOVER RIG &amp; EQUIPMENT</span>
                         <div style={{ display: 'flex', gap: 12, flex: 1, minHeight: 560, padding: '8px 12px 12px', alignItems: 'stretch' }}>
                             {/* Left equipment column */}
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: 10, flex: '0 0 172px', minWidth: 0 }}>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: 10, flex: '0 0 176px', minWidth: 0 }}>
                                 {equipment.filter((e) => e.side === 'l').map(EquipCard)}
                             </div>
-                            {/* Center derrick / mast / BOP schematic */}
-                            <div style={{ position: 'relative', flex: '1 1 0', minWidth: 130 }}>
-                            <svg viewBox="0 0 100 150" preserveAspectRatio="xMidYMid meet" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%' }}>
-                                <line x1="8" y1="118" x2="92" y2="118" stroke={c.line2} strokeWidth="0.8" />
-                                <polygon points="37,108 63,108 59,118 41,118" fill={c.bg3} stroke={c.line2} strokeWidth="0.6" />
-                                <rect x="33" y="103" width="34" height="5" rx="0.6" fill={c.bg3} stroke={c.line2} strokeWidth="0.7" />
-                                <line x1="40" y1="103" x2="47" y2="14" stroke={c.line2} strokeWidth="1.1" />
-                                <line x1="60" y1="103" x2="53" y2="14" stroke={c.line2} strokeWidth="1.1" />
-                                <path d="M41.2,90 L57.6,75 L43.4,60 L55.6,45 L45,30 L54,18" stroke={c.line} strokeWidth="0.7" fill="none" />
-                                <path d="M58.8,90 L42.4,75 L56.6,60 L44.4,45 L55,30 L46,18" stroke={c.line} strokeWidth="0.7" fill="none" />
-                                <rect x="43" y="9" width="14" height="5" rx="1" fill={c.bg3} stroke={c.txt3} strokeWidth="0.7" />
-                                {/* crown-saver limit */}
-                                <line x1="43" y1={crownY.toFixed(1)} x2="57" y2={crownY.toFixed(1)} stroke={A.warn} strokeWidth="0.6" strokeDasharray="1.6 1" />
-                                <text x="41.5" y={(crownY + 0.9).toFixed(1)} fontSize="2.8" fontWeight="800" textAnchor="end" fill={A.warn} fontFamily={MONO}>{CROWN_LIMIT_M.toFixed(1)} m</text>
-                                {/* floor-saver limit */}
-                                <line x1="43" y1={floorY.toFixed(1)} x2="57" y2={floorY.toFixed(1)} stroke={A.warn} strokeWidth="0.6" strokeDasharray="1.6 1" />
-                                <text x="41.5" y={(floorY + 0.9).toFixed(1)} fontSize="2.8" fontWeight="800" textAnchor="end" fill={A.warn} fontFamily={MONO}>{FLOOR_LIMIT_M.toFixed(1)} m</text>
-                                {/* travelling block */}
-                                <line x1="47.5" y1="14" x2="47.5" y2={blockY.toFixed(1)} stroke={A.a1} strokeWidth="0.5" opacity="0.8" />
-                                <line x1="52.5" y1="14" x2="52.5" y2={blockY.toFixed(1)} stroke={A.a1} strokeWidth="0.5" opacity="0.8" />
-                                <rect x="44" y={blockY.toFixed(1)} width="12" height="5.4" rx="1" fill={blockAlarm ? A.crit : A.a1} style={{ filter: blockAlarm ? `drop-shadow(0 0 3px ${A.crit})` : 'none' }} />
-                                <text x="50" y={(blockY + 3.8).toFixed(1)} fontSize="2.8" fontWeight="800" textAnchor="middle" fill="#0a0d14" fontFamily={MONO}>{live ? fmt(dw.block_position, 1) : '--'} m</text>
-                                {/* BOP stack */}
-                                <line x1="50" y1="103" x2="50" y2="118" stroke={A.a2} strokeWidth="0.7" opacity="0.7" />
-                                <text x="58.5" y="120" fontSize="2.5" fontWeight="700" fill={c.txt3} fontFamily={MONO}>BOP STACK</text>
-                                <rect x="43" y="120" width="14" height="5" rx="2.4" fill={ramFill(rams[0].state)} stroke={c.line2} strokeWidth="0.8" />
-                                <text x="50" y="123.6" fontSize="2.1" textAnchor="middle" fontWeight="700" fill={c.txt} fontFamily={MONO}>ANNULAR</text>
-                                <rect x="44" y="125.6" width="12" height="4.6" rx="0.8" fill={ramFill(rams[1].state)} stroke={c.line2} strokeWidth="0.8" />
-                                <rect x="44" y="130.8" width="12" height="4.6" rx="0.8" fill={ramFill(rams[3].state)} stroke={c.line2} strokeWidth="0.8" />
-                                <rect x="46.5" y="135.8" width="7" height="4" rx="0.5" fill={c.bg3} stroke={c.line2} strokeWidth="0.8" />
-                                <path d="M58.4 127.9 L63 127.9 L63 140" stroke={A.info} strokeWidth="0.6" fill="none" />
-                                <text x="63.8" y="135" fontSize="2" fill={A.info} fontFamily={MONO}>CHOKE</text>
-                                <path d="M41.6 127.9 L37 127.9 L37 140" stroke={A.b2} strokeWidth="0.6" fill="none" />
-                                <text x="31" y="135" fontSize="2" fill={A.b2} fontFamily={MONO}>KILL</text>
-                            </svg>
-                            <div style={{ position: 'absolute', left: '50%', top: '44%', transform: 'translate(-50%,-50%)', textAlign: 'center', pointerEvents: 'none' }}>
-                                <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: '.22em', color: c.txt3, opacity: .5 }}>DERRICK · MAST</div>
+
+                            {/* Centre: telescoping guyed workover mast */}
+                            <div style={{ position: 'relative', flex: '1 1 0', minWidth: 140 }}>
+                                <svg viewBox="0 0 100 150" preserveAspectRatio="xMidYMid meet" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%' }}>
+                                    {/* ground + rig floor + substructure */}
+                                    <line x1="6" y1="118" x2="94" y2="118" stroke={c.line2} strokeWidth="0.9" />
+                                    <polygon points="37,108 63,108 60,118 40,118" fill={c.bg3} stroke={c.line2} strokeWidth="0.6" />
+                                    <rect x="34" y="103" width="32" height="5" rx="0.6" fill={c.bg3} stroke={c.line2} strokeWidth="0.7" />
+
+                                    {/* guy lines + ground anchors (guyed mast, not a lattice derrick) */}
+                                    <line x1="46.5" y1="46" x2="15" y2="118" stroke={c.line} strokeWidth="0.45" strokeDasharray="2 1.5" />
+                                    <line x1="53.5" y1="46" x2="85" y2="118" stroke={c.line} strokeWidth="0.45" strokeDasharray="2 1.5" />
+                                    <polygon points="13,118 17,118 15,114.5" fill={c.line2} />
+                                    <polygon points="83,118 87,118 85,114.5" fill={c.line2} />
+
+                                    {/* mast: outer (lower) section */}
+                                    <line x1="41" y1="103" x2="44.5" y2="60" stroke={c.line2} strokeWidth="1.5" />
+                                    <line x1="59" y1="103" x2="55.5" y2="60" stroke={c.line2} strokeWidth="1.5" />
+                                    {/* telescoping splice */}
+                                    <rect x="43" y="56.5" width="14" height="3.5" rx="0.6" fill={c.bg3} stroke={c.txt3} strokeWidth="0.6" />
+                                    <text x="58.5" y="59.4" fontSize="2.2" fill={c.txt3} fontFamily={MONO}>TELESCOPING</text>
+                                    {/* mast: inner (upper) section */}
+                                    <line x1="45.5" y1="56.5" x2="47" y2="15" stroke={c.line2} strokeWidth="1.1" />
+                                    <line x1="54.5" y1="56.5" x2="53" y2="15" stroke={c.line2} strokeWidth="1.1" />
+
+                                    {/* crown block */}
+                                    <rect x="43" y="9.5" width="14" height="5.5" rx="1" fill={c.bg3} stroke={c.txt3} strokeWidth="0.7" />
+                                    <circle cx="46.8" cy="12.2" r="1.1" fill={c.txt3} />
+                                    <circle cx="53.2" cy="12.2" r="1.1" fill={c.txt3} />
+                                    <text x="41.5" y="13" fontSize="2.3" textAnchor="end" fill={c.txt3} fontFamily={MONO}>CROWN</text>
+
+                                    {/* drilling line to travelling block */}
+                                    <line x1="47.5" y1="15" x2="47.5" y2={blockY.toFixed(1)} stroke={A.a1} strokeWidth="0.45" opacity="0.85" />
+                                    <line x1="52.5" y1="15" x2="52.5" y2={blockY.toFixed(1)} stroke={A.a1} strokeWidth="0.45" opacity="0.85" />
+
+                                    {/* travelling block */}
+                                    <rect x="44" y={blockY.toFixed(1)} width="12" height="4.6" rx="1" fill={live ? A.a1 : c.line2} />
+                                    <text x="42.5" y={(blockY + 3.4).toFixed(1)} fontSize="2.6" fontWeight="800" textAnchor="end" fill={A.a1} fontFamily={MONO}>{live ? `${fmt(blockFt, 1)} ft` : '--'}</text>
+
+                                    {/* hydraulic top drive (HTD) hanging under the block */}
+                                    <rect x="45" y={(blockY + 5).toFixed(1)} width="10" height="6.5" rx="0.8" fill={c.bg3} stroke={htdStat.color} strokeWidth="0.8" />
+                                    <text x="50" y={(blockY + 9.2).toFixed(1)} fontSize="2.2" textAnchor="middle" fontWeight="700" fill={htdStat.color} fontFamily={MONO}>HTD</text>
+                                    {/* elevator links + elevator */}
+                                    <line x1="46.5" y1={(blockY + 11.5).toFixed(1)} x2="46.5" y2={(blockY + 15).toFixed(1)} stroke={c.txt3} strokeWidth="0.5" />
+                                    <line x1="53.5" y1={(blockY + 11.5).toFixed(1)} x2="53.5" y2={(blockY + 15).toFixed(1)} stroke={c.txt3} strokeWidth="0.5" />
+                                    <rect x="45.8" y={(blockY + 15).toFixed(1)} width="8.4" height="2.6" rx="0.5" fill="transparent" stroke={elevStat.color} strokeWidth="0.7" />
+
+                                    {/* tubing string from elevator down through the floor */}
+                                    <line x1="50" y1={(blockY + 17.6).toFixed(1)} x2="50" y2="118" stroke={A.a2} strokeWidth="0.8" opacity="0.8" />
+
+                                    {/* PCT power tong at floor level */}
+                                    <rect x="43.5" y="110.5" width="13" height="5" rx="0.8" fill={c.bg3} stroke={pctSeqStat.color} strokeWidth="0.8" />
+                                    <text x="50" y="113.9" fontSize="2.2" textAnchor="middle" fontWeight="700" fill={pctSeqStat.color} fontFamily={MONO}>PCT</text>
+
+                                    {/* catwalk ramp entering the floor from the left */}
+                                    <polygon points="8,116 34,108 34,111 12,118" fill={c.bg3} stroke={cwkWorking ? A.warn : c.line2} strokeWidth="0.6" />
+                                    <text x="12" y="114.5" fontSize="2.1" fill={cwkWorking ? A.warn : c.txt3} fontFamily={MONO}>CATWALK</text>
+
+                                    {/* wellhead: casing head + tubing head + wing valves */}
+                                    <rect x="44" y="118" width="12" height="4.4" rx="0.6" fill={c.bg3} stroke={c.line2} strokeWidth="0.8" />
+                                    <text x="57.5" y="121.4" fontSize="2.1" fill={c.txt3} fontFamily={MONO}>TUBING HEAD</text>
+                                    <rect x="42.5" y="122.4" width="15" height="4.6" rx="0.6" fill={c.bg3} stroke={c.line2} strokeWidth="0.8" />
+                                    <text x="59" y="125.8" fontSize="2.1" fill={c.txt3} fontFamily={MONO}>CASING HEAD</text>
+                                    {/* wing valves */}
+                                    <rect x="38.5" y="123.2" width="4" height="3" fill={c.bg3} stroke={c.line2} strokeWidth="0.6" />
+                                    <rect x="57.5" y="123.2" width="4" height="3" fill={c.bg3} stroke={c.line2} strokeWidth="0.6" />
+                                    <text x="50" y="131" fontSize="2.2" textAnchor="middle" fontWeight="700" fill={c.txt2} fontFamily={MONO}>
+                                        TBG {wh.tubing_pressure != null && live ? `${fmt(wh.tubing_pressure, 0)}` : '--'} / CSG {wh.casing_pressure != null && live ? `${fmt(wh.casing_pressure, 0)}` : '--'} bar
+                                    </text>
+
+                                    {/* BOP / annular — only drawn when a real source exists */}
+                                    {wcLive ? (
+                                        <>
+                                            <rect x="43" y="133" width="14" height="4.6" rx="2" fill={rams[0].state === 'CLOSED' ? A.crit : 'transparent'} stroke={c.line2} strokeWidth="0.8" />
+                                            <text x="50" y="136.3" fontSize="2" textAnchor="middle" fontWeight="700" fill={c.txt} fontFamily={MONO}>ANNULAR</text>
+                                            <rect x="44" y="138" width="12" height="4.2" rx="0.8" fill={rams[1].state === 'CLOSED' ? A.crit : 'transparent'} stroke={c.line2} strokeWidth="0.8" />
+                                            <text x="50" y="141" fontSize="1.9" textAnchor="middle" fontWeight="700" fill={c.txt} fontFamily={MONO}>PIPE</text>
+                                        </>
+                                    ) : (
+                                        <>
+                                            <rect x="43" y="133" width="14" height="9.2" rx="1" fill="none" stroke={c.line2} strokeWidth="0.7" strokeDasharray="1.5 1.5" />
+                                            <text x="50" y="138.6" fontSize="2" textAnchor="middle" fontWeight="700" fill={c.txt3} fontFamily={MONO}>NO BOP SOURCE</text>
+                                        </>
+                                    )}
+                                </svg>
+                                <div style={{ position: 'absolute', left: '50%', bottom: 2, transform: 'translateX(-50%)', textAlign: 'center', pointerEvents: 'none' }}>
+                                    <div style={{ fontSize: 8.5, fontWeight: 700, letterSpacing: '.2em', color: c.txt3, opacity: .5 }}>WORKOVER MAST · ACS ENVELOPE</div>
+                                </div>
                             </div>
-                            </div>
+
                             {/* Right equipment column */}
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: 10, flex: '0 0 172px', minWidth: 0 }}>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: 10, flex: '0 0 176px', minWidth: 0 }}>
                                 {equipment.filter((e) => e.side === 'r').map(EquipCard)}
                             </div>
                         </div>
                     </div>
 
-                    {/* BOP bar */}
-                    <div style={{ marginTop: 14, ...card, padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
+                    {/* Well-control bar */}
+                    <div onClick={() => navigate('/wellcontrol')} role="button" tabIndex={0}
+                        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') navigate('/wellcontrol'); }}
+                        title="Open well control"
+                        style={{ marginTop: 14, ...card, padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap', cursor: 'pointer' }}>
                         <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                            <span style={{ width: 8, height: 8, borderRadius: '50%', background: bopColor, boxShadow: `0 0 6px ${bopColor}` }} />
-                            <span style={{ fontSize: 12, fontWeight: 800, letterSpacing: '.1em', color: c.txt }}>BOP STACK</span>
-                            <span style={{ fontSize: 10, fontWeight: 700, color: bopColor }}>{bopStatus}</span>
+                            <span style={{ width: 8, height: 8, borderRadius: '50%', background: wcStat.color, boxShadow: `0 0 6px ${wcStat.color}` }} />
+                            <span style={{ fontSize: 12, fontWeight: 800, letterSpacing: '.1em', color: c.txt }}>WELL CONTROL</span>
+                            <span style={{ fontSize: 10, fontWeight: 700, color: wcStat.color }}>{wcStat.text}</span>
                         </span>
                         <span style={{ width: 1, height: 26, background: c.line2 }} />
                         <div style={{ display: 'flex', alignItems: 'center', gap: 20, flexWrap: 'wrap' }}>
-                            {bopPress.map((p) => {
+                            {[
+                                { k: 'ACCUM', v: wcv(wc.accumulator_pressure, 0), u: 'psi', dk: 'well_control.accumulator_pressure' },
+                                { k: 'ANNULAR', v: wcv(wc.annular_pressure, 0), u: 'psi' },
+                                { k: 'MANIFOLD', v: wcv(wc.manifold_pressure, 0), u: 'psi' },
+                                { k: 'TUBING', v: sv(wh.tubing_pressure, 1), u: 'bar', dk: 'wellhead.tubing_pressure' },
+                                { k: 'CASING', v: sv(wh.casing_pressure, 1), u: 'bar', dk: 'wellhead.casing_pressure' },
+                            ].map((p) => {
                                 const pa = alarmFor(p.dk);
                                 return (
                                     <span key={p.k} style={{ display: 'flex', flexDirection: 'column', gap: 2, animation: blinkAnim(pa) }}>
                                         <span style={{ fontSize: 8, fontWeight: 700, letterSpacing: '.1em', color: pa ? pa.color : c.txt3 }}>{p.k}{pa ? ` · ${pa.condition}` : ''}</span>
                                         <span style={{ display: 'flex', alignItems: 'baseline', gap: 3 }}>
-                                            <span style={{ fontFamily: MONO, fontSize: 17, fontWeight: 800, lineHeight: 1, color: pa ? pa.color : p.c }}>{p.v}</span>
+                                            <span style={{ fontFamily: MONO, fontSize: 17, fontWeight: 800, lineHeight: 1, color: pa ? pa.color : A.info }}>{p.v}</span>
                                             <span style={{ fontSize: 8, color: c.txt3 }}>{p.u}</span>
                                         </span>
                                     </span>
@@ -487,19 +796,22 @@ export default function RigConsoleOverview() {
                         </div>
                         <span style={{ width: 1, height: 26, background: c.line2 }} />
                         <div style={{ display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap' }}>
-                            {rams.map((r, i) => (
-                                <span key={r.name + i} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '5px 10px', borderRadius: 6, background: c.bg3, border: `1px solid ${c.line}` }}>
-                                    <span style={{ width: 6, height: 6, borderRadius: '50%', background: ramColor(r.state), boxShadow: `0 0 5px ${ramColor(r.state)}` }} />
-                                    <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: '.02em', color: c.txt2 }}>{r.name}</span>
-                                    <span style={{ fontSize: 9, fontWeight: 800, color: ramColor(r.state) }}>{r.state}</span>
-                                </span>
-                            ))}
+                            {rams.map((r) => {
+                                const col = r.state === 'CLOSED' ? A.crit : r.state === 'OPEN' ? '#7c8aa0' : c.txt3;
+                                return (
+                                    <span key={r.name} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '5px 10px', borderRadius: 6, background: c.bg3, border: `1px solid ${c.line}` }}>
+                                        <span style={{ width: 6, height: 6, borderRadius: '50%', background: col, boxShadow: `0 0 5px ${col}` }} />
+                                        <span style={{ fontSize: 9, fontWeight: 700, color: c.txt2 }}>{r.name}</span>
+                                        <span style={{ fontSize: 9, fontWeight: 800, color: col }}>{r.state}</span>
+                                    </span>
+                                );
+                            })}
                         </div>
                     </div>
                 </div>
 
                 {/* PRIMARY INSTRUMENTS + TRENDS */}
-                <div style={{ flex: '1 1 580px', display: 'flex', flexDirection: 'column', gap: 14, minWidth: 0 }}>
+                <div style={{ flex: '1 1 560px', display: 'flex', flexDirection: 'column', gap: 14, minWidth: 0 }}>
                     <div style={{ ...card, padding: '13px 14px' }}>
                         <span style={sectionLabel}>PRIMARY INSTRUMENTS</span>
                         <div style={{ display: 'flex', gap: 12, marginTop: 11, flexWrap: 'wrap' }}>
@@ -511,18 +823,23 @@ export default function RigConsoleOverview() {
                         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 11 }}>
                             <span style={sectionLabel}>WORKING-DAY TRENDS</span>
                             <span style={{ flex: 1, height: 1, background: c.line }} />
+                            <span style={{ fontFamily: MONO, fontSize: 9, fontWeight: 600, color: c.txt3, whiteSpace: 'nowrap' }}>
+                                06:00 → 06:00 IST · {workingDayLabel}
+                            </span>
                         </div>
                         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
                             {trends.map((t) => (
                                 <div key={t.id} style={{ display: 'flex', alignItems: 'center', gap: 11 }}>
-                                    <span style={{ width: 78, flex: 'none', fontSize: 9, fontWeight: 700, letterSpacing: '.06em', color: c.txt2 }}>{t.label}</span>
-                                    <div style={{ flex: 1, height: 28, minWidth: 0 }}>
+                                    <span style={{ width: 84, flex: 'none', fontSize: 9, fontWeight: 700, letterSpacing: '.06em', color: c.txt2 }}>{t.label}</span>
+                                    <div style={{ flex: 1, height: 28, minWidth: 0, borderLeft: `1px solid ${c.line}`, borderRight: `1px solid ${c.line}` }}>
                                         <svg viewBox="0 0 100 24" width="100%" height="100%" preserveAspectRatio="none">
+                                            {/* tour midpoint (18:00 IST) for orientation */}
+                                            <line x1="50" y1="0" x2="50" y2="24" stroke={c.line} strokeWidth="0.5" />
                                             <path d={t.area} fill={t.color} opacity="0.16" />
                                             <path d={t.line} fill="none" stroke={t.color} strokeWidth="1.4" vectorEffect="non-scaling-stroke" strokeLinejoin="round" />
                                         </svg>
                                     </div>
-                                    <span style={{ width: 54, flex: 'none', textAlign: 'right', fontFamily: MONO, fontSize: 14, fontWeight: 800, color: t.color }}>{t.valueStr}</span>
+                                    <span style={{ width: 62, flex: 'none', textAlign: 'right', fontFamily: MONO, fontSize: 14, fontWeight: 800, color: t.color }}>{t.valueStr}</span>
                                 </div>
                             ))}
                         </div>
@@ -532,7 +849,3 @@ export default function RigConsoleOverview() {
         </div>
     );
 }
-
-// helpers kept out of render scope
-function bop_esd(sf) { return Number(sf?.esd_active) === 1 || Number(sf?.lockout_active) === 1; }
-function wellboreVal(v) { return v; }

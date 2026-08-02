@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 460 44" width="460" height="44"
+     role="img" aria-label="ENERGY: Now AND Next">
+  <!-- ONGC corporate tagline lockup (approximation; replace with the official asset if exact match is required). -->
+  <defs>
+    <linearGradient id="tagA" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#00A44F"/><stop offset="100%" stop-color="#0E9E57"/>
+    </linearGradient>
+    <linearGradient id="tagB" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#B02128"/><stop offset="60%" stop-color="#8A7A43"/><stop offset="100%" stop-color="#00A44F"/>
+    </linearGradient>
+  </defs>
+  <text x="0" y="32"
+        font-family="Poppins, 'Century Gothic', Futura, 'Space Grotesk', Helvetica, Arial, sans-serif"
+        font-size="34" font-weight="700" letter-spacing="-0.5">
+    <tspan fill="url(#tagA)">ENERGY:</tspan><tspan fill="url(#tagB)" dx="12">Now AND Next</tspan>
+  </text>
+</svg>

@@ -9,7 +9,6 @@ import {
     Edit2,
     Anchor,
     LogOut,
-    ChevronDown,
     Database,
     Bell,
     Wrench,
@@ -20,7 +19,10 @@ import {
     ClipboardList,
     Gauge,
     MapPin,
-    KeyRound
+    KeyRound,
+    Menu as MenuIcon,
+    PanelLeftClose,
+    PanelLeftOpen
 } from 'lucide-react';
 import {
     Box,
@@ -36,12 +38,15 @@ import {
     DialogActions,
     Button,
     Alert,
-    Popover,
     List,
     ListItem,
     ListItemButton,
     ListItemIcon,
-    ListItemText
+    ListItemText,
+    Drawer,
+    Divider,
+    Tooltip,
+    useMediaQuery
 } from '@mui/material';
 import { useAuth } from '../../context/AuthContext';
 import { useNavigate } from 'react-router-dom';
@@ -50,7 +55,13 @@ import AlarmStrip from '../Alarms/AlarmStrip';
 import { AlarmProvider } from '../../context/AlarmContext';
 import ChangePasswordDialog from '../Account/ChangePasswordDialog';
 import ThemeSwitcher from './ThemeSwitcher';
+import OngcBrand from './OngcBrand';
 import axios from '../../api';
+
+// Collapsible left navigation rail (standard app shell). Collapsing hides the
+// rail entirely, leaving only a slim edge handle to pull it back open.
+const SIDEBAR_W = 244;
+const SIDEBAR_KEY = 'ahwr_sidebar_collapsed';
 
 const menuItems = [
     { text: 'Rig Overview', icon: <LayoutDashboard size={20} />, path: '/' },
@@ -72,9 +83,13 @@ export default function Layout() {
     const { logout, user } = useAuth();
     const navigate = useNavigate();
 
-    const [menuAnchor, setMenuAnchor] = useState(null);
     const [pwdOpen, setPwdOpen] = useState(false);
     const [connected, setConnected] = useState(socket.connected);
+    // Sidebar: collapsed state persists; on small screens it becomes a temporary overlay.
+    const isDesktop = useMediaQuery('(min-width:900px)');
+    const [collapsed, setCollapsed] = useState(() => localStorage.getItem(SIDEBAR_KEY) === '1');
+    const [mobileNavOpen, setMobileNavOpen] = useState(false);
+    const toggleCollapsed = () => setCollapsed((v) => { localStorage.setItem(SIDEBAR_KEY, v ? '0' : '1'); return !v; });
 
     // Live rig parameters for the top bar
     const [liveParams, setLiveParams] = useState({ opMode: 0, acsStatus: 0, holeDepth: 0, bitDepth: 0, activity: '', productive: true, stale: false });
@@ -208,17 +223,9 @@ export default function Layout() {
         }
     };
 
-    const handleMenuOpen = (event) => {
-        setMenuAnchor(event.currentTarget);
-    };
-
-    const handleMenuClose = () => {
-        setMenuAnchor(null);
-    };
-
     const handleNavClick = (path) => {
         navigate(path);
-        setMenuAnchor(null);
+        setMobileNavOpen(false);   // close the overlay rail on small screens
     };
 
     const currentPage = navItems.find(item => item.path === location.pathname);
@@ -228,10 +235,132 @@ export default function Layout() {
     const displayWell = activeWell?.name || wellInfo.well;
     const displayRig = activeWell?.rig || wellInfo.rig;
 
+    // ---- Left navigation rail -------------------------------------------------
+    const navRail = (
+        <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%', bgcolor: '#0b1220' }}>
+            {/* Brand: ONGC logo + company + product. Click -> Overview. */}
+            <Box sx={{
+                display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                gap: 1, px: 1.75, py: 1.5, minHeight: 64,
+                borderBottom: '1px solid #1e293b',
+            }}>
+                <OngcBrand
+                    size={26}
+                    onClick={() => handleNavClick('/')}
+                    title="ONGC — go to Rig Overview"
+                />
+                {isDesktop && (
+                    <Tooltip title="Hide menu">
+                        <IconButton onClick={toggleCollapsed} size="small" sx={{ color: '#64748b', '&:hover': { color: '#38bdf8' } }} aria-label="Hide menu">
+                            <PanelLeftClose size={18} />
+                        </IconButton>
+                    </Tooltip>
+                )}
+            </Box>
+
+            {/* Menu items */}
+            <List sx={{ py: 1, flexGrow: 1, overflowY: 'auto', overflowX: 'hidden' }}>
+                {navItems.map((item) => {
+                    const isActive = location.pathname === item.path;
+                    return (
+                        <ListItem key={item.text} disablePadding sx={{ display: 'block' }}>
+                            <ListItemButton
+                                onClick={() => handleNavClick(item.path)}
+                                sx={{
+                                    mx: 1, mb: 0.25, borderRadius: 1.5, px: 1.75, py: 0.9,
+                                    bgcolor: isActive ? 'rgba(56, 189, 248, 0.13)' : 'transparent',
+                                    borderLeft: isActive ? '3px solid #38bdf8' : '3px solid transparent',
+                                    '&:hover': { bgcolor: 'rgba(56, 189, 248, 0.08)' },
+                                }}
+                            >
+                                <ListItemIcon sx={{ color: isActive ? '#38bdf8' : '#94a3b8', minWidth: 36 }}>
+                                    {item.icon}
+                                </ListItemIcon>
+                                <ListItemText
+                                    primary={item.text}
+                                    primaryTypographyProps={{ sx: { color: isActive ? '#38bdf8' : '#e2e8f0', fontWeight: isActive ? 700 : 500, fontSize: 14 } }}
+                                />
+                            </ListItemButton>
+                        </ListItem>
+                    );
+                })}
+            </List>
+
+            {/* Signed-in user */}
+            {user?.username && (
+                <>
+                    <Divider sx={{ borderColor: '#1e293b' }} />
+                    <Box sx={{ px: 2, py: 1.25 }}>
+                        <Typography noWrap sx={{ fontSize: 12, fontWeight: 700, color: '#e2e8f0' }}>{user.username}</Typography>
+                        <Typography noWrap sx={{ fontSize: 10, color: '#64748b', textTransform: 'uppercase', letterSpacing: 1 }}>{user.role}</Typography>
+                    </Box>
+                </>
+            )}
+        </Box>
+    );
+
     return (
         <AlarmProvider>
-        <Box sx={{ display: 'flex', flexDirection: 'column', minHeight: '100vh' }}>
+        <Box sx={{ display: 'flex', minHeight: '100vh' }}>
             <CssBaseline />
+
+            {/* Desktop: permanent rail; when fully collapsed it disappears and
+                leaves only a slim edge handle to pull it back open. */}
+            {isDesktop && !collapsed && (
+                <Drawer
+                    variant="permanent"
+                    sx={{
+                        width: SIDEBAR_W, flexShrink: 0,
+                        '& .MuiDrawer-paper': {
+                            width: SIDEBAR_W, boxSizing: 'border-box', border: 'none',
+                            borderRight: '1px solid #1e293b', bgcolor: '#0b1220', overflowX: 'hidden',
+                        },
+                    }}
+                >
+                    {navRail}
+                </Drawer>
+            )}
+
+            {/* Drawer handle — the only thing left when the menu is fully collapsed */}
+            {isDesktop && collapsed && (
+                <Tooltip title="Open menu" placement="right">
+                    <Box
+                        onClick={toggleCollapsed}
+                        role="button" tabIndex={0}
+                        aria-label="Open navigation menu"
+                        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') toggleCollapsed(); }}
+                        sx={{
+                            position: 'fixed', left: 0, top: '50%', transform: 'translateY(-50%)',
+                            zIndex: (theme) => theme.zIndex.drawer + 2,
+                            width: 22, height: 92, cursor: 'pointer',
+                            display: 'flex', alignItems: 'center', justifyContent: 'center',
+                            bgcolor: '#111c2e', color: '#94a3b8',
+                            border: '1px solid #1e293b', borderLeft: 'none',
+                            borderRadius: '0 10px 10px 0',
+                            boxShadow: '2px 0 10px rgba(0,0,0,.45)',
+                            transition: 'background-color .15s, color .15s, width .15s',
+                            '&:hover': { bgcolor: '#16233a', color: '#38bdf8', width: 26 },
+                        }}
+                    >
+                        <PanelLeftOpen size={15} />
+                    </Box>
+                </Tooltip>
+            )}
+
+            {!isDesktop && (
+                <Drawer
+                    variant="temporary"
+                    open={mobileNavOpen}
+                    onClose={() => setMobileNavOpen(false)}
+                    ModalProps={{ keepMounted: true }}
+                    sx={{ '& .MuiDrawer-paper': { width: SIDEBAR_W, boxSizing: 'border-box', bgcolor: '#0b1220', border: 'none' } }}
+                >
+                    {navRail}
+                </Drawer>
+            )}
+
+            {/* Right side: top bar + alarm strip + page */}
+            <Box sx={{ flexGrow: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
 
             {/* Top AppBar */}
             <AppBar
@@ -241,7 +370,7 @@ export default function Layout() {
                     bgcolor: '#0f172a',
                     borderBottom: '1px solid #334155',
                     boxShadow: 'none',
-                    zIndex: (theme) => theme.zIndex.drawer + 1
+                    zIndex: (theme) => theme.zIndex.drawer - 1
                 }}
             >
                 <Toolbar
@@ -254,93 +383,18 @@ export default function Layout() {
                         px: { xs: 1.5, sm: 2, md: 3 }
                     }}
                 >
-                    {/* App Name — click to go to the Overview */}
-                    <Typography
-                        variant="h6" noWrap
-                        onClick={() => navigate('/')}
-                        role="button" tabIndex={0}
-                        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') navigate('/'); }}
-                        title="Go to Rig Overview"
-                        sx={{ fontWeight: 'bold', color: '#38bdf8', mr: { xs: 0.5, md: 1 }, fontSize: { xs: '1rem', sm: '1.25rem' }, cursor: 'pointer', '&:hover': { opacity: 0.85 } }}
-                    >
-                        AHWR-50 Twin
+                    {/* Hamburger — opens the nav rail as an overlay on small screens */}
+                    {!isDesktop && (
+                        <IconButton onClick={() => setMobileNavOpen(true)} sx={{ color: '#e2e8f0', mr: 0.5 }} aria-label="Open navigation">
+                            <MenuIcon size={20} />
+                        </IconButton>
+                    )}
+
+                    {/* Current page title (nav itself lives in the left rail) */}
+                    <Typography noWrap sx={{ fontWeight: 800, color: '#e2e8f0', fontSize: { xs: 14, sm: 17 }, mr: { xs: 0.5, md: 1.5 }, display: 'flex', alignItems: 'center', gap: 1 }}>
+                        <Box component="span" sx={{ color: '#38bdf8', display: 'flex' }}>{currentPage?.icon}</Box>
+                        {currentPage?.text || 'Rig Overview'}
                     </Typography>
-
-                    {/* Navigation Dropdown Button */}
-                    <Button
-                        onClick={handleMenuOpen}
-                        sx={{
-                            color: 'white',
-                            textTransform: 'none',
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: 1,
-                            px: { xs: 1, sm: 2 },
-                            py: 0.8,
-                            borderRadius: 1,
-                            minWidth: 0,
-                            maxWidth: { xs: 150, sm: 'none' },
-                            bgcolor: menuAnchor ? 'rgba(56, 189, 248, 0.15)' : 'rgba(255,255,255,0.05)',
-                            border: '1px solid #334155',
-                            '&:hover': { bgcolor: 'rgba(56, 189, 248, 0.1)', borderColor: '#38bdf8' }
-                        }}
-                    >
-                        {currentPage?.icon}
-                        {!currentPage?.hideCurrentLabel && (
-                            <Typography variant="body1" noWrap sx={{ fontWeight: 'bold', fontSize: { xs: 13, sm: 16 } }}>
-                                {currentPage?.text || 'Rig Overview'}
-                            </Typography>
-                        )}
-                        <ChevronDown size={16} style={{ transform: menuAnchor ? 'rotate(180deg)' : 'rotate(0deg)', transition: '0.2s' }} />
-                    </Button>
-
-                    {/* Dropdown Menu */}
-                    <Popover
-                        open={Boolean(menuAnchor)}
-                        anchorEl={menuAnchor}
-                        onClose={handleMenuClose}
-                        anchorOrigin={{ vertical: 'bottom', horizontal: 'left' }}
-                        transformOrigin={{ vertical: 'top', horizontal: 'left' }}
-                        PaperProps={{
-                            sx: {
-                                bgcolor: '#1e293b',
-                                border: '1px solid #334155',
-                                borderRadius: 2,
-                                minWidth: 220,
-                                mt: 0.5,
-                                boxShadow: '0 4px 20px rgba(0,0,0,0.4)'
-                            }
-                        }}
-                    >
-                        <List sx={{ py: 0.5 }}>
-                            {navItems.map((item) => {
-                                const isActive = location.pathname === item.path;
-                                return (
-                                    <ListItem key={item.text} disablePadding>
-                                        <ListItemButton
-                                            onClick={() => handleNavClick(item.path)}
-                                            sx={{
-                                                px: 2, py: 1,
-                                                bgcolor: isActive ? 'rgba(56, 189, 248, 0.1)' : 'transparent',
-                                                borderLeft: isActive ? '3px solid #38bdf8' : '3px solid transparent',
-                                                '&:hover': { bgcolor: 'rgba(56, 189, 248, 0.08)' }
-                                            }}
-                                        >
-                                            <ListItemIcon sx={{ color: isActive ? '#38bdf8' : '#94a3b8', minWidth: 36 }}>
-                                                {item.icon}
-                                            </ListItemIcon>
-                                            <ListItemText
-                                                primary={item.text}
-                                                primaryTypographyProps={{
-                                                    sx: { color: isActive ? '#38bdf8' : 'white', fontWeight: isActive ? 'bold' : 'normal', fontSize: 14 }
-                                                }}
-                                            />
-                                        </ListItemButton>
-                                    </ListItem>
-                                );
-                            })}
-                        </List>
-                    </Popover>
 
                     {/* Live Rig Parameters */}
                     <Box sx={{
@@ -528,12 +582,12 @@ export default function Layout() {
                     p: { xs: 2, sm: 3 },
                     // Honor the active theme so the shell background changes when the theme switches.
                     bgcolor: 'background.default',
-                    minHeight: '100vh',
                     color: 'text.primary',
                     overflowX: 'hidden'
                 }}
             >
                 <Outlet />
+            </Box>
             </Box>
         </Box>
         </AlarmProvider>

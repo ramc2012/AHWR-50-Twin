@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Box, Paper, TextField, Button, Typography, Alert, Container, ToggleButtonGroup, ToggleButton } from '@mui/material';
-import { User, Lock, Activity } from 'lucide-react';
+import { User, Lock } from 'lucide-react';
 import axios from '../../api';
 import { useAuth } from '../../context/AuthContext';
+import { OngcMark, OngcTagline } from '../Layout/OngcBrand';
 
 const Login = () => {
     const [credentials, setCredentials] = useState({ username: '', password: '' });
@@ -82,13 +83,19 @@ const Login = () => {
                         borderRadius: 4
                     }}
                 >
-                    <Box sx={{ mb: 3, display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-                        <Activity size={48} color="#38bdf8" />
-                        <Typography variant="h4" sx={{ mt: 2, fontWeight: 'bold', color: '#fff', letterSpacing: 1 }}>
+                    <Box sx={{ mb: 3, display: 'flex', flexDirection: 'column', alignItems: 'center', width: '100%', gap: 1.25 }}>
+                        {/* ONGC corporate lockup */}
+                        <OngcMark height={54} />
+                        <OngcTagline height={17} />
+                        <Typography sx={{ color: '#94a3b8', fontSize: 12, letterSpacing: 0.4 }}>
+                            Oil and Natural Gas Corporation Limited
+                        </Typography>
+                        <Box sx={{ width: '100%', height: '1px', bgcolor: 'rgba(255,255,255,0.12)', my: 1.5 }} />
+                        <Typography variant="h5" sx={{ fontWeight: 'bold', color: '#fff', letterSpacing: 1 }}>
                             AHWR-50 Twin
                         </Typography>
                         <Typography variant="subtitle2" sx={{ color: '#94a3b8' }}>
-                            Digital Twin Access
+                            Workover Rig · Digital Twin Access
                         </Typography>
                     </Box>
 

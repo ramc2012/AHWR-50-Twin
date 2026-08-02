@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 420 150" width="420" height="150"
+     role="img" aria-label="ONGC">
+  <!--
+    ONGC wordmark — recreated as vector text with the corporate red→green gradient.
+    Letterforms are rendered with a geometric/rounded font stack, so this is a close
+    approximation rather than the exact trademark outlines.
+    For a pixel-exact mark, replace this file with the official ONGC vector asset
+    (keep the filename); every brand slot in the app picks it up automatically.
+  -->
+  <defs>
+    <linearGradient id="ongcBrand" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%"   stop-color="#B02128"/>
+      <stop offset="30%"  stop-color="#B33A31"/>
+      <stop offset="52%"  stop-color="#8A7A43"/>
+      <stop offset="72%"  stop-color="#3E9A56"/>
+      <stop offset="100%" stop-color="#00A44F"/>
+    </linearGradient>
+  </defs>
+
+  <text x="210" y="104" text-anchor="middle"
+        font-family="Poppins, 'Century Gothic', Futura, 'Space Grotesk', 'Avenir Next', Helvetica, Arial, sans-serif"
+        font-size="132" font-weight="700" letter-spacing="-2"
+        fill="url(#ongcBrand)">ongc</text>
+
+  <rect x="28" y="122" width="364" height="7" rx="3.5" fill="url(#ongcBrand)"/>
+</svg>

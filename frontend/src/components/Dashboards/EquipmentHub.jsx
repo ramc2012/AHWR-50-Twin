@@ -1,4 +1,5 @@
-import React, { useState } from 'react';
+import React from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { Paper, Typography, Box, Button, useTheme } from '@mui/material';
 import {
     Gauge, Activity, Droplets, ShieldAlert, Anchor,
@@ -18,7 +19,14 @@ export default function EquipmentHub() {
     const theme = useTheme();
     const surface = theme.palette.background.paper;
     const border = theme.palette.divider;
-    const [view, setView] = useState('cat-engine'); // Default directly to Cat Engine
+    // Selected equipment lives in the URL (?tab=hpu) so the overview's equipment
+    // cards can deep-link straight to the right dashboard, and the view is
+    // shareable / survives a refresh. Falls back to Cat Engine.
+    const TABS = ['cat-engine', 'hpu', 'htd', 'mud-pump', 'acs', 'cwk', 'pct'];
+    const [searchParams, setSearchParams] = useSearchParams();
+    const requested = searchParams.get('tab');
+    const view = TABS.includes(requested) ? requested : 'cat-engine';
+    const setView = (id) => setSearchParams({ tab: id }, { replace: true });
 
     const renderContent = () => {
         switch (view) {

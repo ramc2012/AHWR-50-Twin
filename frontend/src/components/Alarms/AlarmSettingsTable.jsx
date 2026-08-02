@@ -26,6 +26,8 @@ const normalize = (c) => ({
     deadband: numStr(c.deadband), onDelaySec: numStr(c.onDelaySec),
     priority: c.priority || 'P3',
     enabled: c.enabled !== false,
+    // Server-annotated: is this rule's tag actually arriving? (display only)
+    sourcePresent: c.sourcePresent,
 });
 
 const LIMIT_COLS = [
@@ -204,6 +206,14 @@ export default function AlarmSettingsTable({ canEdit }) {
                                             onChange={(e) => update(idx, 'enabled', e.target.checked)} />
                                     </TableCell>
                                     <TableCell sx={cellSx}>
+                                        {/* A rule whose tag never arrives can never fire. Flag it rather
+                                            than presenting it as protection that is actually absent. */}
+                                        {r.sourcePresent === false && (
+                                            <Tooltip title="This tag is not arriving — the rule can never fire. Map the PLC tag (or fit the sensor) before relying on it.">
+                                                <Chip label="NO SOURCE" size="small"
+                                                    sx={{ height: 17, fontSize: 9, fontWeight: 800, display: 'flex', width: 'fit-content', mb: 0.4, bgcolor: 'rgba(239,68,68,0.15)', color: '#ef4444' }} />
+                                            </Tooltip>
+                                        )}
                                         <TextField value={r.label} onChange={(e) => update(idx, 'label', e.target.value)} disabled={!canEdit}
                                             size="small" variant="outlined" inputProps={{ style: { padding: '6px 8px', fontSize: 13 } }} sx={{ width: 200 }} />
                                     </TableCell>
