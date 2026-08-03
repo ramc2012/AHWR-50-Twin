@@ -15,6 +15,8 @@ const EfficiencyPage = lazy(() => import('./components/Efficiency/EfficiencyPage
 const VariablesPage = lazy(() => import('./components/Variables/VariablesPage'));
 const EdgeSyncPage = lazy(() => import('./components/Sync/EdgeSyncPage'));
 const OperationsPage = lazy(() => import('./components/Operations/OperationsPage'));
+const AdvisorPage = lazy(() => import('./components/Advisor/AdvisorPage'));
+const ProgressLogPage = lazy(() => import('./components/ProgressLog/ProgressLogPage'));
 const WellPage = lazy(() => import('./components/Well/WellPage'));
 const SettingsPage = lazy(() => import('./components/Settings/SettingsPage'));
 
@@ -52,6 +54,8 @@ function App() {
                                 <Route path="activity" element={screen(ActivityPage)} />
                                 <Route path="alarms" element={screen(AlarmsPage)} />
                                 <Route path="operations" element={screen(OperationsPage)} />
+                                <Route path="advisor" element={screen(AdvisorPage)} />
+                                <Route path="progress-log" element={screen(ProgressLogPage)} />
                                 <Route path="well" element={screen(WellPage)} />
                                 <Route path="workover" element={screen(WorkoverPage)} />
                                 <Route path="reports" element={screen(ReportsPage)} />

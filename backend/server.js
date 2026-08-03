@@ -23,6 +23,9 @@ const witsml = require('./lib/witsml');
 const etp = require('./lib/etp');
 const efficiency = require('./lib/efficiency');
 const wells = require('./lib/wells');
+const advisor = require('./lib/advisor');
+const progresslog = require('./lib/progresslog');
+const llm = require('./lib/llm');
 const edrCatalog = require('../shared/edrMetrics.json');
 
 const PORT = Number(process.env.PORT || 5000);
@@ -463,6 +466,10 @@ const queryData = async () => {
             if (al.changed) io.emit('alarms', al);
             maintenance.updateHours(data, now);
             data._efficiency = efficiency.update(data, now, { jointMade: !!tt.connectionMade });
+            // On-prem process-intelligence: anomalies + workover rules + early warnings.
+            // Cheap & synchronous; rides along on the rig_data emit (the LLM is on-demand only).
+            const adv = advisor.update(data, now);
+            data._advisor = { advisories: adv.advisories, earlyWarnings: adv.earlyWarnings };
             // Store-and-forward: queue telemetry + events for sync to central
             sync.enqueueTelemetry(data, now);
             if (al.changed) sync.enqueueEvent('alarm', al.counts, now);
@@ -1136,6 +1143,36 @@ app.post('/api/activity/set', auth.requireAuth, auth.requireRole('admin', 'opera
         const { code, npt } = req.body || {};
         res.json({ success: true, current: workover.setActivity(code, npt) });
     } catch (e) { res.status(e.status || 400).json({ error: e.message }); }
+});
+
+// --- Operator Advisor + Progress Log (on-prem process intelligence; no external calls) ---
+app.get('/api/advisor', auth.requireAuth, (req, res) => res.json(advisor.getState()));
+app.get('/api/advisor/guidance', auth.requireAuth, async (req, res) => {
+    try { res.json(await advisor.guidance(latestRigData, { force: req.query.force === 'true' })); }
+    catch (e) { console.error('[advisor] guidance:', e.message); res.status(500).json({ error: 'guidance failed' }); }
+});
+app.post('/api/advisor/ask', auth.requireAuth, async (req, res) => {
+    const q = (req.body && req.body.question) || '';
+    if (!String(q).trim()) return res.status(400).json({ error: 'question is required' });
+    try { res.json(await advisor.ask(q, latestRigData)); }
+    catch (e) { console.error('[advisor] ask:', e.message); res.status(500).json({ error: 'ask failed' }); }
+});
+app.get('/api/progress-log/meta', auth.requireAuth, (req, res) => res.json({ categories: progresslog.CATEGORIES, severities: progresslog.SEVERITIES }));
+app.get('/api/progress-log', auth.requireAuth, (req, res) => res.json(progresslog.list(req.query)));
+app.post('/api/progress-log', auth.requireAuth, auth.requireRole('admin', 'operator'), async (req, res) => {
+    try {
+        const entry = await progresslog.add({ ...(req.body || {}), author: req.user.username }, latestRigData);
+        io.emit('progress_log', { added: entry });
+        res.json(entry);
+    } catch (e) { res.status(e.status || 400).json({ error: e.message }); }
+});
+app.patch('/api/progress-log/:id', auth.requireAuth, auth.requireRole('admin', 'operator'), async (req, res) => {
+    const e = await progresslog.update(req.params.id, req.body || {});
+    if (!e) return res.status(404).json({ error: 'not found' });
+    res.json(e);
+});
+app.delete('/api/progress-log/:id', auth.requireAuth, auth.requireRole('admin', 'operator'), async (req, res) => {
+    res.json({ success: await progresslog.remove(req.params.id) });
 });
 
 // --- Workover: Alarm management ---

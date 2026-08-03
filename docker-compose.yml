@@ -102,6 +102,14 @@ services:
       - ETP_ENABLED=${ETP_ENABLED:-true}
       - ETP_URL=${ETP_URL:-ws://etp-sink:9011}
       - ETP_STREAM_SECONDS=${ETP_STREAM_SECONDS:-5}
+      # --- Operator Advisor: on-prem open-model LLM (OpenAI-compatible endpoint) ---
+      # OFF by default; the advisor still runs (rule-based) without a model. Point at a
+      # LOCAL model server so rig data never leaves site: the bundled `ollama` service
+      # (profile: ai) or a host/internal Ollama / vLLM / llama.cpp. Gemma/Mistral suit a rig PC.
+      - LLM_ENABLED=${LLM_ENABLED:-false}
+      - LLM_BASE_URL=${LLM_BASE_URL:-http://ollama:11434/v1}
+      - LLM_MODEL=${LLM_MODEL:-gemma2:2b}
+      - LLM_TIMEOUT_MS=${LLM_TIMEOUT_MS:-20000}
       # --- Windows domain / Active Directory login ---
       # Demo defaults target the bundled `openldap` test directory; in production
       # override these in .env to point at the real Domain Controller (AD over LDAPS).
@@ -225,6 +233,23 @@ services:
       - WS_PORT=9011
       - HTTP_PORT=9012
 
+  # OPTIONAL on-prem LLM for the Operator Advisor (open weights: gemma2, mistral, llama3…).
+  # Keeps inference ON-SITE (no external API). Enable with:
+  #   docker compose --profile ai up -d ollama
+  #   docker exec romii_ollama ollama pull gemma2:2b      # one-time model pull
+  # then set LLM_ENABLED=true (+ LLM_MODEL). CPU works for small models; mount a GPU for speed.
+  ollama:
+    image: ollama/ollama:latest
+    container_name: romii_ollama
+    hostname: ollama
+    restart: unless-stopped
+    profiles: ["ai"]
+    cpus: 4.0
+    mem_limit: 6g
+    volumes:
+      - ollama_models:/root/.ollama
+
 volumes:
   influxdb_data:
   backend_data:
+  ollama_models:

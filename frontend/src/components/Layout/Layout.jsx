@@ -19,7 +19,9 @@ import {
     RefreshCw,
     ClipboardList,
     Gauge,
-    MapPin
+    MapPin,
+    BrainCircuit,
+    FileClock
 } from 'lucide-react';
 import {
     Box,
@@ -56,6 +58,8 @@ const menuItems = [
     { text: 'Activity', icon: <Activity size={20} />, path: '/activity' },
     { text: 'Alarms', icon: <Bell size={20} />, path: '/alarms' },
     { text: 'Operations', icon: <ClipboardList size={20} />, path: '/operations' },
+    { text: 'Advisor', icon: <BrainCircuit size={20} />, path: '/advisor' },
+    { text: 'Progress Log', icon: <FileClock size={20} />, path: '/progress-log' },
     { text: 'Well', icon: <MapPin size={20} />, path: '/well' },
     { text: 'Reports', icon: <FileText size={20} />, path: '/reports' },
     { text: 'Maintenance', icon: <HeartPulse size={20} />, path: '/maintenance' },
