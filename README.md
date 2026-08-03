@@ -15,6 +15,11 @@ and visualised in a **React (Vite + MUI)** operator dashboard.
                                   • rewrites telegraf.conf (hot-reload)
 ```
 
+> **Deploying for real?** See the full **[Deployment Guide](docs/DEPLOYMENT.md)** — edge + central
+> setup, edge registration, signal-flow verification, and the production Kubernetes path. The
+> central **CRMF** fleet-aggregation facility (the proposal's Central Facility) lives in
+> **[`central/`](central/)**.
+
 ## Quickstart (local, with synthetic live data)
 
 Requires Docker + Docker Compose v2.
