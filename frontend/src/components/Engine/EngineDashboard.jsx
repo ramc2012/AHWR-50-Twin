@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Grid, Paper, Typography, Box } from '@mui/material';
 import { Gauge, Thermometer, Droplets, Battery, Activity } from 'lucide-react';
-import { socket } from '../../socket';
+import { socket, getLatestRigData } from '../../socket';
 import MaintenancePanel from './MaintenancePanel';
 import axios from '../../api';
 
@@ -47,6 +47,10 @@ export default function EngineDashboard() {
                 setEngineData(data.cat_engine);
             }
         };
+        // Paint the cached frame first -- the /api/rig/latest call above still
+        // runs and corrects it when the cache is cold.
+        const cached = getLatestRigData();
+        if (cached) handler(cached);
         socket.on('rig_data', handler);
 
         return () => {

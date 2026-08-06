@@ -9,7 +9,7 @@ import {
 } from 'recharts';
 import { Gauge, Activity, Thermometer, SlidersHorizontal, Wrench, TrendingUp } from 'lucide-react';
 import axios from '../../api';
-import { socket } from '../../socket';
+import { socket, getLatestRigData, getRecentRigFrames } from '../../socket';
 import { useAuth } from '../../context/AuthContext';
 
 // `daily` / `config` / `instrumentation` are polled from REST; the live `instant`
@@ -149,6 +149,28 @@ export default function EfficiencyPage() {
             trendRef.current = next;
             setTrend(next);
         };
+        // This chart has no historian endpoint behind it, so without a seed a
+        // remount shows an empty plot that takes TREND_CAP seconds (~5 min) to
+        // refill. The ring is sized to TREND_CAP for exactly this case.
+        const seeded = getRecentRigFrames(TREND_CAP)
+            .map(({ at, payload }) => {
+                const eff = payload?._efficiency;
+                if (!eff) return null;
+                return {
+                    t: new Date(at).toLocaleTimeString('en-US', { hour12: false }),
+                    hydraulicKw: eff.totalHydraulicKw != null ? Number(eff.totalHydraulicKw) : null,
+                    lsMargin: eff.lsMargin != null ? Number(eff.lsMargin) : null,
+                };
+            })
+            .filter(Boolean);
+        if (seeded.length) {
+            trendRef.current = seeded;
+            setTrend(seeded);
+        }
+        // Header KPI tiles: cache wins over the 5 s poll's `instant`, which only
+        // fills when still null (setInstant((prev) => prev || d.instant)).
+        const cachedRig = getLatestRigData();
+        if (cachedRig?._efficiency) setInstant(cachedRig._efficiency);
         socket.on('rig_data', handleRigData);
         return () => {
             // Remove ONLY our handler; never disconnect the shared socket.

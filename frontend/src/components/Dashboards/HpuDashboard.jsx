@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Grid, Paper, Typography, Box, Divider, useTheme } from '@mui/material';
-import { socket } from '../../socket';
+import { socket, getLatestRigData } from '../../socket';
 import EdrView from '../EDR/EdrView';
 
 // ---- Local reusable presentational helpers (flatter/denser than analog dials) ----
@@ -89,6 +89,9 @@ export default function HpuDashboard() {
         const handler = (newData) => {
             if (newData.hpu) setData(newData.hpu);
         };
+        // Paint the cached frame first; same handler, so no path divergence.
+        const cached = getLatestRigData();
+        if (cached) handler(cached);
         socket.on('rig_data', handler);
         return () => socket.off('rig_data', handler);
     }, []);

@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Grid, Paper, Typography, Box, useTheme } from '@mui/material';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
 import { Activity, Droplets } from 'lucide-react';
-import { socket } from '../../socket';
+import { socket, getLatestRigData } from '../../socket';
 import axios from '../../api';
 import EdrView from '../EDR/EdrView';
 
@@ -109,6 +109,9 @@ export default function MudPumpDashboard() {
                 setFluidData(prev => ({ ...prev, ...data.fluid }));
             }
         };
+        // Paint the cached frame first; same handler, so no path divergence.
+        const cached = getLatestRigData();
+        if (cached) handler(cached);
         socket.on('rig_data', handler);
 
         return () => {

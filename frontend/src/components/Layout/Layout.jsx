@@ -50,7 +50,7 @@ import {
 } from '@mui/material';
 import { useAuth } from '../../context/AuthContext';
 import { useNavigate } from 'react-router-dom';
-import { socket, connectSocket } from '../../socket';
+import { socket, connectSocket, getLatestRigData } from '../../socket';
 import AlarmStrip from '../Alarms/AlarmStrip';
 import { AlarmProvider } from '../../context/AlarmContext';
 import ChangePasswordDialog from '../Account/ChangePasswordDialog';
@@ -182,6 +182,10 @@ export default function Layout() {
                 stale: !!data._meta?.stale,
             });
         };
+        // Seed the top bar from the cache. Layout only remounts on a hard reload
+        // today, but this also covers the window between connect and first tick.
+        const cachedRig = getLatestRigData();
+        if (cachedRig) handleRigData(cachedRig);
         socket.on('rig_data', handleRigData);
 
         return () => {

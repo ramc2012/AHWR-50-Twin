@@ -22,7 +22,7 @@ const DEFAULT_STRIPS = [
         pens: [
             { channelId: 'drilling.wob', color: '#38bdf8', min: 0, max: 100, enabled: true },
             { channelId: 'drawworks.hook_load', color: '#fbbf24', min: 0, max: 500, enabled: true },
-            { channelId: 'drawworks.block_position', color: '#4ade80', min: 0, max: 50, enabled: true }
+            { channelId: 'drawworks.block_position', color: '#4ade80', min: 0, max: 15000, enabled: true }
         ]
     },
     {

@@ -3,7 +3,7 @@ import { Box, Typography, Button, Tooltip } from '@mui/material';
 import { Bell, Volume2, VolumeX, Check, CheckCheck } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import axios from '../../api';
-import { socket } from '../../socket';
+import { socket, getLatestAlarms } from '../../socket';
 import { useAuth } from '../../context/AuthContext';
 import { priorityColor, priorityRank } from '../../utils/alarms';
 import { formatDuration, secondsSince } from '../../utils/format';
@@ -47,7 +47,9 @@ export default function AlarmStrip() {
 
     useEffect(() => {
         let mounted = true;
-        // Seed from REST; the socket then keeps it live.
+        // Cache first (instant), REST behind it as the authority. applyAlarms()
+        // already returns early on a null payload.
+        applyAlarms(getLatestAlarms());
         axios.get('/api/alarms')
             .then((res) => { if (mounted) applyAlarms(res.data); })
             .catch((err) => console.error('Failed to seed alarms:', err));

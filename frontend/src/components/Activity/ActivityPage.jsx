@@ -6,7 +6,7 @@ import {
 } from '@mui/material';
 import { Activity as ActivityIcon, Clock, Zap, RotateCcw, CheckCircle2, AlertTriangle, LineChart } from 'lucide-react';
 import axios from '../../api';
-import { socket } from '../../socket';
+import { socket, getLatestRigData } from '../../socket';
 import { useAuth } from '../../context/AuthContext';
 import { formatDuration, formatClock, secondsSince, todayISO } from '../../utils/format';
 import EdrView from '../EDR/EdrView';
@@ -87,6 +87,13 @@ export default function ActivityPage() {
                 loadLog();
             }
         };
+        // Seed the current-activity strip from the cache and prime lastCode so
+        // the seed does not trigger a spurious loadLog() on the first live tick.
+        const cachedActivity = getLatestRigData()?._activity;
+        if (cachedActivity) {
+            setCurrent((prev) => ({ ...prev, ...cachedActivity }));
+            lastCode = cachedActivity.code;
+        }
         socket.on('rig_data', handler);
 
         // Poll the log every 15s as a backstop (durations tick up server-side).

@@ -38,9 +38,9 @@ const catalogMetrics = new Map(edrCatalog.categories.flatMap(category => (
 )));
 const categoryLabels = new Map(edrCatalog.categories.map(category => [category.id, category.label]));
 
-const EXPORT_META_ALIASES = {
-    'mudpump.flow_out': 'mudpump.flow_out_percentage'
-};
+// mudpump.flow_out is now a first-class catalogue entry, so its label resolves
+// directly. (The old mudpump.flow_out_percentage id was never a backend field.)
+const EXPORT_META_ALIASES = {};
 
 const titleCase = value => value
     .replace(/_/g, ' ')

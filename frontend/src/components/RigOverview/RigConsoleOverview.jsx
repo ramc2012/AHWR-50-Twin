@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useTheme } from '@mui/material';
 import { useNavigate } from 'react-router-dom';
-import { socket } from '../../socket';
+import { socket, getLatestRigData, getLatestAlarms } from '../../socket';
 import axios, { LONG_TIMEOUT_MS } from '../../api';
 import { useAlarms, ALARM_BLINK } from '../../context/AlarmContext';
 import { priorityColor } from '../../utils/alarms';
@@ -259,6 +259,12 @@ export default function RigConsoleOverview() {
         const onAlarms = (p) => setAlarms(Array.isArray(p?.active) ? p.active : []);
         const onConnect = () => setFeed((p) => ({ ...p, connected: true }));
         const onDisconnect = () => setFeed((p) => ({ ...p, connected: false }));
+        // This is the landing route, so it is the one remounted most often.
+        // Seed from the cache before the REST calls above resolve.
+        const cachedRig = getLatestRigData();
+        if (cachedRig) onRig(cachedRig);
+        const cachedAlarms = getLatestAlarms();
+        if (cachedAlarms) onAlarms(cachedAlarms);
         socket.on('rig_data', onRig); socket.on('alarms', onAlarms); socket.on('connect', onConnect); socket.on('disconnect', onDisconnect);
         return () => { socket.off('rig_data', onRig); socket.off('alarms', onAlarms); socket.off('connect', onConnect); socket.off('disconnect', onDisconnect); clearInterval(wellPoll); };
     }, [pushHist]);

@@ -28,7 +28,9 @@ const r = (v, d = 2) => Number(Number(v).toFixed(d));
 let totalStrokes = 100000;
 let holeDepth = 1500;   // m
 let runHours = 4200;    // h
-let blockPos = 45;      // ft — driven by the workover cycle below
+let blockPos = 8000;    // mm — the PLC tag "ACS Actual Block Position" (DB174.R150)
+                        // is millimetres, like its neighbouring ACS *saver tags. The mock
+                        // previously emitted feet, which is what made the console mislabel it.
 let lastMakeupPeak = 13000;
 
 // Scripted workover cycle so activity classification, torque-turn and alarms are demonstrable.
@@ -44,8 +46,8 @@ function workoverPhase(tt) {
 function tick() {
     t += 1;
     const wf = workoverPhase(t);
-    if (wf.phase === 'RIH') blockPos = Math.max(3, blockPos - 2);
-    else if (wf.phase === 'POOH') blockPos = Math.min(88, blockPos + 2);
+    if (wf.phase === 'RIH') blockPos = Math.max(500, blockPos - 600);
+    else if (wf.phase === 'POOH') blockPos = Math.min(14000, blockPos + 600);
     const pumping = wf.phase === 'CIRCULATE';
     let pctSequence = 0, makeupTorque = r(500 + noise(50));
     if (wf.phase === 'MAKE_UP') {

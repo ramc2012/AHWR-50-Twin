@@ -37,7 +37,7 @@ import {
     ZoomOut
 } from 'lucide-react';
 import axios, { LONG_TIMEOUT_MS } from '../../api';
-import { socket } from '../../socket';
+import { socket, getLatestRigData } from '../../socket';
 import edrCatalog from '../../../../shared/edrMetrics.json';
 
 /*
@@ -165,6 +165,12 @@ const normalizeReadouts = (ids) => {
     return out.slice(0, MAX_READOUTS);
 };
 
+// Bump when a channel's UNIT or sensible scale changes in shared/edrMetrics.json.
+// Persisted strips carry per-channel min/max, so without this an existing console keeps
+// a stale scale after a unit correction -- e.g. block position relabelled mm but still
+// drawn on a 0..50 axis, which pins the pen off-scale and reads as a dead channel.
+const EDR_CATALOG_VERSION = 3;
+
 const loadPersisted = (storageKey, defaultStrips, defaultReadouts) => {
     const fallback = {
         strips: normalizeStrips(defaultStrips),
@@ -178,7 +184,10 @@ const loadPersisted = (storageKey, defaultStrips, defaultReadouts) => {
         const raw = localStorage.getItem(storageKey);
         if (!raw) return fallback;
         const parsed = JSON.parse(raw);
-        const strips = normalizeStrips(parsed?.strips);
+        // A catalogue unit change invalidates saved per-channel scales, but not the
+        // period/readout choices, so only the strips are reset.
+        const staleScales = parsed?.v !== EDR_CATALOG_VERSION;
+        const strips = staleScales ? normalizeStrips(defaultStrips) : normalizeStrips(parsed?.strips);
         // Only adopt a persisted readout list if the key has one saved; otherwise
         // fall back to the prop default (covers first run after this feature ships).
         const readouts = Array.isArray(parsed?.readouts)
@@ -1106,7 +1115,7 @@ export default function EdrView({
     useEffect(() => {
         if (!storageKey) return;
         try {
-            localStorage.setItem(storageKey, JSON.stringify({ strips, indexMode, readouts, timeWinIdx, depthSpanIdx }));
+            localStorage.setItem(storageKey, JSON.stringify({ v: EDR_CATALOG_VERSION, strips, indexMode, readouts, timeWinIdx, depthSpanIdx }));
         } catch (e) { /* best effort */ }
     }, [storageKey, strips, indexMode, readouts, timeWinIdx, depthSpanIdx]);
 
@@ -1178,6 +1187,13 @@ export default function EdrView({
 
     useEffect(() => {
         fetchHistory();
+        // Cached frames carry their own _meta.ts and are plotted at that time, so
+        // age cannot mislead here -- pass Infinity to bypass the freshness gate.
+        // Only the latest frame is seeded, not the ring: fetchHistory() already
+        // covers the window from the two-tier historian, and replaying hundreds
+        // of frames through ingest() would mean hundreds of setData re-sorts.
+        const cachedLatest = getLatestRigData(Infinity);
+        if (cachedLatest && Object.keys(cachedLatest).length) ingest(cachedLatest);
         axios.get('/api/rig/latest')
             .then(({ data: latest }) => {
                 if (latest && Object.keys(latest).length) ingest(latest);

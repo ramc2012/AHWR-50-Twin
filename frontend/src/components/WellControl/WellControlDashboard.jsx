@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Box, Typography, Grid, Paper, Divider, useTheme } from '@mui/material';
 import { LineChart } from 'lucide-react';
-import { socket } from '../../socket';
+import { socket, getLatestRigData } from '../../socket';
 import BOPStack from './BOPStack';
 import KillSheet from './KillSheet';
 import axios from '../../api';
@@ -84,7 +84,7 @@ const SectionTitle = ({ children }) => (
 // dedicated wellhead tubing/casing pressure channels, so we map the requested
 // tubing/casing pens to the closest catalogued pressure proxies (HPU discharge /
 // aux) alongside pump pressure. Keeping channelIds valid avoids EdrView's
-// unknown-id fallback to drilling.hook_load.
+// unknown-id fallback to drilling.wob (the catalogue's first entry).
 const EDR_CHANNELS = ['wellhead.tubing_pressure', 'wellhead.casing_pressure', 'wellhead.wellhead_pressure', 'mudpump.pressure', 'fluid.tank_gain_loss', 'fluid.total_tank_volume'];
 const EDR_STRIPS = [
     { title: 'Wellhead Pressures', pens: [
@@ -132,6 +132,13 @@ const WellControlDashboard = () => {
             .catch(err => console.error("Failed to fetch latest well control data:", err));
 
         const handler = (newData) => applyData(newData);
+        // Safety page: seeding is the honest option, not the risky one. Without
+        // it the BOP tiles read 0 bar / "not available" for up to a second on
+        // every remount. getLatestRigData() self-gates at CACHE_MAX_AGE_MS and
+        // applyData() re-derives `available`/`stale` from the frame's own _meta,
+        // so nothing here can claim liveness the frame does not carry.
+        const cached = getLatestRigData();
+        if (cached) handler(cached);
         socket.on('rig_data', handler);
 
         const handleConnect = () => setFeed(prev => ({ ...prev, connected: true }));

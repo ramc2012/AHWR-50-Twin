@@ -5,15 +5,6 @@
       "label": "Drilling",
       "fields": [
         {
-          "id": "hook_load",
-          "label": "Hook Load",
-          "unit": "ton",
-          "precision": 1,
-          "defaultMin": 0,
-          "defaultMax": 500,
-          "plcTag": "drilling.hook_load"
-        },
-        {
           "id": "wob",
           "label": "Weight on Bit",
           "unit": "ton",
@@ -75,6 +66,15 @@
           "defaultMin": 0,
           "defaultMax": 5000,
           "plcTag": "drilling.delta_torque"
+        },
+        {
+          "id": "operation_mode",
+          "label": "Operation Mode",
+          "unit": "",
+          "precision": 0,
+          "defaultMin": 0,
+          "defaultMax": 4,
+          "plcTag": "drilling.operation_mode"
         }
       ]
     },
@@ -94,11 +94,20 @@
         {
           "id": "block_position",
           "label": "Block Position",
-          "unit": "m",
-          "precision": 1,
+          "unit": "mm",
+          "precision": 0,
           "defaultMin": 0,
-          "defaultMax": 50,
+          "defaultMax": 15000,
           "plcTag": "drawworks.block_position"
+        },
+        {
+          "id": "rope_wear",
+          "label": "Rope Wear",
+          "unit": "ton/km",
+          "precision": 2,
+          "defaultMin": 0,
+          "defaultMax": 10,
+          "plcTag": "drawworks.rope_wear"
         }
       ]
     },
@@ -143,13 +152,22 @@
           "plcTag": "mudpump.flow_in"
         },
         {
-          "id": "flow_out_percentage",
+          "id": "flow_out",
           "label": "Flow Out",
           "unit": "%",
           "precision": 1,
           "defaultMin": 0,
           "defaultMax": 100,
-          "plcTag": "mudpump.flow_out_percentage"
+          "plcTag": "mudpump.flow_out"
+        },
+        {
+          "id": "delta_pressure",
+          "label": "Delta SPP",
+          "unit": "bar",
+          "precision": 1,
+          "defaultMin": 0,
+          "defaultMax": 100,
+          "plcTag": "mudpump.delta_pressure"
         }
       ]
     },
@@ -183,6 +201,51 @@
           "defaultMin": 0,
           "defaultMax": 50,
           "plcTag": "fluid.trip_tank"
+        },
+        {
+          "id": "trip_tank_percentage",
+          "label": "Trip Tank Gain/Loss",
+          "unit": "%",
+          "precision": 1,
+          "defaultMin": 0,
+          "defaultMax": 100,
+          "plcTag": "fluid.trip_tank_percentage"
+        },
+        {
+          "id": "tank_1",
+          "label": "Mud Tank 1",
+          "unit": "m3",
+          "precision": 1,
+          "defaultMin": 0,
+          "defaultMax": 100,
+          "plcTag": "fluid.tank_1"
+        },
+        {
+          "id": "tank_2",
+          "label": "Mud Tank 2",
+          "unit": "m3",
+          "precision": 1,
+          "defaultMin": 0,
+          "defaultMax": 100,
+          "plcTag": "fluid.tank_2"
+        },
+        {
+          "id": "tank_3",
+          "label": "Mud Tank 3",
+          "unit": "m3",
+          "precision": 1,
+          "defaultMin": 0,
+          "defaultMax": 100,
+          "plcTag": "fluid.tank_3"
+        },
+        {
+          "id": "tank_4",
+          "label": "Mud Tank 4",
+          "unit": "m3",
+          "precision": 1,
+          "defaultMin": 0,
+          "defaultMax": 100,
+          "plcTag": "fluid.tank_4"
         }
       ]
     },
@@ -252,6 +315,51 @@
           "defaultMin": 0,
           "defaultMax": 120,
           "plcTag": "cat_engine.fuel_rate"
+        },
+        {
+          "id": "coolant_level",
+          "label": "Coolant Level",
+          "unit": "%",
+          "precision": 1,
+          "defaultMin": 0,
+          "defaultMax": 100,
+          "plcTag": "cat_engine.coolant_level"
+        },
+        {
+          "id": "fuel_temp",
+          "label": "Fuel Temp",
+          "unit": "C",
+          "precision": 1,
+          "defaultMin": 0,
+          "defaultMax": 120,
+          "plcTag": "cat_engine.fuel_temp"
+        },
+        {
+          "id": "run_hours",
+          "label": "Run Hours",
+          "unit": "h",
+          "precision": 1,
+          "defaultMin": 0,
+          "defaultMax": 10000,
+          "plcTag": "cat_engine.run_hours"
+        },
+        {
+          "id": "total_hours",
+          "label": "Total Hours",
+          "unit": "h",
+          "precision": 1,
+          "defaultMin": 0,
+          "defaultMax": 10000,
+          "plcTag": "cat_engine.total_hours"
+        },
+        {
+          "id": "total_fuel",
+          "label": "Total Fuel Used",
+          "unit": "L",
+          "precision": 0,
+          "defaultMin": 0,
+          "defaultMax": 100000,
+          "plcTag": "cat_engine.total_fuel"
         }
       ]
     },
@@ -294,6 +402,42 @@
           "defaultMin": -5,
           "defaultMax": 5,
           "plcTag": "htd.vertical_speed"
+        },
+        {
+          "id": "working_hours",
+          "label": "Working Hours",
+          "unit": "h",
+          "precision": 1,
+          "defaultMin": 0,
+          "defaultMax": 10000,
+          "plcTag": "htd.working_hours"
+        },
+        {
+          "id": "rotation_status",
+          "label": "Rotation Status",
+          "unit": "",
+          "precision": 0,
+          "defaultMin": 0,
+          "defaultMax": 3,
+          "plcTag": "htd.rotation_status"
+        },
+        {
+          "id": "brake_status",
+          "label": "Brake Status",
+          "unit": "",
+          "precision": 0,
+          "defaultMin": 0,
+          "defaultMax": 5,
+          "plcTag": "htd.brake_status"
+        },
+        {
+          "id": "gear_status",
+          "label": "Gear Status",
+          "unit": "",
+          "precision": 0,
+          "defaultMin": -2,
+          "defaultMax": 8,
+          "plcTag": "htd.gear_status"
         }
       ]
     },
@@ -336,6 +480,87 @@
           "defaultMin": 0,
           "defaultMax": 100,
           "plcTag": "hpu.oil_level"
+        },
+        {
+          "id": "pilot_pressure",
+          "label": "Pilot Pressure",
+          "unit": "bar",
+          "precision": 1,
+          "defaultMin": 0,
+          "defaultMax": 100,
+          "plcTag": "hpu.pilot_pressure"
+        },
+        {
+          "id": "pdw_pump_press",
+          "label": "PDW Pump Pressure",
+          "unit": "bar",
+          "precision": 1,
+          "defaultMin": 0,
+          "defaultMax": 300,
+          "plcTag": "hpu.pdw_pump_press"
+        },
+        {
+          "id": "pdw_pump_flow",
+          "label": "PDW Pump Flow",
+          "unit": "%",
+          "precision": 1,
+          "defaultMin": 0,
+          "defaultMax": 100,
+          "plcTag": "hpu.pdw_pump_flow"
+        },
+        {
+          "id": "htd_pump1_press",
+          "label": "HTD Pump 1 Pressure",
+          "unit": "bar",
+          "precision": 1,
+          "defaultMin": 0,
+          "defaultMax": 300,
+          "plcTag": "hpu.htd_pump1_press"
+        },
+        {
+          "id": "htd_pump1_flow",
+          "label": "HTD Pump 1 Flow",
+          "unit": "%",
+          "precision": 1,
+          "defaultMin": 0,
+          "defaultMax": 100,
+          "plcTag": "hpu.htd_pump1_flow"
+        },
+        {
+          "id": "htd_pump2_press",
+          "label": "HTD Pump 2 Pressure",
+          "unit": "bar",
+          "precision": 1,
+          "defaultMin": 0,
+          "defaultMax": 300,
+          "plcTag": "hpu.htd_pump2_press"
+        },
+        {
+          "id": "htd_pump2_flow",
+          "label": "HTD Pump 2 Flow",
+          "unit": "%",
+          "precision": 1,
+          "defaultMin": 0,
+          "defaultMax": 100,
+          "plcTag": "hpu.htd_pump2_flow"
+        },
+        {
+          "id": "run_hours",
+          "label": "Run Hours",
+          "unit": "h",
+          "precision": 1,
+          "defaultMin": 0,
+          "defaultMax": 10000,
+          "plcTag": "hpu.run_hours"
+        },
+        {
+          "id": "gate_valve",
+          "label": "Gate Valve",
+          "unit": "",
+          "precision": 0,
+          "defaultMin": 0,
+          "defaultMax": 1,
+          "plcTag": "hpu.gate_valve"
         }
       ]
     },
@@ -378,6 +603,42 @@
           "defaultMin": 0,
           "defaultMax": 300,
           "plcTag": "pct.clamp_low_pressure"
+        },
+        {
+          "id": "spinner_makeup_torque",
+          "label": "Spinner Makeup Torque",
+          "unit": "daN.m",
+          "precision": 0,
+          "defaultMin": 0,
+          "defaultMax": 20000,
+          "plcTag": "pct.spinner_makeup_torque"
+        },
+        {
+          "id": "sequence",
+          "label": "Sequence",
+          "unit": "",
+          "precision": 0,
+          "defaultMin": 0,
+          "defaultMax": 4,
+          "plcTag": "pct.sequence"
+        },
+        {
+          "id": "clamp_up_status",
+          "label": "Clamp Upper Status",
+          "unit": "",
+          "precision": 0,
+          "defaultMin": 0,
+          "defaultMax": 5,
+          "plcTag": "pct.clamp_up_status"
+        },
+        {
+          "id": "clamp_low_status",
+          "label": "Clamp Lower Status",
+          "unit": "",
+          "precision": 0,
+          "defaultMin": 0,
+          "defaultMax": 5,
+          "plcTag": "pct.clamp_low_status"
         }
       ]
     },
@@ -402,6 +663,15 @@
           "defaultMin": 0,
           "defaultMax": 1000,
           "plcTag": "cwk.clamp_force"
+        },
+        {
+          "id": "clamp_status",
+          "label": "Clamp Status",
+          "unit": "",
+          "precision": 0,
+          "defaultMin": 0,
+          "defaultMax": 5,
+          "plcTag": "cwk.clamp_status"
         }
       ]
     },
@@ -412,55 +682,55 @@
         {
           "id": "block_position",
           "label": "Block Position",
-          "unit": "m",
-          "precision": 1,
+          "unit": "mm",
+          "precision": 0,
           "defaultMin": 0,
-          "defaultMax": 50,
+          "defaultMax": 15000,
           "plcTag": "acs.block_position"
         },
         {
           "id": "crownsaver",
           "label": "Crownsaver",
-          "unit": "",
+          "unit": "mm",
           "precision": 0,
           "defaultMin": 0,
-          "defaultMax": 1,
+          "defaultMax": 15000,
           "plcTag": "acs.crownsaver"
         },
         {
           "id": "floorsaver",
           "label": "Floorsaver",
-          "unit": "",
+          "unit": "mm",
           "precision": 0,
           "defaultMin": 0,
-          "defaultMax": 1,
+          "defaultMax": 5000,
           "plcTag": "acs.floorsaver"
         },
         {
           "id": "bottomsaver",
           "label": "Bottomsaver",
-          "unit": "",
+          "unit": "mm",
           "precision": 0,
           "defaultMin": 0,
-          "defaultMax": 1,
+          "defaultMax": 5000,
           "plcTag": "acs.bottomsaver"
         },
         {
           "id": "upper_tag",
           "label": "Upper Tag",
-          "unit": "",
+          "unit": "mm",
           "precision": 0,
           "defaultMin": 0,
-          "defaultMax": 1,
+          "defaultMax": 15000,
           "plcTag": "acs.upper_tag"
         },
         {
           "id": "lower_tag",
           "label": "Lower Tag",
-          "unit": "",
+          "unit": "mm",
           "precision": 0,
           "defaultMin": 0,
-          "defaultMax": 1,
+          "defaultMax": 5000,
           "plcTag": "acs.lower_tag"
         }
       ]

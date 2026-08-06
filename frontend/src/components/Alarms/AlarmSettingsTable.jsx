@@ -6,7 +6,7 @@ import {
 } from '@mui/material';
 import { Save, Plus, Trash2, RotateCcw } from 'lucide-react';
 import axios from '../../api';
-import { socket } from '../../socket';
+import { socket, getLatestRigData } from '../../socket';
 import { priorityColor } from '../../utils/alarms';
 
 // Per-parameter alarm settings editor (admin only). Each row is one alarm rule.
@@ -87,6 +87,10 @@ export default function AlarmSettingsTable({ canEdit }) {
             .catch(() => {});
         // Keep the live-value hints fresh from the 1 Hz feed (display-throttled).
         const onRig = (d) => { liveRef.current = flattenNumeric(d, '', {}); };
+        // The live-value column is display-throttled to 2 s, so without a seed a
+        // remount shows an empty hint column for up to two ticks.
+        const cachedRig = getLatestRigData();
+        if (cachedRig) { onRig(cachedRig); setLiveVals({ ...liveRef.current }); }
         socket.on('rig_data', onRig);
         const tick = setInterval(() => setLiveVals({ ...liveRef.current }), 2000);
         return () => { socket.off('rig_data', onRig); clearInterval(tick); };

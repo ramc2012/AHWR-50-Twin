@@ -5,7 +5,7 @@ import {
 } from '@mui/material';
 import { ShieldAlert, Check, History as HistoryIcon, Star, SlidersHorizontal } from 'lucide-react';
 import axios from '../../api';
-import { socket } from '../../socket';
+import { socket, getLatestAlarms } from '../../socket';
 import { useAuth } from '../../context/AuthContext';
 import AlarmSettingsTable from './AlarmSettingsTable';
 import { priorityColor, stateLabel, priorityRank } from '../../utils/alarms';
@@ -275,6 +275,13 @@ export default function AlarmsPage() {
     };
 
     useEffect(() => {
+        // Cache first (instant), REST behind it as the authority. Guarded because
+        // handleAlarms' optional chaining would blank the list on a null payload.
+        const cachedAlarms = getLatestAlarms();
+        if (cachedAlarms) {
+            setActive(cachedAlarms.active || []);
+            if (cachedAlarms.counts) setCounts(cachedAlarms.counts);
+        }
         loadActive();
         loadHistory();
 

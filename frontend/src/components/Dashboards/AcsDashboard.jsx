@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Grid, Paper, Typography, Box, Divider } from '@mui/material';
-import { socket } from '../../socket';
+import { socket, getLatestRigData } from '../../socket';
 
 const formatReading = (value) => {
     const numeric = Number(value);
@@ -32,6 +32,11 @@ export default function AcsDashboard() {
         const handler = (newData) => {
             if (newData.acs) setData(newData.acs);
         };
+        // Paint the cached frame so a remount shows real values immediately
+        // instead of zeroed tiles until the next 1 Hz tick. Reuses the same
+        // handler so the seeded and live paths cannot drift apart.
+        const cached = getLatestRigData();
+        if (cached) handler(cached);
         socket.on('rig_data', handler);
         return () => socket.off('rig_data', handler);
     }, []);

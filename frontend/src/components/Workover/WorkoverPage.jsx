@@ -9,7 +9,7 @@ import {
 } from 'recharts';
 import { Gauge as GaugeIcon, Wrench, ListChecks, Activity as ActivityIcon } from 'lucide-react';
 import axios from '../../api';
-import { socket } from '../../socket';
+import { socket, getLatestRigData } from '../../socket';
 import { formatClock } from '../../utils/format';
 import EdrView from '../EDR/EdrView';
 
@@ -182,6 +182,10 @@ export default function WorkoverPage() {
             applyOps(data);
             if (data?._torqueturn) setTt(data._torqueturn);
         };
+        // Seed wellhead/ops/torque-turn from the cache; the /api/rig/latest and
+        // /api/torqueturn/current calls above still run and correct it.
+        const cachedRig = getLatestRigData();
+        if (cachedRig) handleRig(cachedRig);
         socket.on('rig_data', handleRig);
 
         // Prepend new connections live.

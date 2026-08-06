@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
-import { socket } from '../socket';
+import { socket, getLatestAlarms } from '../socket';
 import axios from '../api';
 import { priorityColor } from '../utils/alarms';
 
@@ -38,7 +38,9 @@ export function AlarmProvider({ children }) {
             const active = Array.isArray(p.active) ? p.active : [];
             setState({ active, counts: p.counts || {}, byDataKey: buildMap(active) });
         };
-        // Seed from REST; socket then keeps it live (same payload shape).
+        // Cache first (instant, no round trip), REST right behind it as the
+        // authority. apply() no-ops on a null payload, so no guard is needed.
+        apply(getLatestAlarms());
         axios.get('/api/alarms').then((r) => apply(r.data)).catch(() => {});
         socket.on('alarms', apply);
         return () => { mounted = false; socket.off('alarms', apply); };
