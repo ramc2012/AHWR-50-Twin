@@ -123,7 +123,8 @@ services:
       - LDAP_ROLE_OPERATOR=${LDAP_ROLE_OPERATOR:-rig-operators}
       - LDAP_ROLE_VIEWER=${LDAP_ROLE_VIEWER:-rig-viewers}
       - LDAP_STARTTLS=${LDAP_STARTTLS:-}
-      - LDAP_TLS_REJECT_UNAUTHORIZED=${LDAP_TLS_REJECT_UNAUTHORIZED:-false}
+      # Fail SECURE: verify the AD/LDAPS certificate unless explicitly disabled.
+      - LDAP_TLS_REJECT_UNAUTHORIZED=${LDAP_TLS_REJECT_UNAUTHORIZED:-true}
     volumes:
       - backend_data:/data
       - ./telegraf:/telegraf   # backend rewrites the managed PLC section here

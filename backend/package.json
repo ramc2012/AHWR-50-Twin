@@ -23,6 +23,7 @@
     "nodemon": "^3.0.1"
   },
   "overrides": {
-    "ws": "^8.21.0"
+    "ws": "^8.21.0",
+    "socket.io-parser": "^4.2.7"
   }
 }

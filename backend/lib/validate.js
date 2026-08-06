@@ -67,6 +67,11 @@ function validatePlcConfig(config) {
         toInt(slave.port, 'device.port', { min: 1, max: 65535, def: protocol === 's7comm' ? 102 : 502 });
 
         if (protocol === 'modbus') {
+            // slaveId is interpolated UNQUOTED into the generated Telegraf TOML
+            // (`slave_id = <value>`), so an unvalidated string could close the line and
+            // append another plugin block — e.g. [[inputs.exec]] — giving command
+            // execution inside the collector container on the OT network.
+            toInt(slave.slaveId, 'device.slaveId', { min: 0, max: 247, def: 1 });
             const regs = Array.isArray(slave.registers) ? slave.registers : [];
             if (regs.length > 512) throw new ValidationError('Too many registers (max 512)');
             for (const r of regs) {

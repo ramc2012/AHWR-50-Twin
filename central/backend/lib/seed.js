@@ -105,16 +105,19 @@ async function seedTags() {
 async function seedUsers() {
     const { rows } = await query('SELECT count(*)::int AS c FROM users');
     if (rows[0].c > 0) return;
-    // All seed passwords are env-overridable (audit #8/#13) so demo creds don't
-    // survive into a pilot. Defaults remain for the local docker-compose demo.
-    const adminPw = process.env.ADMIN_PASSWORD || 'admin123';
-    const operatorPw = process.env.OPERATOR_PASSWORD || 'operator123';
-    const viewerPw = process.env.VIEWER_PASSWORD || 'viewer123';
-    const users = [
-        ['admin', adminPw, 'Asset Administrator', 'admin'],
-        ['operator', operatorPw, 'Monitoring Operator', 'operator'],
-        ['viewer', viewerPw, 'Management Viewer', 'viewer'],
-    ];
+    // No password may have a hardcoded fallback. The previous `|| 'operator123'` and
+    // `|| 'viewer123'` defaults were live on every deployment: docker-compose passes
+    // through ADMIN_PASSWORD only, so nothing an operator could set in .env ever reached
+    // the operator/viewer accounts — and the portal is published on all interfaces.
+    const adminPw = process.env.ADMIN_PASSWORD;
+    if (!adminPw) {
+        console.error('FATAL: ADMIN_PASSWORD is not set; refusing to seed the portal admin account.');
+        process.exit(1);
+    }
+    // The non-admin demo accounts are seeded ONLY if explicitly given a password.
+    const users = [['admin', adminPw, 'Asset Administrator', 'admin']];
+    if (process.env.OPERATOR_PASSWORD) users.push(['operator', process.env.OPERATOR_PASSWORD, 'Monitoring Operator', 'operator']);
+    if (process.env.VIEWER_PASSWORD) users.push(['viewer', process.env.VIEWER_PASSWORD, 'Management Viewer', 'viewer']);
     for (const [u, pw, d, role] of users) {
         await query('INSERT INTO users (username, password, display, role, source) VALUES ($1,$2,$3,$4,$5)',
             [u, hash(pw), d, role, 'local']);

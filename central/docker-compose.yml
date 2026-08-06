@@ -62,7 +62,7 @@ services:
       - PGDATABASE=${PGDATABASE:-crmf}
       - JWT_SECRET=${JWT_SECRET:?set JWT_SECRET in .env}
       - MCP_BACKEND_TOKEN=${MCP_BACKEND_TOKEN:?set MCP_BACKEND_TOKEN in .env}
-      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-admin123}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:?set ADMIN_PASSWORD in central/.env}
       # Fail-closed ingest auth (#1): a non-empty demo token ships by default so the
       # bundled fleet-sim authenticates. Both backend and fleet-sim below get the SAME
       # value. In production, give each rig its own device token instead.
@@ -99,7 +99,8 @@ services:
       - LDAP_ROLE_OPERATOR=${LDAP_ROLE_OPERATOR:-crmf-operators}
       - LDAP_ROLE_VIEWER=${LDAP_ROLE_VIEWER:-crmf-viewers}
       - LDAP_STARTTLS=${LDAP_STARTTLS:-}
-      - LDAP_TLS_REJECT_UNAUTHORIZED=${LDAP_TLS_REJECT_UNAUTHORIZED:-false}
+      # Fail SECURE: verify the AD/LDAPS certificate unless explicitly disabled.
+      - LDAP_TLS_REJECT_UNAUTHORIZED=${LDAP_TLS_REJECT_UNAUTHORIZED:-true}
     depends_on:
       timescaledb:
         condition: service_healthy

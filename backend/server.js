@@ -37,7 +37,11 @@ const DATA_DIR = process.env.DATA_DIR || __dirname;
 // --- SEED DEFAULTS ON FIRST BOOT ---
 const DEFAULTS_DIR = path.join(__dirname, 'defaults');
 if (fs.existsSync(DEFAULTS_DIR)) {
-    const filesToSeed = ['plc_config.json', 'users.json', 'dashboard_layout.json', 'alarms_config.json'];
+    // users.json is deliberately NOT seeded from defaults. Shipping a credentials file in
+    // the image gave every rig the same baked-in admin hash AND silently defeated
+    // ADMIN_PASSWORD: loadUsers() below only reaches its env-seeding branch when no
+    // users.json exists, so a seeded file meant the operator's chosen password was ignored.
+    const filesToSeed = ['plc_config.json', 'dashboard_layout.json', 'alarms_config.json'];
     for (const file of filesToSeed) {
         const defaultPath = path.join(DEFAULTS_DIR, file);
         const targetPath = path.join(DATA_DIR, file);
@@ -707,9 +711,11 @@ const generateTelegrafConfig = (config) => {
         if (protocol === 'modbus') {
             toml += `[[inputs.modbus]]\n`;
             toml += `  name = "${slave.name}"\n`;
-            toml += `  slave_id = ${slave.slaveId || 1}\n`;
+            // Numeric coercion here too: validate.js is the gate, but this value lands
+            // unquoted in TOML, so it must never be able to carry a newline.
+            toml += `  slave_id = ${Number(slave.slaveId) || 1}\n`;
             toml += `  timeout = "1s"\n`;
-            toml += `  controller = "tcp://${slave.ip}:${slave.port || 502}"\n`;
+            toml += `  controller = "tcp://${slave.ip}:${Number(slave.port) || 502}"\n`;
             toml += `  configuration_type = "register"\n`;
             toml += `  optimization = "none"\n\n`;
 

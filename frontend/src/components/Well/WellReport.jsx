@@ -8,7 +8,7 @@ import { useTheme, alpha } from '@mui/material/styles';
 import {
     FileText, ChevronRight, Wrench, ClipboardList, HeartPulse, Printer, Download,
 } from 'lucide-react';
-import axios from '../../api';
+import axios, { LONG_TIMEOUT_MS } from '../../api';
 
 const secToH = (s) => (s == null ? '--' : (Number(s) / 3600).toFixed(1));
 const fmtDate = (d) => (d ? new Date(`${d}T00:00:00Z`).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', timeZone: 'UTC' }) : '--');
@@ -19,7 +19,12 @@ const PM_COLOR = { overdue: '#ef4444', 'due-soon': '#f59e0b', ok: '#34d399' };
 /** Flatten the report into one CSV so it can be filed with the job papers. */
 function reportToCsv(rep) {
     const esc = (v) => {
-        const s = v == null ? '' : String(v);
+        let s = v == null ? '' : String(v);
+        // Neutralise spreadsheet formula injection. Logbook and work-order text is
+        // operator-written and this CSV gets opened in Excel on the corporate network;
+        // a cell starting = + - @ (or a lone tab/CR) would otherwise execute there.
+        // Numbers are exempt, so negative values stay numeric rather than becoming text.
+        if (/^[=+\-@\t\r]/.test(s) && !Number.isFinite(Number(s))) s = `'${s}`;
         return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
     };
     const out = [];
@@ -95,7 +100,7 @@ export default function WellReport({ wells = [] }) {
     useEffect(() => {
         if (!wellId) return;
         setLoading(true); setError(null); setReport(null);
-        axios.get(`/api/wells/${wellId}/report`)
+        axios.get(`/api/wells/${wellId}/report`, { timeout: LONG_TIMEOUT_MS })
             .then((r) => setReport(r.data))
             .catch((e) => setError(e.response?.data?.error || e.message))
             .finally(() => setLoading(false));

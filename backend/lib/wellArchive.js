@@ -20,6 +20,7 @@
 // shape of the data (peaks included), not just a sampled point.
 const { InfluxDB, Point } = require('@influxdata/influxdb-client');
 const { readJson, writeJson } = require('./persist');
+const validate = require('./validate');
 
 const INFLUX_URL = process.env.INFLUX_URL || 'http://influxdb:8086';
 const INFLUX_TOKEN = process.env.INFLUX_TOKEN;
@@ -252,12 +253,39 @@ async function getWellConsumption(startIso, endIso) {
 // signal — which is what an engineer wants in Excel, and which imports cleanly
 // back into this app (round-trip safe).
 // ---------------------------------------------------------------------------
-const MAX_EXPORT_ROWS = Number(process.env.EXPORT_MAX_ROWS || 500000);
+// The backend container is memory-capped (mem_limit: 1g). A wide export is rows x
+// columns, so both are bounded; the cell cap is what actually protects the heap.
+const MAX_EXPORT_ROWS = Number(process.env.EXPORT_MAX_ROWS || 200000);
+const MAX_EXPORT_CELLS = Number(process.env.EXPORT_MAX_CELLS || 2000000);
 
-/** Query a bucket into wide rows: [{ time, 'meas.field': value, ... }] */
+const MAX_EXPORT_METRICS = 64;
+
+/**
+ * Query a bucket into wide rows: [{ time, 'meas.field': value, ... }].
+ *
+ * `start`, `stop` and `every` are interpolated into Flux, so they are validated
+ * HERE rather than at each route — a caller that forgets cannot open a hole.
+ */
 async function queryWide(bucket, { metrics, start, stop, every } = {}) {
     if (!queryApi) throw new Error('historian unavailable');
+
+    // Time inputs: RFC3339 instants or relative durations only (same rule as /api/history).
+    // `now()` is the one literal we accept verbatim, so callers can express "up to now"
+    // without us having to trust anything else.
+    const t = (v) => (v === 'now()' ? 'now()' : v);
+    if ((start !== 'now()' && !validate.isFluxInstant(start))
+        || (stop !== 'now()' && !validate.isFluxInstant(stop))) {
+        throw Object.assign(new Error('invalid start/stop (use RFC3339 timestamps or a relative duration)'), { status: 400 });
+    }
+    start = t(start); stop = t(stop);
+    if (every !== undefined && every !== null && every !== '' && !validate.isFluxRange(every)) {
+        throw Object.assign(new Error('invalid every (use a duration like 1m, 15m, 1h)'), { status: 400 });
+    }
+
     const wanted = String(metrics || '').split(',').map((m) => m.trim()).filter(Boolean);
+    if (wanted.length > MAX_EXPORT_METRICS) {
+        throw Object.assign(new Error(`too many metrics (max ${MAX_EXPORT_METRICS})`), { status: 400 });
+    }
     // Build an explicit selector so a caller can't inject Flux.
     const sel = wanted.length
         ? '|> filter(fn: (r) => ' + wanted.map((m) => {
@@ -279,15 +307,22 @@ async function queryWide(bucket, { metrics, start, stop, every } = {}) {
     const byTime = new Map();
     const columns = new Set();
     let truncated = false;
+    let cells = 0;
     await new Promise((resolve, reject) => {
         queryApi.queryRows(flux, {
             next(row, meta) {
-                if (byTime.size > MAX_EXPORT_ROWS) { truncated = true; return; }
+                // Bound CELLS, not just rows: a wide export is rows x columns, and capping
+                // rows alone still lets an unbounded number of columns fill the heap.
+                if (truncated || byTime.size >= MAX_EXPORT_ROWS || cells >= MAX_EXPORT_CELLS) {
+                    truncated = true;
+                    return;
+                }
                 const o = meta.toObject(row);
                 const col = `${o._measurement}.${o._field}`;
                 columns.add(col);
                 if (!byTime.has(o._time)) byTime.set(o._time, { time: o._time });
                 byTime.get(o._time)[col] = o._value;
+                cells += 1;
             },
             error: reject,
             complete: resolve,
@@ -299,7 +334,11 @@ async function queryWide(bucket, { metrics, start, stop, every } = {}) {
 
 const csvEscape = (v) => {
     if (v == null) return '';
-    const s = String(v);
+    let s = String(v);
+    // Column names come from measurement/field names, which an operator can influence
+    // via an imported file. Prefix-quote anything Excel would treat as a formula --
+    // but NEVER a plain number, or every negative reading (-1824 mm) would be mangled.
+    if (/^[=+\-@\t\r]/.test(s) && !Number.isFinite(Number(s))) s = `'${s}`;
     return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 };
 
