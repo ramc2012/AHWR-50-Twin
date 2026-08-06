@@ -40,7 +40,7 @@ spec:
             - name: CENTRAL_URL
               value: "http://crmf-backend:6000"     # in-cluster backend Service
             - name: INGEST_TOKEN
-              value: "crmf-demo-ingest-token"        # must match values-local secrets.INGEST_TOKEN
+              value: "crmf-local-ingest-not-for-real-use"   # must match values-local secrets.INGEST_TOKEN
             - name: ACTIVE_RIGS
               value: "6"                              # light load for a laptop (compose uses 14)
             - name: BATCH_SECONDS

@@ -22,11 +22,16 @@ point its `CENTRAL_URL` here and a real rig streams in with zero code changes.
 
 ```bash
 cd central
-cp .env.example .env          # set PGPASSWORD + JWT_SECRET
+cp .env.example .env
+# No credential ships with a working default any more. Fill in, each with a fresh
+# `openssl rand -hex 32`:  PGPASSWORD, JWT_SECRET, MCP_BACKEND_TOKEN, ADMIN_PASSWORD
+# and INGEST_TOKEN (the demo fleet-sim authenticates with it).
 docker compose --profile demo up -d --build
 ```
 
-Open **http://localhost:8090** and sign in:
+Open **http://localhost:8090** and sign in (or **https://localhost:8443** once a cert
+and key are placed in `central/certs/` — see `.env.example` → "Portal TLS"; nginx adds
+the HTTPS listener automatically when they exist, and does nothing when they do not):
 
 | User | Password | Role |
 |------|----------|------|
@@ -113,14 +118,40 @@ governance workspace.
 In the edge stack's `.env` (repo root), set:
 
 ```env
-CENTRAL_URL=http://<crmf-host>:6000
+CENTRAL_URL=https://<crmf-host>:8443      # portal nginx terminates TLS and proxies /ingest
 DEVICE_ID=AHWR-50-3
-DEVICE_TOKEN=<token>        # must match the CRMF INGEST_TOKEN, if set
+DEVICE_TOKEN=<per-rig device token>       # from POST /api/rigs, or the global INGEST_TOKEN
 SYNC_ENABLED=true
 ```
 
 The edge buffers during any WAN/central outage and replays oldest-first on
 restoration — central downtime never affects rig operations (proposal §6.3).
+### Migrating an existing rig off `http://<crmf-host>:6000`
+
+`crmf-backend` no longer publishes its port on all interfaces: it binds
+`${INGEST_BIND:-127.0.0.1}`, and rigs reach `/ingest` through the portal's nginx,
+which terminates TLS and caps the request body. This matches what the Kubernetes
+Ingress has always done (`deploy/helm/crmf/templates/ingress.yaml` routes `/ingest`
+to `crmf-backend`). Migrate in this order — no step loses buffered data:
+
+1. Set `INGEST_BIND=0.0.0.0` in `central/.env` and redeploy central. Old rigs keep
+   working exactly as before while the new path is proven.
+2. Install the portal cert+key in `central/certs/` and recreate `crmf-frontend`.
+   Confirm `docker logs crmf_frontend | grep crmf-tls` reports HTTPS enabled.
+3. On ONE rig, point `CENTRAL_URL` at `https://<crmf-host>:8443` and restart its
+   backend. If the portal cert is self-signed, the rig's Node process will refuse
+   it — install the issuing CA on the rig node and set
+   `NODE_EXTRA_CA_CERTS=/certs/ongc-ca.crt` on the edge `backend` service. Until
+   that is done the edge reports a network error and **back-pressures**; it does
+   not dead-letter, so the buffer replays in full once trust is fixed.
+4. Roll the remaining rigs, then remove `INGEST_BIND` from `central/.env` (back to
+   loopback) and drop the `:80` port mapping from `crmf-frontend` so nothing is
+   served in cleartext.
+
+HTTP status contract, unchanged from what `backend/lib/sync.js` already expects:
+**401** (wrong/rotated token) back-pressures and never dead-letters; **413**
+(batch above `INGEST_MAX_BODY` / `INGEST_MAX_INFLATED_BYTES`) dead-letters that
+one batch and keeps draining the rest.
 
 ---
 
@@ -132,6 +163,8 @@ See `.env.example`. Key variables: `PGPASSWORD`, `JWT_SECRET`, `INGEST_TOKEN`,
 
 ## Production notes
 
-- Place `crmf-backend` behind the API gateway / MQTT broker on the ONGC WAN VPN; issue per-rig device certificates/tokens.
+- Place `crmf-backend` behind the API gateway / MQTT broker on the ONGC WAN VPN; issue per-rig device certificates/tokens. Its compose port binds loopback (`INGEST_BIND`) and `/ingest` is reached through the portal's nginx, mirroring the Ingress.
+- Terminate TLS on the portal (`central/certs/crmf.crt` + `crmf.key`, or cert-manager in k8s) and stop publishing the `:80` mapping. Retire the global `INGEST_TOKEN` in favour of per-rig device tokens (`POST /api/rigs`, `POST /api/rigs/:id/rotate-token`); with `INGEST_TOKEN` empty, only provisioned rigs can ingest.
+- `/ingest` authenticates BEFORE it decompresses, and bounds the inflated body (`INGEST_MAX_BODY`, `INGEST_MAX_INFLATED_BYTES`). Keep `cpus`/`mem_limit` on `crmf-backend` in step with `NODE_OPTIONS=--max-old-space-size`.
 - TimescaleDB ships HA (Patroni) + streaming replication to the DR site (proposal §5.3); this compose runs a single node for the pilot.
 - Federate Keycloak/ONGC AD for SSO on top of the built-in local accounts (proposal §6.5).

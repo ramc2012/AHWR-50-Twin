@@ -19,6 +19,11 @@ services:
     image: ${TIMESCALE_IMAGE:-timescale/timescaledb:latest-pg15}
     container_name: crmf_timescaledb
     restart: unless-stopped
+    # Resource bounds: TimescaleDB is the heaviest consumer in this stack and a
+    # runaway compaction should not be able to starve the ingest path. Tune to the box.
+    cpus: 2.0
+    mem_limit: 2g
+    mem_reservation: 512m
     environment:
       - POSTGRES_USER=${PGUSER:-crmf}
       - POSTGRES_PASSWORD=${PGPASSWORD:?set PGPASSWORD in .env}
@@ -47,9 +52,25 @@ services:
       dockerfile: backend/Dockerfile
     container_name: crmf_backend
     restart: unless-stopped
+    # Resource bounds: /ingest buffers and inflates UNTRUSTED batches, so cap what a
+    # burst — or a payload that slips past the body limits — can take from the host.
+    # Matches the k8s limits in deploy/helm/crmf/values.yaml (cpu 1, memory 512Mi),
+    # with headroom for socket.io fan-out to the portal.
+    cpus: 1.5
+    mem_limit: 1g
+    mem_reservation: 256m
     environment:
       - NODE_ENV=production
+      # Node sizes its heap from HOST memory, not the cgroup limit, so without this a
+      # mem_limit buys an OOM kill instead of a GC. Keep it below mem_limit.
+      - NODE_OPTIONS=--max-old-space-size=768
       - PORT=6000
+      # /ingest body bounds (backend/server.js). INGEST_MAX_BODY is enforced on the
+      # DECOMPRESSED stream for Content-Encoding: gzip bodies; INGEST_MAX_INFLATED_BYTES
+      # bounds the manual gunzip used for bodies that arrive gzipped without that header.
+      # A real 10 s batch is ~25-50 KB decompressed.
+      - INGEST_MAX_BODY=${INGEST_MAX_BODY:-8mb}
+      - INGEST_MAX_INFLATED_BYTES=${INGEST_MAX_INFLATED_BYTES:-8388608}
       - PGHOST=timescaledb
       - PGPORT=5432
       # Audit #2: connect as the LEAST-PRIVILEGE app role crmf_app, NOT the schema owner
@@ -63,10 +84,13 @@ services:
       - JWT_SECRET=${JWT_SECRET:?set JWT_SECRET in .env}
       - MCP_BACKEND_TOKEN=${MCP_BACKEND_TOKEN:?set MCP_BACKEND_TOKEN in .env}
       - ADMIN_PASSWORD=${ADMIN_PASSWORD:?set ADMIN_PASSWORD in central/.env}
-      # Fail-closed ingest auth (#1): a non-empty demo token ships by default so the
-      # bundled fleet-sim authenticates. Both backend and fleet-sim below get the SAME
-      # value. In production, give each rig its own device token instead.
-      - INGEST_TOKEN=${INGEST_TOKEN:-crmf-demo-ingest-token}
+      # Fail-closed ingest auth (#1). NO default value: a committed literal is a
+      # published credential. Set INGEST_TOKEN in central/.env (openssl rand -hex 32)
+      # for a shared-token fleet, or leave it EMPTY and provision a per-rig device
+      # token per rig (POST /api/rigs) — the production end state. With both empty,
+      # /ingest rejects everything, which is the intended fail-closed posture.
+      # The backend refuses to start in production if this is the old demo literal.
+      - INGEST_TOKEN=${INGEST_TOKEN:-}
       # Open-ingest escape hatch (#1): when no token is configured, /ingest still
       # REJECTS (401) unless ALLOW_OPEN_INGEST=true AND NODE_ENV != production.
       # Left unset here => fail-closed. Never set this in production.
@@ -109,10 +133,15 @@ services:
       openldap:
         condition: service_started
         required: false
-    # Exposed so real rig-edge sync agents can reach /ingest over the WAN.
-    # In production this sits behind the API gateway / MQTT broker on the VPN.
+    # Loopback-only by default — same posture as the MCP servers and the edge HMI.
+    # Rig-edge agents no longer talk to this port: they POST to the portal's nginx at
+    # https://<crmf-host>/ingest, which terminates TLS, caps the body and proxies to
+    # crmf-backend:6000 on the internal network. That mirrors the k8s Ingress, which
+    # already routes /ingest to this service (deploy/helm/crmf/templates/ingress.yaml).
+    # MIGRATION: set INGEST_BIND=0.0.0.0 to keep the old direct exposure until every
+    # rig's CENTRAL_URL has moved to the portal host, then remove it.
     ports:
-      - "${INGEST_PORT:-6000}:6000"
+      - "${INGEST_BIND:-127.0.0.1}:${INGEST_PORT:-6000}:6000"
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:6000/healthz"]
       interval: 15s
@@ -169,8 +198,25 @@ services:
       dockerfile: frontend/Dockerfile
     container_name: crmf_frontend
     restart: unless-stopped
+    cpus: 0.5
+    mem_limit: 256m
+    mem_reservation: 64m
+    environment:
+      # TLS is enabled ONLY when BOTH files exist in the mounted certs/ dir — the same
+      # conditional-TLS pattern the MCP servers use (edge-mcp-server/src/index.ts).
+      # Absent => the portal serves plain HTTP on :80 exactly as before, no failure.
+      # Generate a pilot pair with the openssl command in .env.example; certs/ is gitignored.
+      - TLS_CERT_FILE=/certs/crmf.crt
+      - TLS_KEY_FILE=/certs/crmf.key
+    volumes:
+      - ./certs:/certs:ro
     ports:
-      - "${FRONTEND_PORT:-8090}:80"
+      # The portal fronts BOTH the operator UI and (via /ingest) rig store-and-forward.
+      # END STATE: once rigs and operators are on :443, delete the :80 mapping below —
+      # that is the real "no cleartext" switch (an HTTP->HTTPS redirect would not stop
+      # anyone from posting to /api over :80).
+      - "${FRONTEND_BIND:-0.0.0.0}:${FRONTEND_PORT:-8090}:80"
+      - "${FRONTEND_BIND:-0.0.0.0}:${FRONTEND_TLS_PORT:-8443}:443"
     depends_on:
       crmf-backend:
         condition: service_healthy
@@ -185,7 +231,9 @@ services:
     environment:
       - CENTRAL_URL=http://crmf-backend:6000
       # Must match the backend's INGEST_TOKEN above so the demo authenticates (#1).
-      - INGEST_TOKEN=${INGEST_TOKEN:-crmf-demo-ingest-token}
+      # There is no default: generate one before `--profile demo up` and put it in
+      # central/.env  ->  openssl rand -hex 32
+      - INGEST_TOKEN=${INGEST_TOKEN:-}
       - ACTIVE_RIGS=${ACTIVE_RIGS:-14}
       - BATCH_SECONDS=${BATCH_SECONDS:-10}
     depends_on:

@@ -81,7 +81,10 @@ ingress:
   #   nginx.ingress.kubernetes.io/proxy-body-size: "64m"      # large gzip /ingest batches
   #   nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"  # long-lived /socket.io
   #   nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
-  proxyBodySize: "64m"
+  # Wire-size cap on a gzipped /ingest batch. Keep it in step with the compose
+  # nginx (client_max_body_size 8m in frontend/nginx-shared.conf) and comfortably
+  # above the backend's INGEST_MAX_BODY; a real 10 s batch is a few KB compressed.
+  proxyBodySize: "8m"
   proxyReadTimeout: "3600"
   proxySendTimeout: "3600"
   tls:

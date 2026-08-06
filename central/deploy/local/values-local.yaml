@@ -67,5 +67,7 @@ config:
 secrets:
   PGPASSWORD: "crmf-local-pg"
   JWT_SECRET: "local-dev-jwt-secret-not-for-real-use"
-  INGEST_TOKEN: "crmf-demo-ingest-token"
+  # Must stay in sync with 20-fleet-sim-local.yaml. NOT the previously published
+  # compose default, which the backend now refuses in production mode.
+  INGEST_TOKEN: "crmf-local-ingest-not-for-real-use"
   ADMIN_PASSWORD: "admin123"

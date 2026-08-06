@@ -9,6 +9,7 @@
 // Writes telemetry to the TimescaleDB hypertable, events/connections to their
 // tables, refreshes the last-value cache, and recomputes the per-rig
 // data-quality health score. MONITORING-ONLY: nothing is ever sent back to a rig.
+const crypto = require('crypto');
 const { pool, query } = require('./db');
 const { EXPECTED_METRICS } = require('./tags');
 const { computeHealth } = require('./fleet');
@@ -19,6 +20,67 @@ const GLOBAL_INGEST_TOKEN = process.env.INGEST_TOKEN || '';
 // stays FAIL-CLOSED unless this is explicitly set.
 const ALLOW_OPEN_INGEST =
     process.env.ALLOW_OPEN_INGEST === 'true' && process.env.NODE_ENV !== 'production';
+// ---------------------------------------------------------------------------
+// PRE-AUTHORIZATION (gzip-bomb hardening)
+//
+// /ingest must be able to reject an unknown caller BEFORE the request body is
+// buffered, inflated or parsed. That decision cannot do the full per-rig lookup
+// (the rigId lives in the body we have not read yet), so it answers a narrower
+// question: "is this bearer token one we would accept for ANY rig?" — the global
+// INGEST_TOKEN, or some rig's provisioned device_token.
+//
+// This can only REJECT, never grant. The authoritative, rig-bound check is still
+// authorizeKnown() below, inside the ingest transaction, so a token belonging to
+// rig A still cannot write to rig B.
+// ---------------------------------------------------------------------------
+const TOKEN_CACHE_TTL_MS = Number(process.env.INGEST_TOKEN_CACHE_TTL_MS || 30_000);
+let tokenCache = null;      // Set<string> of provisioned per-rig device tokens
+let tokenCacheAt = 0;
+let tokenCacheLoad = null;  // in-flight refresh, so a burst collapses to one query
+
+// Called by the admin routes that mint / rotate / remove a device token, so a new
+// rig syncs immediately instead of waiting out the TTL, and a rotated-away token
+// stops passing the gate at once.
+function invalidateTokenCache() { tokenCache = null; tokenCacheAt = 0; }
+
+async function deviceTokens() {
+    if (tokenCache && (Date.now() - tokenCacheAt) < TOKEN_CACHE_TTL_MS) return tokenCache;
+    if (!tokenCacheLoad) {
+        tokenCacheLoad = query(
+            "SELECT device_token FROM rigs WHERE device_token IS NOT NULL AND device_token <> ''")
+            .then(({ rows }) => {
+                tokenCache = new Set(rows.map((r) => r.device_token));
+                tokenCacheAt = Date.now();
+                return tokenCache;
+            })
+            // DB blip: keep serving the last known set (or nothing at all). Never open up.
+            .catch(() => tokenCache || new Set())
+            .finally(() => { tokenCacheLoad = null; });
+    }
+    return tokenCacheLoad;
+}
+
+// Constant-time comparison that never throws on a null / mismatched-length input.
+function tokenEquals(a, b) {
+    if (typeof a !== 'string' || typeof b !== 'string') return false;
+    const ab = Buffer.from(a, 'utf8');
+    const bb = Buffer.from(b, 'utf8');
+    if (!ab.length || ab.length !== bb.length) return false;
+    return crypto.timingSafeEqual(ab, bb);
+}
+
+// Fail-closed gate used by server.js BEFORE the body is read. Mirrors
+// authorizeKnown()'s fallbacks exactly, so it can never reject a batch that the
+// authoritative check would have accepted.
+async function preAuthorize(token) {
+    // Open-demo only applies when NO global token is configured, and never in prod.
+    if (!GLOBAL_INGEST_TOKEN && ALLOW_OPEN_INGEST) return true;
+    if (!token) return false;
+    if (GLOBAL_INGEST_TOKEN && tokenEquals(token, GLOBAL_INGEST_TOKEN)) return true;
+    const known = await deviceTokens();
+    return known.has(token);
+}
+
 
 // Reserved key inside rig_latest.values that carries a per-tag last-seen map
 // ({ metric: tsIso }) so fleet.getRig can surface per-field staleness (audit #22)
@@ -65,8 +127,8 @@ async function ensureRig(client, rigId, token, schemaVersion) {
 // matches a per-rig device_token OR the global INGEST_TOKEN. If neither is
 // configured anywhere, REJECT unless ALLOW_OPEN_INGEST is set (and not prod).
 function authorize(rig, token) {
-    if (rig && rig.device_token) return token === rig.device_token;
-    if (GLOBAL_INGEST_TOKEN) return token === GLOBAL_INGEST_TOKEN;
+    if (rig && rig.device_token) return tokenEquals(token, rig.device_token);
+    if (GLOBAL_INGEST_TOKEN) return tokenEquals(token, GLOBAL_INGEST_TOKEN);
     return ALLOW_OPEN_INGEST; // fail-closed by default; open only when explicitly allowed
 }
 
@@ -75,8 +137,8 @@ function authorize(rig, token) {
 // device_token has been provisioned for an existing rig, that wins; otherwise we
 // fall back to the global INGEST_TOKEN / open-demo policy.
 function authorizeKnown(rig, token) {
-    if (rig && rig.device_token) return token === rig.device_token;
-    if (GLOBAL_INGEST_TOKEN) return token === GLOBAL_INGEST_TOKEN;
+    if (rig && rig.device_token) return tokenEquals(token, rig.device_token);
+    if (GLOBAL_INGEST_TOKEN) return tokenEquals(token, GLOBAL_INGEST_TOKEN);
     return ALLOW_OPEN_INGEST;
 }
 
@@ -308,4 +370,4 @@ async function ingestBatch({ rigId, token, schemaVersion }, batch) {
     return { ok: true, rigId, points, events: events.length, seq, alarmTransition, activeJob };
 }
 
-module.exports = { ingestBatch, EXPECTED_METRICS };
+module.exports = { ingestBatch, preAuthorize, invalidateTokenCache, EXPECTED_METRICS };

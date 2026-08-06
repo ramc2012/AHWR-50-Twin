@@ -31,7 +31,7 @@ const gov = require('./lib/governance');
 const maint = require('./lib/maintenance');
 const users = require('./lib/users');
 const audit = require('./lib/audit');
-const { ingestBatch } = require('./lib/ingest');
+const { ingestBatch, preAuthorize, invalidateTokenCache } = require('./lib/ingest');
 const { TAGS } = require('./lib/tags');
 const metrics = require('./lib/metrics');
 const kafka = require('./lib/kafka');
@@ -72,6 +72,22 @@ const corsOptions = {
     },
 };
 
+// --------------------------------------------------------------------
+// Fail fast on the ingest credential that used to ship as the compose default.
+// It is in the repo history, in AUDIT.md and in every copy of .env.example ever
+// taken, so treat it as public: a production-mode process must not accept it.
+// --------------------------------------------------------------------
+const PUBLISHED_DEMO_INGEST_TOKEN = 'crmf-demo-ingest-token';
+if (IS_PROD && process.env.INGEST_TOKEN === PUBLISHED_DEMO_INGEST_TOKEN) {
+    console.error('[ingest] INGEST_TOKEN is the published demo value — refusing to start.\n' +
+        '        Generate a new one:  openssl rand -hex 32\n' +
+        '        Set it in central/.env, and as DEVICE_TOKEN on every rig edge node.');
+    process.exit(1);
+}
+if (!process.env.INGEST_TOKEN) {
+    console.warn('[ingest] no global INGEST_TOKEN configured — /ingest will accept ONLY per-rig device tokens.');
+}
+
 const app = express();
 app.set('trust proxy', 1);
 app.use(helmet());
@@ -91,26 +107,75 @@ io.on('connection', (socket) => {
 // --------------------------------------------------------------------
 // INGEST — accepts gzipped store-and-forward batches from the edge sync agent.
 // Body is read raw (optionally gzip) and parsed here; same contract as the edge
-// publisher in backend/lib/sync.js. Generous limit + lenient rate limit (rigs only).
+// publisher in backend/lib/sync.js.
+//
+// ORDER MATTERS: rate limit -> PRE-AUTH -> body read/inflate. This endpoint used
+// to gunzip an UNAUTHENTICATED body with no output bound, so anyone who could
+// reach the port could make the backend inflate a gzip bomb. Nothing is buffered
+// or inflated now until the caller has presented a token we would actually accept.
 // --------------------------------------------------------------------
 const ingestLimiter = rateLimit({ windowMs: 60_000, max: 6000, standardHeaders: true, legacyHeaders: false });
 
-// body-parser auto-inflates Content-Encoding: gzip (the edge sets it). The magic-byte
-// fallback covers any client whose body still arrives gzipped.
-app.post('/ingest', ingestLimiter, express.raw({ type: '*/*', limit: '64mb' }), async (req, res) => {
+// Body bounds. body-parser applies `limit` to the DECOMPRESSED stream when the
+// client sets Content-Encoding: gzip (it inflates while reading and aborts at the
+// limit); for an identity body the limit is on the wire bytes, and the manual
+// magic-byte gunzip below is bounded separately by INGEST_MAX_INFLATED_BYTES.
+// A real 10 s batch is ~25-50 KB decompressed, so 8 MB is >100x headroom.
+const INGEST_MAX_BODY = process.env.INGEST_MAX_BODY || '8mb';
+const INGEST_MAX_INFLATED_BYTES =
+    Number(process.env.INGEST_MAX_INFLATED_BYTES) > 0
+        ? Number(process.env.INGEST_MAX_INFLATED_BYTES)
+        : 8 * 1024 * 1024;
+
+// Fail-closed PRE-AUTHORIZATION. Runs BEFORE express.raw, so an unknown caller
+// never causes a body to be buffered, inflated or parsed. This is a filter, not
+// the authority: the rig-bound check (per-rig device_token) still runs inside
+// ingestBatch()/authorizeKnown(), so this can only reject, never grant.
+async function ingestPreAuth(req, res, next) {
+    const hdr = req.headers.authorization || '';
+    const token = hdr.startsWith('Bearer ') ? hdr.slice(7).trim() : null;
+    let ok = false;
+    try { ok = await preAuthorize(token); } catch { ok = false; }
+    if (!ok) {
+        metrics.observeIngest({ ok: false, durationSec: 0 });
+        // Do NOT read the body we just refused. Node discards whatever is still on
+        // the wire once this response finishes; it is never buffered or inflated.
+        // 401 is deliberately NOT in the edge's PAYLOAD_REJECT_CODES, so a wrong or
+        // rotated credential back-pressures the rig instead of dead-lettering its buffer.
+        return res.status(401).json({ error: 'unauthorized device' });
+    }
+    req.ingestToken = token;
+    return next();
+}
+
+app.post('/ingest', ingestLimiter, ingestPreAuth,
+    express.raw({ type: '*/*', limit: INGEST_MAX_BODY }), async (req, res) => {
     const startedAt = process.hrtime.bigint();
     const elapsedSec = () => Number(process.hrtime.bigint() - startedAt) / 1e9;
     try {
         let buf = req.body;
         if (Buffer.isBuffer(buf) && buf.length >= 2 && buf[0] === 0x1f && buf[1] === 0x8b) {
-            try { buf = zlib.gunzipSync(buf); } catch { metrics.observeIngest({ ok: false, durationSec: elapsedSec() }); return res.status(400).json({ error: 'bad gzip' }); }
+            // Bounded inflate: a body that arrives gzipped WITHOUT Content-Encoding
+            // bypasses body-parser's inflate limit, so cap the output explicitly.
+            try {
+                buf = zlib.gunzipSync(buf, { maxOutputLength: INGEST_MAX_INFLATED_BYTES });
+            } catch (e) {
+                metrics.observeIngest({ ok: false, durationSec: elapsedSec() });
+                const tooBig = !!e && (e.code === 'ERR_BUFFER_TOO_LARGE'
+                    || /too large|maxOutputLength/i.test(e.message || ''));
+                // 400 and 413 are BOTH payload-reject codes on the edge
+                // (backend/lib/sync.js PAYLOAD_REJECT_CODES = [400, 413, 422]), so either
+                // way the rig dead-letters this batch instead of wedging its replay queue.
+                return tooBig
+                    ? res.status(413).json({ error: 'inflated batch too large' })
+                    : res.status(400).json({ error: 'bad gzip' });
+            }
         }
         let batch;
         try { batch = JSON.parse(buf.toString('utf8')); } catch { metrics.observeIngest({ ok: false, durationSec: elapsedSec() }); return res.status(400).json({ error: 'bad json' }); }
 
         const rigId = batch.deviceId || req.headers['x-device-id'] || null;
-        const hdr = req.headers.authorization || '';
-        const token = hdr.startsWith('Bearer ') ? hdr.slice(7) : null;
+        const token = req.ingestToken;   // already parsed + pre-authorized above
         const schemaVersion = req.headers['x-schema-version'] || batch.schemaVersion;
 
         const result = await ingestBatch({ rigId, token, schemaVersion }, batch);
@@ -161,6 +226,17 @@ app.post('/ingest', ingestLimiter, express.raw({ type: '*/*', limit: '64mb' }), 
         console.error('[ingest] unexpected error:', e.message);
         res.status(500).json({ error: 'ingest failed' });
     }
+});
+// Body-limit / malformed-body failures raised by express.raw land here (Express
+// routes them to the first 4-arity handler registered after the failing middleware).
+// Answer as JSON with the real status instead of Express's default HTML page: 413
+// tells the edge "this batch is unacceptable and always will be", which is exactly
+// the dead-letter semantics backend/lib/sync.js implements.
+app.use('/ingest', (err, _req, res, _next) => {
+    const status = err.status || err.statusCode || 400;
+    metrics.observeIngest({ ok: false, durationSec: 0 });
+    if (status >= 500) console.error('[ingest] body error:', err.message);
+    res.status(status).json({ error: status === 413 ? 'batch too large' : 'bad request' });
 });
 
 // --------------------------------------------------------------------
@@ -363,6 +439,9 @@ function buildApiRouter() {
             `INSERT INTO rigs (rig_id, name, section, asset_unit, field, latitude, longitude, device_token, status, schema_version)
              VALUES ($1,$2,'Workover Services',$3,$4,$5,$6,$7,'pending','1.0')`,
             [rigId, name, b.assetUnit || null, b.field || null, lat, lon, deviceToken]);
+        // /ingest pre-auth keeps a cached set of valid device tokens; drop it so this
+        // rig's edge authenticates on its very first batch instead of after the TTL.
+        invalidateTokenCache();
         // Start its rollout at gate0 so it shows up in the governance workspace.
         await query(
             `INSERT INTO deployment_status (rig_id, gate, commissioning)
@@ -378,6 +457,7 @@ function buildApiRouter() {
         const rigId = req.params.id;
         const { rowCount } = await query('DELETE FROM rigs WHERE rig_id = $1', [rigId]);
         if (!rowCount) throw Object.assign(new Error('rig not found'), { status: 404 });
+        invalidateTokenCache();   // deleted rig's device token must stop pre-authorizing
         await query('INSERT INTO audit_log (actor, action, target, detail) VALUES ($1,$2,$3,$4)',
             [req.user.username, 'rig.delete', rigId, {}]).catch(() => {});
         return { ok: true };
@@ -389,6 +469,9 @@ function buildApiRouter() {
         const deviceToken = crypto.randomBytes(24).toString('hex');
         const { rowCount } = await query('UPDATE rigs SET device_token = $1 WHERE rig_id = $2', [deviceToken, rigId]);
         if (!rowCount) throw Object.assign(new Error('rig not found'), { status: 404 });
+        // Drop the /ingest pre-auth token cache so the new token works immediately and
+        // the rotated-away one stops passing the gate.
+        invalidateTokenCache();
         await query('INSERT INTO audit_log (actor, action, target, detail) VALUES ($1,$2,$3,$4)',
             [req.user.username, 'rig.rotate_token', rigId, {}]).catch(() => {});
         return { device_token: deviceToken };

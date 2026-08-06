@@ -74,6 +74,9 @@ externalSecret:
 secrets:
   PGPASSWORD: "staging-pg-password"
   JWT_SECRET: "staging-only-jwt-secret-change-me"
-  INGEST_TOKEN: "crmf-demo-ingest-token"
+  # NOT the previously published compose default: the backend hard-fails at boot in
+  # production mode if INGEST_TOKEN is "crmf-demo-ingest-token". Still a committed
+  # staging-only value — set externalSecret.enabled=true for anything real.
+  INGEST_TOKEN: "staging-only-ingest-token-change-me"
   ADMIN_PASSWORD: "staging-admin-password"
   KAFKA_SASL_PASSWORD: "staging-kafka-password"
