@@ -123,6 +123,46 @@ have been rotated here, but to scrub them from history run e.g.
 git filter-repo --invert-paths --path out.txt --path backend/users.json
 ```
 
+## Offline / air-gapped deployment and updates
+
+The rig PC has no internet. Everything is moved on a pendrive as a single `.tar`.
+Two package shapes, built on the (online) development PC:
+
+| Build PC | Produces | Rig PC runs | Effect |
+|---|---|---|---|
+| `Create_Code_Update_Zip.bat` (`export_offline.ps1 -CodeOnly`) | `AHWR-50-Twin_Code_Update.tar` — code + images, **no** volume tars, **no** `.env` | `Update_Code_Only.bat` (`import_offline.ps1 -KeepData`) | New software. History, users, CMMS records, well archive, alarm settings and the rig's own `.env` are all kept. |
+| `Create_Offline_Zip.bat` (`export_offline.ps1`) | `AHWR-50-Twin_Full_Transfer.tar` — code + images + volume tars + `.env` | `Update_With_Current_Settings.bat` | Full clone of the source PC. **Replaces** the rig's history and settings (a safety copy is written to `_preinstall_backups\<timestamp>\` first). |
+
+Routine software updates must use the **code-only** path. Use the full transfer only
+for a first install or when deliberately cloning one PC onto another.
+
+### Why `.env` is not simply copied
+
+`INFLUX_TOKEN` is written into the InfluxDB volume when the historian is first created
+and cannot be changed from outside. Shipping the build machine's `.env` to a rig that
+keeps its historian rotates that token and locks the backend and Telegraf out of their
+own history — the dashboard goes blank while the data is still on disk.
+
+`import_offline.ps1` therefore rebuilds `.env` on the rig instead of trusting the
+package: it reads the settings the rig is *actually running with* out of the existing
+`AHWR_*` containers (`docker inspect`), falling back to a `.rig-env` snapshot it keeps
+inside the `backend_data` volume, and only then fills the gaps from the package. It
+refuses to invent an `INFLUX_TOKEN` when a historian is being kept, and after start-up
+it proves the token works (`influx bucket list` inside `AHWR_influxdb`) before
+reporting success.
+
+### Images that must be in the package
+
+`influxdb:2.7`, `telegraf:1.29`, `ahwr-50-twin-backend`, `ahwr-50-twin-frontend` and
+`ahwr-50-twin-mcp-edge`. `mcp-edge` is in the **default** compose profile and has a
+`build:` context, so a package without its image makes `docker compose up -d` attempt a
+source build (`npm ci`) on a machine with no network. Every rig-side launcher passes
+`--no-build` so that failure is immediate and legible instead of a long hang.
+
+`certs/mcp.crt` and `certs/mcp.key` must also travel with the package — `mcp-edge`
+mounts `./certs` read-only and exits without them. `export_offline.ps1` refuses to
+build a package if they are missing.
+
 ## Repository layout
 
 ```

@@ -37,6 +37,8 @@ offline_images/
 images/
 *.tar
 *.tar.sha256
+# Pre-update safety copies written by import_offline.ps1
+_preinstall_backups/
 
 
 # self-signed MCP TLS certs (local)

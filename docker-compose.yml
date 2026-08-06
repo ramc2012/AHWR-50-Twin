@@ -2,6 +2,14 @@
 # Secrets come from .env (see .env.example). Only the frontend is published,
 # and only on localhost; backend + InfluxDB stay on the internal network.
 # Quickstart (with synthetic live data):  docker compose --profile demo up -d --build
+# Pin the Compose project name. Without this the project — and therefore the volume
+# names ahwr-50-twin_backend_data / ahwr-50-twin_influxdb_data and the built image
+# names ahwr-50-twin-backend / -frontend / -mcp-edge — is derived from whatever the
+# folder happens to be called. An offline package extracted to a differently named
+# folder would silently start against a second, EMPTY set of volumes while the rig's
+# real history sat untouched in the old ones. import_offline.ps1 hardcodes these
+# names, so pinning here makes the assumption true instead of hopeful.
+name: ahwr-50-twin
 
 services:
   influxdb:
