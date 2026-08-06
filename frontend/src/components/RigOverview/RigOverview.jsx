@@ -4,7 +4,7 @@ import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'rec
 import { socket } from '../../socket';
 import AnalogGauge from '../Common/AnalogGauge';
 import RigVisualizer from './RigVisualizer';
-import axios from '../../api';
+import axios, { LONG_TIMEOUT_MS } from '../../api';
 import { useAuth } from '../../context/AuthContext';
 import { Responsive, WidthProvider } from 'react-grid-layout';
 import 'react-grid-layout/css/styles.css';
@@ -105,7 +105,7 @@ const computeWorkingDay = (now = new Date()) => {
 // TrendsDashboard/EdrView use); `live` reads from the flattened rigData object.
 const WORKING_DAY_TRENDS = [
     { id: 'hook_load', label: 'HOOK LOAD', unit: 'ton', metric: 'drawworks.hook_load', live: 'hook_load', color: '#38bdf8', decimals: 1 },
-    { id: 'wob', label: 'WOB', unit: 'kips', metric: 'drilling.wob', live: 'wob', color: '#a855f7', decimals: 1 },
+    { id: 'wob', label: 'WOB', unit: 't', metric: 'drilling.wob', live: 'wob', color: '#a855f7', decimals: 1 },
     { id: 'spp', label: 'SPP', unit: 'Bar', metric: 'mudpump.pressure', live: 'pump_pressure', color: '#fbbf24', decimals: 1 },
     { id: 'rop', label: 'ROP', unit: 'm/h', metric: 'drilling.rop', live: 'rop', color: '#4ade80', decimals: 1 },
     { id: 'block_position', label: 'BLOCK POS', unit: 'mm', metric: 'drawworks.block_position', live: 'block_position', color: '#0ea5e9', decimals: 0 },
@@ -204,7 +204,7 @@ export default function RigOverview() {
             params.set('start', startIso);
             params.set('stop', stopIso);
             params.set('metrics', WORKING_DAY_METRICS.join(','));
-            const { data: rows } = await axios.get(`/api/history?${params.toString()}`);
+            const { data: rows } = await axios.get(`/api/history?${params.toString()}`, { timeout: LONG_TIMEOUT_MS });
             if (!Array.isArray(rows) || rows.length === 0) return;
 
             setWorkingDayTrends(() => {
@@ -602,10 +602,14 @@ export default function RigOverview() {
         }
     };
 
+    // The PLC tag is "Weight on Bit -Ton", so the BASE unit is tonnes, not kips.
+    // This previously assumed kips and scaled tonnes by 0.453592, under-reading weight
+    // on bit by 2.2x in the default view.
     const formatWOB = (val) => {
-        if (units.wob === 'lbs') return (val * 1000).toFixed(1);
-        if (units.wob === 'tonnes') return (val * 0.453592).toFixed(1);
-        return val; // kips
+        const wob = Number(val) || 0;
+        if (units.wob === 'lbs') return (wob * 2204.6226218).toFixed(2);
+        if (units.wob === 'kips') return (wob * 2.2046226218).toFixed(2);
+        return wob.toFixed(2); // tonnes (base)
     };
 
     // --- Handlers ---

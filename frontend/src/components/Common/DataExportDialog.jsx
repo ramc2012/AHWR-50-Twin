@@ -15,7 +15,7 @@ import {
     Typography
 } from '@mui/material';
 import { Download, FileSpreadsheet, FileText, Image as ImageIcon, X } from 'lucide-react';
-import axios from '../../api';
+import axios, { LONG_TIMEOUT_MS } from '../../api';
 import { downloadCsv, downloadGraphPng, downloadXlsx } from './dataExport';
 
 const FORMATS = [
@@ -143,7 +143,7 @@ export default function DataExportDialog({
                 params.set('range', range);
             }
             params.set('metrics', selectedParameters.map(parameter => parameter.key).join(','));
-            const response = await axios.get(`/api/history?${params.toString()}`);
+            const response = await axios.get(`/api/history?${params.toString()}`, { timeout: LONG_TIMEOUT_MS });
             const mergedRows = new Map();
             [...(Array.isArray(response.data) ? response.data : []), ...visibleFallbackRows()].forEach(row => {
                 const timestamp = Number(row.timestamp);

@@ -4,7 +4,7 @@ import { Settings, Edit2, Plus, Trash2 } from 'lucide-react';
 
 const AVAILABLE_METRICS = [
     { key: 'hook_load', label: 'WOH', unit: 'tons' },
-    { key: 'wob', label: 'WOB', unit: 'kips' },
+    { key: 'wob', label: 'WOB', unit: 't' },
     { key: 'rop', label: 'Rate of Penetration', unit: 'm/h' },
     { key: 'bit_depth', label: 'Bit Depth', unit: 'm' },
     { key: 'hole_depth', label: 'TOTAL DEPTH', unit: 'm' },
@@ -24,7 +24,7 @@ const AVAILABLE_METRICS = [
 const DEFAULT_CONFIG = [
     { key: 'hook_load', label: 'HOOK LOAD', unit: 'tons' },
     { key: 'bit_depth', label: 'BIT DEPTH', unit: 'm' },
-    { key: 'wob', label: 'WOB', unit: 'kips' },
+    { key: 'wob', label: 'WOB', unit: 't' },
     { key: 'hole_depth', label: 'TOTAL DEPTH', unit: 'm' },
     { key: 'pump_pressure', label: 'SPP', unit: 'Bar' },
     { key: 'torque', label: 'TORQUE', unit: 'daN·m' },

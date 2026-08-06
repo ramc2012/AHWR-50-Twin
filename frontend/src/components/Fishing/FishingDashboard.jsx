@@ -3,7 +3,7 @@ import { Box, Typography, Paper, Grid, TextField, Button, Alert, LinearProgress,
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, AreaChart, Area } from 'recharts';
 import { Anchor, Activity, ArrowDown, ArrowUp, Clock, RefreshCw } from 'lucide-react';
 import { socket } from '../../socket';
-import axios from '../../api';
+import axios, { LONG_TIMEOUT_MS } from '../../api';
 import EdrView from '../EDR/EdrView';
 
 // Semantic status colors (kept across all themes intentionally).
@@ -101,7 +101,7 @@ const FishingDashboard = () => {
             const url = useCustom
                 ? `/api/history?start=${new Date(rangeOverride.start).toISOString()}&stop=${new Date(rangeOverride.end).toISOString()}`
                 : `/api/history?range=${timeRange}`;
-            const res = await axios.get(url);
+            const res = await axios.get(url, { timeout: LONG_TIMEOUT_MS });
             setGraphData(Array.isArray(res.data) ? res.data.map(row => {
                 const timestamp = Number(row.timestamp) || (row.time ? Date.parse(row.time) : NaN) || Date.now();
                 const hookload = Number(row.hookload ?? row['drawworks.hook_load']) || 0;

@@ -36,7 +36,7 @@ import {
     ZoomIn,
     ZoomOut
 } from 'lucide-react';
-import axios from '../../api';
+import axios, { LONG_TIMEOUT_MS } from '../../api';
 import { socket } from '../../socket';
 import edrCatalog from '../../../../shared/edrMetrics.json';
 
@@ -1129,7 +1129,7 @@ export default function EdrView({
             const params = new URLSearchParams();
             params.set('range', timeRange);
             params.set('metrics', neededChannels.join(','));
-            const res = await axios.get(`/api/history?${params.toString()}`);
+            const res = await axios.get(`/api/history?${params.toString()}`, { timeout: LONG_TIMEOUT_MS });
             if (reqId !== historyReq.current) return;
             const rows = Array.isArray(res.data) ? res.data : [];
             setData(rows.map(row => {

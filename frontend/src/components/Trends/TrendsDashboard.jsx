@@ -3,7 +3,7 @@ import { Box, Typography, Paper, Grid, Checkbox, FormControlLabel, FormGroup, Ac
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
 import { ChevronDown, RefreshCw, Download, Clock } from 'lucide-react';
 import { socket } from '../../socket';
-import axios from '../../api';
+import axios, { LONG_TIMEOUT_MS } from '../../api';
 import DataExportDialog from '../Common/DataExportDialog';
 import edrCatalog from '../../../../shared/edrMetrics.json';
 
@@ -115,7 +115,7 @@ export default function TrendsDashboard() {
                 url += `?range=${timeRange}`;
             }
 
-            const res = await axios.get(url);
+            const res = await axios.get(url, { timeout: LONG_TIMEOUT_MS });
             if (res.data && res.data.length > 0) {
                 setData(prev => {
                     // Combine fetched history with any live data points that arrived while we were fetching

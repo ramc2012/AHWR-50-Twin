@@ -10,7 +10,7 @@ import {
     ResponsiveContainer, LineChart, Line, XAxis, YAxis, CartesianGrid,
     Tooltip as RTooltip, Legend,
 } from 'recharts';
-import axios from '../../api';
+import axios, { LONG_TIMEOUT_MS } from '../../api';
 import { useAuth } from '../../context/AuthContext';
 
 const SERIES_COLORS = ['#38bdf8', '#f59e0b', '#34d399', '#f472b6', '#a78bfa', '#facc15'];
@@ -18,7 +18,7 @@ const MAX_PLOT_SIGNALS = 6;
 
 /** Trigger a browser download from an authenticated API call. */
 async function downloadFrom(url, params) {
-    const res = await axios.get(url, { params, responseType: 'blob' });
+    const res = await axios.get(url, { params, responseType: 'blob', timeout: LONG_TIMEOUT_MS });
     const disp = res.headers['content-disposition'] || '';
     const match = /filename="?([^";]+)"?/.exec(disp);
     const href = URL.createObjectURL(res.data);
@@ -125,6 +125,7 @@ export default function WellDataArchive({ wells = [] }) {
             const every = spanMs > 6 * 3600e3 ? `${Math.max(1, Math.round(spanMs / 1500 / 60000))}m` : undefined;
             const r = await axios.get('/api/wells/archive/data', {
                 params: { bucket, metrics: picked.join(','), every },
+                timeout: LONG_TIMEOUT_MS,
             });
             setRows(r.data);
         } catch (e) {

@@ -193,6 +193,74 @@ function getDailyReport(date) {
 
 // Aggregate activity + connections over an arbitrary window (used to summarise a WELL,
 // which spans multiple days). startIso required; endIso defaults to now.
+/**
+ * Per-day summaries for [startIso, endIso] in a SINGLE pass over the ring buffers.
+ *
+ * The per-day equivalent is windowSummary() called once per day, but that rescans
+ * the whole activity log and connection buffer every time — O(days x 220k) blocks
+ * the event loop for seconds on a long well, stalling live telemetry and alarm
+ * evaluation. Semantics are identical: an entry belongs to the day its START falls in.
+ *
+ * @param dayKeyOf  ms -> day key string; the caller owns the day-boundary definition.
+ * @returns Map<dayKey, summary>
+ */
+function windowSummariesByDay(startIso, endIso, dayKeyOf) {
+    const startMs = Date.parse(startIso);
+    const endMs = endIso ? Date.parse(endIso) : Date.now();
+    if (!Number.isFinite(startMs)) return new Map();
+    const nowMs = Date.now();
+    const out = new Map();
+    const bucket = (key) => {
+        let b = out.get(key);
+        if (!b) {
+            b = {
+                byCode: {}, productiveSec: 0, nptSec: 0, depths: [],
+                connections: { run: 0, pass: 0, fail: 0 },
+            };
+            out.set(key, b);
+        }
+        return b;
+    };
+
+    for (const e of log) {
+        const t = Date.parse(e.start);
+        if (!(t >= startMs && t <= endMs)) continue;
+        const b = bucket(dayKeyOf(t));
+        const durationSec = e.durationSec != null
+            ? e.durationSec
+            : Math.round((Math.min(nowMs, endMs) - t) / 1000);
+        b.byCode[e.code] = b.byCode[e.code]
+            || { code: e.code, label: e.label, durationSec: 0, productive: e.productive };
+        b.byCode[e.code].durationSec += durationSec || 0;
+        if (e.productive) b.productiveSec += durationSec || 0; else b.nptSec += durationSec || 0;
+        if (e.depth != null) b.depths.push(e.depth);
+    }
+
+    for (const r of conn.records) {
+        const t = Date.parse(r.ts);
+        if (!(t >= startMs && t <= endMs)) continue;
+        const b = bucket(dayKeyOf(t));
+        b.connections.run += 1;
+        if (r.result === 'PASS') b.connections.pass += 1;
+        else if (r.result === 'FAIL') b.connections.fail += 1;
+    }
+
+    for (const [key, b] of out) {
+        const d = b.depths;
+        out.set(key, {
+            activitySummary: Object.values(b.byCode).sort((a, x) => x.durationSec - a.durationSec),
+            productiveSec: b.productiveSec,
+            nptSec: b.nptSec,
+            connections: b.connections,
+            joints: b.connections.run,
+            depthStart: d.length ? d[0] : null,
+            depthEnd: d.length ? d[d.length - 1] : null,
+            depthProgress: d.length ? Number((d[d.length - 1] - d[0]).toFixed(2)) : 0,
+        });
+    }
+    return out;
+}
+
 function windowSummary(startIso, endIso) {
     const startMs = Date.parse(startIso); const endMs = endIso ? Date.parse(endIso) : Date.now();
     if (!Number.isFinite(startMs)) return null;
@@ -222,5 +290,5 @@ function windowSummary(startIso, endIso) {
 module.exports = {
     updateActivity, setActivity, getCurrent, getCodes, getLog,
     updateTorqueTurn, getTorqueTurnLive, getConnections,
-    getDailyReport, getHeader, setHeader, windowSummary,
+    getDailyReport, getHeader, setHeader, windowSummary, windowSummariesByDay,
 };

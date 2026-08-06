@@ -390,6 +390,9 @@ export default function EdgeSyncPage() {
                     <Grid item xs={6} sm={4} md={3}><StatTile label="Acked Batches" value={fmtInt(status?.ackedBatches)} color="success.main" /></Grid>
                     <Grid item xs={6} sm={4} md={3}><StatTile label="Acked Points" value={fmtInt(status?.ackedPoints)} color="success.main" /></Grid>
                     <Grid item xs={6} sm={4} md={3}><StatTile label="Dropped Batches" value={fmtInt(status?.droppedBatches)} color={status?.droppedBatches > 0 ? 'error.main' : undefined} /></Grid>
+                    {/* Dead-lettered batches are telemetry that will never reach central
+                        without manual recovery. It was previously counted but never shown. */}
+                    <Grid item xs={6} sm={4} md={3}><StatTile label="Dead-Lettered" value={fmtInt(status?.deadLetteredBatches)} color={status?.deadLetteredBatches > 0 ? 'error.main' : undefined} /></Grid>
                 </Grid>
 
                 {!isAdmin && config && (

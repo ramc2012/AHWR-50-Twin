@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useTheme } from '@mui/material';
 import { useNavigate } from 'react-router-dom';
 import { socket } from '../../socket';
-import axios from '../../api';
+import axios, { LONG_TIMEOUT_MS } from '../../api';
 import { useAlarms, ALARM_BLINK } from '../../context/AlarmContext';
 import { priorityColor } from '../../utils/alarms';
 
@@ -40,10 +40,14 @@ const ACCENT = { a1: '#ff9d2e', a2: '#27cfe6', b1: '#a9ef34', b2: '#9a8bff', ok:
 const MONO = "'JetBrains Mono', ui-monospace, monospace";
 const SANS = "'Space Grotesk', -apple-system, BlinkMacSystemFont, sans-serif";
 
-// drawworks.block_position is in FEET (backend/server.js converts with 0.3048).
-const FT_TO_M = 0.3048;
+// drawworks.block_position is MILLIMETRES, straight off the PLC with no scaling.
+// The tag ("ACS Actual Block Position", DB174.R150) sits in the same ACS block as
+// "ACS Crownsaver in mm" / "ACS Bottomsaver in mm", and carries no scale factor.
+// This was previously treated as feet on the strength of a comment claiming the
+// backend converted with 0.3048 — no such conversion exists anywhere in the backend.
 // CONFIGURED mast travel — not telemetry. Used only to scale the mast drawing.
-const MAST_TRAVEL_FT = 90;
+const MAST_BLOCK_MIN_MM = 0;
+const MAST_BLOCK_MAX_MM = 15000;
 
 // Workover activity codes (backend/lib/workover.js).
 const ACT_COLOR = {
@@ -214,7 +218,7 @@ export default function RigConsoleOverview() {
         params.set('start', new Date(workingDay.dayStart).toISOString());
         params.set('stop', new Date().toISOString());
         params.set('metrics', TREND_DEFS.map((t) => t.metric).join(','));
-        axios.get(`/api/history?${params.toString()}`)
+        axios.get(`/api/history?${params.toString()}`, { timeout: LONG_TIMEOUT_MS })
             .then(({ data: rows }) => {
                 if (cancelled || !Array.isArray(rows)) return;
                 const seeded = Object.fromEntries(TREND_DEFS.map((t) => [t.id, []]));
@@ -283,7 +287,7 @@ export default function RigConsoleOverview() {
     const wcLive = live && wc.available !== false;
     const wcv = (v, dp = 0) => (wcLive && Number.isFinite(Number(v)) ? fmt(v, dp) : '—');
 
-    const blockFt = num(dw.block_position);
+    const blockMm = num(dw.block_position);
     const stringDepth = num(d.bit_depth);        // tubing/rod string depth on a workover rig
     const holeDepth = num(d.hole_depth);
     const acsCalibrated = num(acs.calibration_status) === 3;
@@ -291,7 +295,7 @@ export default function RigConsoleOverview() {
     // ---- primary instruments (workover-relevant, real alarm setpoints) -----
     const A0 = -135, A1 = 135;
     const gaugeDefs = [
-        { label: 'HOOK LOAD', unit: 't', dataKey: 'drawworks.hook_load', val: num(dw.hook_load), min: 0, max: 250, warn: 180, crit: 200, sub: ['BLOCK POS', sv(blockFt, 1), 'ft'], safety: true },
+        { label: 'HOOK LOAD', unit: 't', dataKey: 'drawworks.hook_load', val: num(dw.hook_load), min: 0, max: 250, warn: 180, crit: 200, sub: ['BLOCK POS', sv(blockMm, 0), 'mm'], safety: true },
         { label: 'HTD ROTARY', unit: 'rpm', dataKey: 'htd.rpm', val: num(htd.rpm), min: 0, max: 180, warn: 150, crit: 170, sub: ['TORQUE', sv(htd.torque, 0), 'daN·m'] },
         { label: 'CIRC PRESS', unit: 'bar', dataKey: 'mudpump.pressure', val: num(mp.pressure), min: 0, max: 350, warn: 240, crit: 300, sub: ['RATE', sv(mp.spm, 1), 'spm'] },
     ];
@@ -412,7 +416,7 @@ export default function RigConsoleOverview() {
                 { k: 'CROWNSAVER', v: sv(acs.crownsaver, 0), u: 'mm' },
                 { k: 'FLOORSAVER', v: sv(acs.floorsaver, 0), u: 'mm' },
                 { k: 'BOTTOMSAVER', v: sv(acs.bottomsaver, 0), u: 'mm' },
-                { k: 'BLOCK POS', v: sv(blockFt, 1), u: 'ft' },
+                { k: 'BLOCK POS', v: sv(blockMm, 0), u: 'mm' },
             ],
         },
         {
@@ -497,8 +501,8 @@ export default function RigConsoleOverview() {
         </div>
     );
 
-    // ---- workover mast geometry (drawing only; MAST_TRAVEL_FT is configured) --
-    const blockPct = clamp01(blockFt / MAST_TRAVEL_FT);
+    // ---- workover mast geometry (drawing only; mast travel is CONFIGURED) ------
+    const blockPct = clamp01((blockMm - MAST_BLOCK_MIN_MM) / (MAST_BLOCK_MAX_MM - MAST_BLOCK_MIN_MM));
     const blockY = 98 - blockPct * 80;           // 98 = floor end of travel, 18 = crown end
     const htdStat = S.onIdleOn(htd.status);
     const elevStat = S.elevator(htd.elevator_status);
@@ -703,7 +707,7 @@ export default function RigConsoleOverview() {
 
                                     {/* travelling block */}
                                     <rect x="44" y={blockY.toFixed(1)} width="12" height="4.6" rx="1" fill={live ? A.a1 : c.line2} />
-                                    <text x="42.5" y={(blockY + 3.4).toFixed(1)} fontSize="2.6" fontWeight="800" textAnchor="end" fill={A.a1} fontFamily={MONO}>{live ? `${fmt(blockFt, 1)} ft` : '--'}</text>
+                                    <text x="42.5" y={(blockY + 3.4).toFixed(1)} fontSize="2.6" fontWeight="800" textAnchor="end" fill={A.a1} fontFamily={MONO}>{live ? `${fmt(blockMm, 0)} mm` : '--'}</text>
 
                                     {/* hydraulic top drive (HTD) hanging under the block */}
                                     <rect x="45" y={(blockY + 5).toFixed(1)} width="10" height="6.5" rx="0.8" fill={c.bg3} stroke={htdStat.color} strokeWidth="0.8" />

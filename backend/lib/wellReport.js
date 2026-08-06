@@ -66,14 +66,36 @@ function buildWellReport(well, opts = {}) {
         const t = Date.parse(iso);
         return Number.isFinite(t) && t >= startMs && t <= endMs;
     };
-    const windowLogs = allLogs.filter((l) => inWindow(l.ts));
+    // Everything below is bucketed by day in ONE pass. Filtering per day instead would
+    // rescan buffers holding 100k+ records for every day of the job, blocking the event
+    // loop for seconds and stalling live telemetry and alarm evaluation.
+    const logsByDay = new Map();
+    for (const l of allLogs) {
+        if (!inWindow(l.ts)) continue;
+        if (!logsByDay.has(l.date)) logsByDay.set(l.date, []);
+        logsByDay.get(l.date).push(l);
+    }
+
+    const summariesByDay = workover.windowSummariesByDay(
+        new Date(startMs).toISOString(), new Date(endMs).toISOString(), dayKeyOf,
+    );
+
     // Run sessions per asset, for run hours clipped to each day and to the job.
     const sessionsByAsset = Object.fromEntries(
         maintenance.ASSETS.map((a) => [a.id, runlog.getAssetHistory(a.id).sessions]),
     );
 
     const workOrders = cmms.listWorkOrders({ limit: 100000 });
-    const woOn = (dayKey, field) => workOrders.filter((w) => String(w[field] || '').slice(0, 10) === dayKey);
+    const woByDay = { raisedAt: new Map(), completedAt: new Map() };
+    for (const w of workOrders) {
+        for (const field of ['raisedAt', 'completedAt']) {
+            const k = String(w[field] || '').slice(0, 10);
+            if (!k) continue;
+            if (!woByDay[field].has(k)) woByDay[field].set(k, []);
+            woByDay[field].get(k).push(w);
+        }
+    }
+    const woOn = (dayKey, field) => woByDay[field].get(dayKey) || [];
 
     const days = daysInWindow(startMs, endMs).map((dayStartMs) => {
         const key = dayKeyOf(dayStartMs);
@@ -81,8 +103,8 @@ function buildWellReport(well, opts = {}) {
         // the well actually occupied.
         const from = clamp(dayStartMs, startMs, endMs);
         const to = clamp(dayStartMs + DAY_MS, startMs, endMs);
-        const dayLogs = windowLogs.filter((l) => l.date === key);
-        const summary = workover.windowSummary(new Date(from).toISOString(), new Date(to).toISOString()) || {};
+        const dayLogs = logsByDay.get(key) || [];
+        const summary = summariesByDay.get(key) || {};
         const runHours = {};
         let runHoursTotal = 0;
         for (const a of maintenance.ASSETS) {

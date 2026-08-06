@@ -157,9 +157,16 @@ function deadLetter(f, reason) {
     console.error(`[sync] dead-lettered ${f}: ${reason} -> ${DEADLETTER_DIR}`);
 }
 
+// Only these mean "this batch is unacceptable and always will be". Everything else in
+// the 4xx range is about the CONNECTION (credential, URL, routing), not the payload.
+const PAYLOAD_REJECT_CODES = [400, 413, 422];
+
 // Drain oldest-first, bounded per cycle. Failure handling distinguishes the BATCH being
 // bad from the LINK being down, so a WAN outage never loses good data:
-//   - 4xx (central refused the payload): dead-letter that batch and CONTINUE.
+//   - 400/413/422 (central refused THIS payload): dead-letter that batch and CONTINUE.
+//   - other 4xx, e.g. 401/403/404 (bad DEVICE_TOKEN, rotated token, wrong CENTRAL_URL):
+//     the batch is fine and every batch would fail the same way — back-pressure ONLY,
+//     never dead-letter, or one config mistake destroys the entire buffer.
 //   - 5xx (central reached but errored): back-pressure + bounded retry; dead-letter only
 //     after SYNC_MAX_ATTEMPTS so a poison batch the server chokes on can't wedge forever.
 //   - network error / timeout (link DOWN): back-pressure ONLY — never dead-letter; the
@@ -179,12 +186,23 @@ async function flush() {
                 attempts.delete(f);
                 st.sentBatches += 1; st.ackedBatches += 1; st.ackedPoints += pointsOf(f);
                 connected = true; lastSyncAt = new Date().toISOString(); lastError = null;
-            } else if (typeof r.status === 'number' && r.status >= 400 && r.status < 500) {
-                // Permanent: central refused the payload itself (400/413/422/401...). The
-                // BATCH is the problem — dead-letter it and keep draining the rest.
-                lastError = `HTTP ${r.status} (rejected)`;
+            } else if (typeof r.status === 'number' && PAYLOAD_REJECT_CODES.includes(r.status)) {
+                // The BATCH itself is the problem (malformed / too large / unprocessable).
+                // Retrying can never help, so dead-letter it and keep draining the rest.
+                connected = false;
+                lastError = `HTTP ${r.status} (batch rejected)`;
                 deadLetter(f, lastError);
                 continue;
+            } else if (typeof r.status === 'number' && r.status >= 400 && r.status < 500) {
+                // Central answered, but about US, not about this batch: 401/403 (bad or
+                // rotated DEVICE_TOKEN), 404 (wrong CENTRAL_URL / proxy path). The data is
+                // fine — every batch would be refused identically, so dead-lettering here
+                // would shred the whole store-and-forward buffer over a config mistake.
+                // Keep the data and back-pressure until the credential/URL is fixed.
+                connected = false;
+                lastError = `HTTP ${r.status} (check central URL/token)`;
+                attempts.delete(f);
+                break;
             } else if (typeof r.status === 'number' && r.status >= 500) {
                 // Central was REACHED but errored (5xx): a transient central issue, or a
                 // batch it consistently chokes on. Bound the retries so a poison batch
