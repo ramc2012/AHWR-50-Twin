@@ -1,6 +1,6 @@
 import React from 'react';
 import { Box, Paper, Typography, Button, Stack } from '@mui/material';
-import { ReportProblem, Refresh } from '@mui/icons-material';
+import { ReportProblem, Refresh, RestartAlt } from '@mui/icons-material';
 
 // Global / per-panel error boundary (audit #12). A render-time throw in any wrapped
 // subtree (a malformed/unexpected API payload, recharts on a bad value, a null where an
@@ -45,9 +45,19 @@ export default class ErrorBoundary extends React.Component {
                                         {String(this.state.error.message)}
                                     </Typography>
                                 )}
-                                <Button size="small" variant="outlined" startIcon={<Refresh />} onClick={this.reset} sx={{ mt: 1.5 }}>
-                                    Retry
-                                </Button>
+                                <Stack direction="row" spacing={1} sx={{ mt: 1.5 }}>
+                                    <Button size="small" variant="outlined" startIcon={<Refresh />} onClick={this.reset}>
+                                        Retry
+                                    </Button>
+                                    {/* Reload CTA (audit UI-06): opt-in via the `reload` prop — used by the
+                                        top-level boundary in main.jsx where a remount alone may not recover. */}
+                                    {this.props.reload && (
+                                        <Button size="small" variant="contained" color="error" startIcon={<RestartAlt />}
+                                            onClick={() => window.location.reload()}>
+                                            Reload page
+                                        </Button>
+                                    )}
+                                </Stack>
                             </Box>
                         </Stack>
                     </Paper>

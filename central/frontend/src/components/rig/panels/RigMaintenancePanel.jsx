@@ -6,6 +6,7 @@ import {
 import { api } from '../../../api';
 import { useRigData } from '../../../context/RigDataContext';
 import { PanelHead, freshness } from '../hmi';
+import { fmtAgo, fmtDate, TintChip } from '../../common';
 
 // =====================================================================
 // Per-rig MAINTENANCE panel — remote HMI mirror (proposal §6.1).
@@ -14,7 +15,8 @@ import { PanelHead, freshness } from '../hmi';
 // =====================================================================
 
 const TYPE_COLOR = { PM: 'info', calibration: 'secondary', breakdown: 'error', inspection: 'default' };
-const STATUS_COLOR = { open: 'warning', in_progress: 'info', done: 'success', overdue: 'error' };
+// MUI palette keys for maintenance record status (unrelated to theme STATUS_COLOR).
+const MAINT_STATUS_COLOR = { open: 'warning', in_progress: 'info', done: 'success', overdue: 'error' };
 
 const FILTERS = [
     { key: 'all', label: 'All' },
@@ -23,16 +25,6 @@ const FILTERS = [
     { key: 'done', label: 'Done' },
     { key: 'overdue', label: 'Overdue' },
 ];
-
-const fmtDate = (d) => (d ? new Date(d).toLocaleDateString() : '—');
-const fmtAgo = (ts) => {
-    if (!ts) return '—';
-    const s = Math.max(0, Math.round((Date.now() - new Date(ts).getTime()) / 1000));
-    if (s < 60) return `${s}s ago`;
-    if (s < 3600) return `${Math.round(s / 60)}m ago`;
-    if (s < 86400) return `${Math.round(s / 3600)}h ago`;
-    return `${Math.round(s / 86400)}d ago`;
-};
 
 // An "effective" overdue check: explicit overdue status OR an open/in-progress item past its due date.
 const isOverdue = (r) => {
@@ -112,11 +104,7 @@ export default function RigMaintenancePanel({ rigId, rig }) {
                 title="Maintenance & Reliability"
                 right={
                     <Stack direction="row" alignItems="center" spacing={1}>
-                        <Chip
-                            size="small"
-                            label={fresh.text}
-                            sx={{ bgcolor: fresh.color + '22', color: fresh.color, border: `1px solid ${fresh.color}55`, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4 }}
-                        />
+                        <TintChip label={fresh.text} color={fresh.color} sx={{ textTransform: 'uppercase', letterSpacing: 0.4 }} />
                         <Chip size="small" variant="outlined" label="read-only mirror" sx={{ color: 'text.secondary' }} />
                     </Stack>
                 }
@@ -188,7 +176,7 @@ export default function RigMaintenancePanel({ rigId, rig }) {
                                     <TableCell>
                                         <Chip
                                             size="small"
-                                            color={STATUS_COLOR[statusKey] || 'default'}
+                                            color={MAINT_STATUS_COLOR[statusKey] || 'default'}
                                             variant={statusKey === 'done' ? 'filled' : 'outlined'}
                                             label={(statusKey || 'unknown').replace('_', ' ')}
                                         />
@@ -199,7 +187,7 @@ export default function RigMaintenancePanel({ rigId, rig }) {
                                         </Typography>
                                     </TableCell>
                                     <TableCell align="right">
-                                        <Typography variant="caption" color="text.secondary">{fmtAgo(r.performed_at)}</Typography>
+                                        <Typography variant="caption" color="text.secondary">{fmtAgo(r.performed_at, '—')}</Typography>
                                     </TableCell>
                                 </TableRow>
                             );

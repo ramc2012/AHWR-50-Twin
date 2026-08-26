@@ -3,6 +3,19 @@ import axios from 'axios';
 // Same-origin: nginx proxies /api and /socket.io to the CRMF backend.
 axios.defaults.baseURL = '';
 
+// Global timeout so a dead backend surfaces as an error instead of hanging forever.
+// Blob/file downloads (reports etc.) get a much longer budget via the request interceptor.
+const DEFAULT_TIMEOUT_MS = 15000;
+const DOWNLOAD_TIMEOUT_MS = 120000;
+axios.defaults.timeout = DEFAULT_TIMEOUT_MS;
+axios.interceptors.request.use((config) => {
+    if ((config.responseType === 'blob' || config.responseType === 'arraybuffer')
+        && (!config.timeout || config.timeout === DEFAULT_TIMEOUT_MS)) {
+        config.timeout = DOWNLOAD_TIMEOUT_MS;
+    }
+    return config;
+});
+
 const stored = localStorage.getItem('crmf_token');
 if (stored) axios.defaults.headers.common['Authorization'] = 'Bearer ' + stored;
 
@@ -10,12 +23,17 @@ let handling401 = false;
 axios.interceptors.response.use(
     (r) => r,
     (error) => {
+        // Timeouts get a distinct, page-displayable shape ("server not responding").
+        if (error?.code === 'ECONNABORTED' || /timeout/i.test(error?.message || '')) {
+            error.isTimeout = true;
+            error.friendlyMessage = 'CRMF server not responding — request timed out';
+        }
         if (error?.response?.status === 401 && !handling401) {
             handling401 = true;
             localStorage.removeItem('crmf_token');
             localStorage.removeItem('crmf_user');
             delete axios.defaults.headers.common['Authorization'];
-            if (window.location.pathname !== '/login') window.location.assign('/login');
+            if (window.location.pathname !== '/login') window.location.assign('/login?expired=1');
             else handling401 = false;
         }
         return Promise.reject(error);

@@ -9,14 +9,13 @@ import { Add, CheckCircle, PlayArrow, Healing } from '@mui/icons-material';
 import { api } from '../api';
 import { useAuth } from '../context/AuthContext';
 import { useFleet } from '../context/FleetContext';
-import { KpiCard, fmtAgo, fmtNum } from './common';
+import { KpiCard, fmtAgo, fmtNum, fmtDate } from './common';
 
 const TYPES = ['PM', 'calibration', 'breakdown', 'inspection'];
 const STATUSES = ['open', 'in_progress', 'done', 'overdue'];
-const STATUS_COLOR = { open: 'warning', in_progress: 'info', done: 'success', overdue: 'error' };
+// MUI palette keys for maintenance record status (unrelated to theme STATUS_COLOR).
+const MAINT_STATUS_COLOR = { open: 'warning', in_progress: 'info', done: 'success', overdue: 'error' };
 const TYPE_COLOR = { PM: 'info', calibration: 'secondary', breakdown: 'error', inspection: 'default' };
-
-const fmtDate = (d) => (d ? new Date(d).toLocaleDateString() : '—');
 
 export default function Maintenance() {
     const nav = useNavigate();
@@ -114,19 +113,24 @@ export default function Maintenance() {
                                 </TableRow></TableHead>
                                 <TableBody>
                                     {rows.map((r) => (
-                                        <TableRow key={r.id} hover>
-                                            <TableCell sx={{ cursor: 'pointer' }} onClick={() => r.rig_id && nav(`/rigs/${r.rig_id}`)}>
-                                                <Typography variant="body2" fontWeight={700}>{r.rig_name || r.rig_id || '—'}</Typography>
+                                        <TableRow key={r.id} hover role={r.rig_id ? 'button' : undefined} tabIndex={r.rig_id ? 0 : undefined}
+                                            aria-label={r.rig_id ? `Open ${r.rig_name || r.rig_id}` : undefined}
+                                            onClick={() => r.rig_id && nav(`/rigs/${r.rig_id}`)}
+                                            onKeyDown={(e) => { if (r.rig_id && (e.key === 'Enter' || e.key === ' ') && e.target === e.currentTarget) { e.preventDefault(); nav(`/rigs/${r.rig_id}`); } }}
+                                            sx={r.rig_id ? { cursor: 'pointer', '&:focus-visible': { outline: '2px solid', outlineColor: 'primary.main', outlineOffset: -2 } } : undefined}>
+                                            <TableCell>
+                                                <Typography variant="body2" fontWeight={700} sx={r.rig_id ? { color: 'primary.main', '&:hover': { textDecoration: 'underline' } } : undefined}>{r.rig_name || r.rig_id || '—'}</Typography>
                                                 {r.rig_name && <Typography variant="caption" color="text.secondary">{r.rig_id}</Typography>}
                                             </TableCell>
                                             <TableCell><Chip size="small" variant="outlined" color={TYPE_COLOR[r.type] || 'default'} label={r.type} /></TableCell>
                                             <TableCell><Typography variant="body2">{r.title}</Typography>{r.outcome && <Typography variant="caption" color="text.secondary">{r.outcome}</Typography>}</TableCell>
-                                            <TableCell><Chip size="small" color={STATUS_COLOR[r.status] || 'default'} variant={r.status === 'done' ? 'filled' : 'outlined'} label={(r.status || '').replace('_', ' ')} /></TableCell>
+                                            <TableCell><Chip size="small" color={MAINT_STATUS_COLOR[r.status] || 'default'} variant={r.status === 'done' ? 'filled' : 'outlined'} label={(r.status || '').replace('_', ' ')} /></TableCell>
                                             <TableCell align="right"><Typography variant="caption" color={r.status === 'overdue' ? 'error.main' : 'text.secondary'}>{fmtDate(r.due_date)}</Typography></TableCell>
                                             <TableCell align="right"><Typography variant="caption" color="text.secondary">{r.performed_at ? fmtAgo(r.performed_at) : '—'}</Typography></TableCell>
                                             <TableCell align="right">{r.runtime_hours == null ? '—' : fmtNum(r.runtime_hours, 0)}</TableCell>
+                                            {/* Action cell: status buttons must not trigger row navigation. */}
                                             {editable && (
-                                                <TableCell align="right">
+                                                <TableCell align="right" onClick={(e) => e.stopPropagation()} sx={{ cursor: 'default' }}>
                                                     <Stack direction="row" spacing={0.5} justifyContent="flex-end">
                                                         {r.status !== 'in_progress' && r.status !== 'done' && (
                                                             <Tooltip title="Mark in progress"><IconButton size="small" onClick={() => advance(r, 'in_progress')}><PlayArrow fontSize="small" /></IconButton></Tooltip>
@@ -161,7 +165,11 @@ export default function Maintenance() {
                                 {s.byRig.map((b) => {
                                     const pct = Math.max(0, Math.min(100, b.pmCompliancePct ?? 0));
                                     return (
-                                        <Box key={b.rigId} sx={{ cursor: 'pointer' }} onClick={() => nav(`/rigs/${b.rigId}`)}>
+                                        <Box key={b.rigId} role="button" tabIndex={0}
+                                            aria-label={`Open ${b.name || b.rigId}`}
+                                            onClick={() => nav(`/rigs/${b.rigId}`)}
+                                            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); nav(`/rigs/${b.rigId}`); } }}
+                                            sx={{ cursor: 'pointer', borderRadius: 1, '&:focus-visible': { outline: '2px solid', outlineColor: 'primary.main', outlineOffset: 2 } }}>
                                             <Stack direction="row" justifyContent="space-between">
                                                 <Typography variant="body2">{b.name || b.rigId}</Typography>
                                                 <Typography variant="body2" fontWeight={700} color={pct >= 95 ? 'success.main' : 'warning.main'}>{pct}%</Typography>

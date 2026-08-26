@@ -7,7 +7,7 @@ import LockOutlinedIcon from '@mui/icons-material/LockOutlined';
 import { useRigData } from '../../../context/RigDataContext';
 import { api } from '../../../api';
 import { PanelHead, freshness } from '../hmi';
-import { PriorityChip, fmtAgo } from '../../common';
+import { PriorityChip, TintChip, fmtAgo, fmtDateTime } from '../../common';
 
 // =====================================================================
 // RigAlarmsPanel — per-rig ALARMS view for the CRMF remote HMI mirror
@@ -112,8 +112,8 @@ export default function RigAlarmsPanel({ rigId, rig }) {
                 title={`Current alarms — ${rigName}`}
                 right={
                     raised > 0
-                        ? <Chip size="small" label={`${raised} active`} sx={{ bgcolor: '#ef444422', color: '#ef4444', border: '1px solid #ef444455', fontWeight: 700 }} />
-                        : <Chip size="small" label="all clear" sx={{ bgcolor: '#22c55e22', color: '#22c55e', border: '1px solid #22c55e55', fontWeight: 700 }} />
+                        ? <TintChip label={`${raised} active`} color="#ef4444" />
+                        : <TintChip label="all clear" color="#22c55e" />
                 }
             />
             <Grid container spacing={2} sx={{ mb: 2 }}>
@@ -163,7 +163,7 @@ export default function RigAlarmsPanel({ rigId, rig }) {
                                         <TableCell>
                                             <Typography variant="body2">{fmtAgo(ev.ts)}</Typography>
                                             <Typography variant="caption" color="text.secondary">
-                                                {ev.ts ? new Date(ev.ts).toLocaleString() : '—'}
+                                                {fmtDateTime(ev.ts)}
                                             </Typography>
                                         </TableCell>
                                         <TableCell><PriorityChip priority={ev.highest} /></TableCell>

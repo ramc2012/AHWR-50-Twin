@@ -178,7 +178,7 @@
         {
           "id": "total_tank_volume",
           "label": "Tank Volume",
-          "unit": "m3",
+          "unit": "m³",
           "precision": 1,
           "defaultMin": 0,
           "defaultMax": 500,
@@ -187,8 +187,8 @@
         {
           "id": "tank_gain_loss",
           "label": "Tank Gain/Loss",
-          "unit": "m3",
-          "precision": 1,
+          "unit": "m³",
+          "precision": 2,
           "defaultMin": -50,
           "defaultMax": 50,
           "plcTag": "fluid.tank_gain_loss"
@@ -196,8 +196,8 @@
         {
           "id": "trip_tank",
           "label": "Trip Tank",
-          "unit": "m3",
-          "precision": 1,
+          "unit": "m³",
+          "precision": 2,
           "defaultMin": 0,
           "defaultMax": 50,
           "plcTag": "fluid.trip_tank"
@@ -274,7 +274,7 @@
         {
           "id": "coolant_temp",
           "label": "Coolant Temp",
-          "unit": "C",
+          "unit": "°C",
           "precision": 1,
           "defaultMin": 0,
           "defaultMax": 120,
@@ -466,7 +466,7 @@
         {
           "id": "oil_temp",
           "label": "Oil Temp",
-          "unit": "C",
+          "unit": "°C",
           "precision": 1,
           "defaultMin": 0,
           "defaultMax": 120,

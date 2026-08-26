@@ -62,8 +62,12 @@ export default function WorkoverPerformance() {
                                 </TableRow></TableHead>
                                 <TableBody>
                                     {conns.map((c) => (
-                                        <TableRow key={c.rigId} hover sx={{ cursor: 'pointer' }} onClick={() => nav(`/rigs/${c.rigId}`)}>
-                                            <TableCell><Typography variant="body2" fontWeight={700}>{c.name || c.rigId}</Typography></TableCell>
+                                        <TableRow key={c.rigId} hover role="button" tabIndex={0}
+                                            aria-label={`Open ${c.name || c.rigId}`}
+                                            onClick={() => nav(`/rigs/${c.rigId}`)}
+                                            onKeyDown={(e) => { if ((e.key === 'Enter' || e.key === ' ') && e.target === e.currentTarget) { e.preventDefault(); nav(`/rigs/${c.rigId}`); } }}
+                                            sx={{ cursor: 'pointer', '&:focus-visible': { outline: '2px solid', outlineColor: 'primary.main', outlineOffset: -2 } }}>
+                                            <TableCell><Typography variant="body2" fontWeight={700} sx={{ color: 'primary.main', '&:hover': { textDecoration: 'underline' } }}>{c.name || c.rigId}</Typography></TableCell>
                                             <TableCell align="right">{c.total}</TableCell>
                                             <TableCell align="right">{c.pass}</TableCell>
                                             <TableCell align="right">{c.fail || 0}</TableCell>

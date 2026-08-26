@@ -3,6 +3,7 @@ import {
     Box,
     Button,
     Checkbox,
+    CircularProgress,
     Dialog,
     DialogActions,
     DialogContent,
@@ -101,6 +102,21 @@ const fmtScale = (value) => {
     if (!Number.isFinite(n)) return '--';
     return String(Math.round(n * 100) / 100);
 };
+
+// Compact age text for the freshness badge (e.g. "23s", "2m 05s").
+const fmtAge = (ms) => {
+    const s = Math.max(0, Math.round(ms / 1000));
+    if (s < 60) return `${s}s`;
+    return `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, '0')}s`;
+};
+
+const fmtClock = (ms) => new Date(ms).toLocaleTimeString([], {
+    hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false
+});
+
+// Data-freshness thresholds driving the LIVE / STALE / OFFLINE badge.
+const STALE_AFTER_MS = 15 * 1000;
+const OFFLINE_AFTER_MS = 60 * 1000;
 
 // ---------------------------------------------------------------------------
 // Time window presets
@@ -387,7 +403,7 @@ function ScrollRail({ onUp, onDown, onHoldUp, onHoldDown, onHoldStop, upTip, dow
 // SVG strip chart
 // ---------------------------------------------------------------------------
 
-function StripChart({ strip, samples, indexMode, indexDomain, accentColor, gridColor, axisTextColor, surface, border, subText, textColor }) {
+function StripChart({ strip, samples, indexMode, indexDomain, accentColor, gridColor, axisTextColor, surface, border, subText, textColor, compact = false }) {
     const ref = useRef(null);
     const [size, setSize] = useState({ w: 240, h: 260 });
     // Hovered cursor position, in fractional [0..1] of chart height (null = no hover).
@@ -411,7 +427,7 @@ function StripChart({ strip, samples, indexMode, indexDomain, accentColor, gridC
     // Flush any scheduled rAF on unmount.
     useEffect(() => () => { if (rafRef.current) cancelAnimationFrame(rafRef.current); }, []);
 
-    const enabledPens = strip.pens.filter(p => p.enabled);
+    const enabledPens = useMemo(() => strip.pens.filter(p => p.enabled), [strip.pens]);
     const { w, h } = size;
     const padX = 6;
     const innerW = Math.max(1, w - padX * 2);
@@ -449,32 +465,59 @@ function StripChart({ strip, samples, indexMode, indexDomain, accentColor, gridC
 
     // Index value under the cursor (timestamp in time mode, depth in depth mode).
     const cursorIndex = cursorFrac == null ? null : d0 + cursorFrac * span;
+    const indexKey = indexMode === 'depth' ? 'depth' : 'timestamp';
 
-    // Nearest sample to the cursor index (linear scan — samples are sorted by
-    // timestamp/depth; cheap for the ~window-sized buffers we hold).
-    const nearestSample = useMemo(() => {
-        if (cursorIndex == null || !samples.length) return null;
-        const key = indexMode === 'depth' ? 'depth' : 'timestamp';
-        let best = null;
-        let bestDist = Infinity;
-        for (let i = 0; i < samples.length; i += 1) {
-            const iv = samples[i][key];
-            if (!Number.isFinite(iv)) continue;
-            const dist = Math.abs(iv - cursorIndex);
-            if (dist < bestDist) { bestDist = dist; best = samples[i]; }
+    // Median spacing between consecutive samples (index units) — used to detect
+    // when the cursor sits in a data gap and the "nearest" sample is misleading.
+    const medianSpacing = useMemo(() => {
+        if (samples.length < 2) return null;
+        const gaps = [];
+        for (let i = 1; i < samples.length; i += 1) {
+            const g = samples[i][indexKey] - samples[i - 1][indexKey];
+            if (Number.isFinite(g) && g > 0) gaps.push(g);
         }
-        return best;
-    }, [cursorIndex, samples, indexMode]);
+        if (!gaps.length) return null;
+        gaps.sort((a, b) => a - b);
+        return gaps[Math.floor(gaps.length / 2)];
+    }, [samples, indexKey]);
 
-    const fmtIndex = (v) => (
-        indexMode === 'depth'
-            ? `${fmtScale(v)} m`
-            : new Date(v).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })
-    );
+    // Nearest sample to the cursor index — samples are sorted by timestamp/depth,
+    // so a binary search finds the neighbourhood instead of a full linear scan.
+    const nearest = useMemo(() => {
+        if (cursorIndex == null || !samples.length) return null;
+        let lo = 0;
+        let hi = samples.length - 1;
+        while (hi - lo > 1) {
+            const mid = (lo + hi) >> 1;
+            if (samples[mid][indexKey] < cursorIndex) lo = mid; else hi = mid;
+        }
+        const dLo = Math.abs(samples[lo][indexKey] - cursorIndex);
+        const dHi = Math.abs(samples[hi][indexKey] - cursorIndex);
+        return dLo <= dHi
+            ? { sample: samples[lo], dist: dLo }
+            : { sample: samples[hi], dist: dHi };
+    }, [cursorIndex, samples, indexKey]);
+
+    // Cursor is over a gap (nearest sample far beyond typical spacing): show
+    // "no data here" instead of a misleading far-away value.
+    const cursorInGap = nearest != null && medianSpacing != null && nearest.dist > medianSpacing * 2;
+    const nearestSample = cursorInGap ? null : (nearest ? nearest.sample : null);
+
+    // When the visible window crosses midnight, HH:MM:SS alone is ambiguous —
+    // include the date in the tooltip index line.
+    const crossesMidnight = indexMode !== 'depth'
+        && new Date(d0).toDateString() !== new Date(d1).toDateString();
+    const fmtIndex = (v) => {
+        if (indexMode === 'depth') return `${fmtScale(v)} m`;
+        const t = fmtClock(v);
+        return crossesMidnight
+            ? `${new Date(v).toLocaleDateString([], { month: 'short', day: 'numeric' })} ${t}`
+            : t;
+    };
 
     // Tooltip box geometry — clamp inside the strip and flip side near edges.
-    const showTooltip = cursorFrac != null && nearestSample && enabledPens.length > 0;
-    const tipRows = showTooltip
+    const showTooltip = cursorFrac != null && enabledPens.length > 0 && (nearestSample || cursorInGap);
+    const tipRows = nearestSample
         ? enabledPens.map(pen => ({
             color: pen.color,
             name: channelLabel(pen.channelId),
@@ -483,39 +526,120 @@ function StripChart({ strip, samples, indexMode, indexDomain, accentColor, gridC
         }))
         : [];
 
-    const buildPath = (pen) => {
-        const range = pen.max - pen.min || 1;
-        let dStr = '';
-        let started = false;
-        for (let i = 0; i < samples.length; i += 1) {
-            const s = samples[i];
-            const raw = s.values[pen.channelId];
-            const idx = indexMode === 'depth' ? s.depth : s.timestamp;
-            if (!Number.isFinite(Number(raw)) || !Number.isFinite(Number(idx))) {
-                started = false; // break the line over gaps
-                continue;
-            }
-            const clamped = Math.max(pen.min, Math.min(pen.max, Number(raw)));
-            const x = padX + ((clamped - pen.min) / range) * innerW;
-            const y = yFor(idx);
-            dStr += `${started ? 'L' : 'M'}${x.toFixed(1)},${y.toFixed(1)}`;
-            started = true;
-        }
-        return dStr;
-    };
-
-    // Current value position for the thin marker (latest sample with a value).
-    const markerFor = (pen) => {
-        for (let i = samples.length - 1; i >= 0; i -= 1) {
-            const raw = samples[i].values[pen.channelId];
-            if (Number.isFinite(Number(raw))) {
-                const range = pen.max - pen.min || 1;
-                const clamped = Math.max(pen.min, Math.min(pen.max, Number(raw)));
+    // Per-pen path strings + current-value marker positions, memoized so hover
+    // (crosshair/tooltip state) never re-stringifies the SVG paths. Samples that
+    // exceed the pen range are CLAMPED to the rail — those segments go to a
+    // separate DASHED "off-scale" path so clamping is visible, not silent.
+    const penGeom = useMemo(() => (
+        enabledPens.map(pen => {
+            const range = pen.max - pen.min || 1;
+            const xFor = (raw) => {
+                const clamped = Math.max(pen.min, Math.min(pen.max, raw));
                 return padX + ((clamped - pen.min) / range) * innerW;
+            };
+            let dOn = '';
+            let dOff = '';
+            let prev = null;
+            for (let i = 0; i < samples.length; i += 1) {
+                const s = samples[i];
+                const raw = Number(s.values[pen.channelId]);
+                const idx = indexMode === 'depth' ? s.depth : s.timestamp;
+                if (!Number.isFinite(raw) || !Number.isFinite(Number(idx))) {
+                    prev = null; // break the line over gaps
+                    continue;
+                }
+                const off = raw < pen.min || raw > pen.max;
+                const x = xFor(raw).toFixed(1);
+                const y = yFor(idx).toFixed(1);
+                if (prev) {
+                    const seg = `M${prev.x},${prev.y}L${x},${y}`;
+                    if (off || prev.off) dOff += seg; else dOn += seg;
+                }
+                prev = { x, y, off };
             }
-        }
-        return null;
-    };
+            // Current value position for the thin marker (latest sample with a value).
+            let marker = null;
+            for (let i = samples.length - 1; i >= 0; i -= 1) {
+                const raw = Number(samples[i].values[pen.channelId]);
+                if (Number.isFinite(raw)) {
+                    marker = xFor(raw);
+                    break;
+                }
+            }
+            return { pen, dOn, dOff, marker };
+        })
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    ), [samples, enabledPens, indexMode, d0, d1, w, h]);
+
+    // "Data begins" marker — when the buffer covers only a small fraction of the
+    // visible window (e.g. fresh restart), mark where the data starts so the
+    // blank region above reads as honest absence, not breakage.
+    const dataStartMarker = useMemo(() => {
+        if (indexMode === 'depth' || !samples.length) return null;
+        const first = samples[0].timestamp;
+        const last = samples[samples.length - 1].timestamp;
+        if (!Number.isFinite(first) || !Number.isFinite(last)) return null;
+        if ((last - first) >= span * 0.2) return null;
+        const frac = (first - d0) / span;
+        if (frac < 0.03 || frac > 1) return null;
+        return { frac, label: new Date(first).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false }) };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [indexMode, samples, d0, span]);
+
+    // Static chart body (grid + scale labels + pens + markers) memoized as a
+    // whole so hover state changes only touch the absolutely-positioned
+    // crosshair/tooltip overlays, never the SVG.
+    const scaleFont = compact ? 7.5 : 9;
+    const svgEl = useMemo(() => (
+        <svg width="100%" height="100%" viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" style={{ display: 'block' }}>
+            {/* horizontal index gridlines */}
+            {hLines.map((f, i) => (
+                <line key={`h${i}`} x1={0} x2={w} y1={f * h} y2={f * h} stroke={gridColor} strokeWidth={0.5} />
+            ))}
+            {/* vertical scale gridlines */}
+            {vLines.map((x, i) => (
+                <line key={`v${i}`} x1={x} x2={x} y1={0} y2={h} stroke={gridColor} strokeWidth={0.5} />
+            ))}
+            {/* per-pen min/mid/max value-scale labels along the track edge (kept in compact mode) */}
+            {penGeom.map(({ pen }, i) => {
+                const ty = 8 + i * (scaleFont + 3);
+                return (
+                    <g key={`s${i}`} style={{ fontSize: `${scaleFont}px`, fontWeight: 700 }} fill={pen.color} opacity={0.85}>
+                        <text x={padX + 1} y={ty} textAnchor="start">{fmtScale(pen.min)}</text>
+                        <text x={w / 2} y={ty} textAnchor="middle">{fmtScale((pen.min + pen.max) / 2)}</text>
+                        <text x={w - padX - 1} y={ty} textAnchor="end">{fmtScale(pen.max)}</text>
+                    </g>
+                );
+            })}
+            {/* pens — solid in range, dashed where samples were clamped off-scale */}
+            {penGeom.map(({ pen, dOn, dOff }, i) => (
+                <g key={`p${i}`}>
+                    {dOn ? (
+                        <path d={dOn} fill="none" stroke={pen.color} strokeWidth={1.6} strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" />
+                    ) : null}
+                    {dOff ? (
+                        <path d={dOff} fill="none" stroke={pen.color} strokeWidth={1.6} strokeDasharray="3 3" strokeLinejoin="round" strokeLinecap="round" opacity={0.9} vectorEffect="non-scaling-stroke" />
+                    ) : null}
+                </g>
+            ))}
+            {/* thin current-value markers */}
+            {penGeom.map(({ pen, marker }, i) => (marker == null ? null : (
+                <line
+                    key={`m${i}`}
+                    x1={marker}
+                    x2={marker}
+                    y1={0}
+                    y2={h}
+                    stroke={pen.color}
+                    strokeWidth={0.75}
+                    strokeDasharray="2 3"
+                    opacity={0.5}
+                    vectorEffect="non-scaling-stroke"
+                />
+            )))}
+        </svg>
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    ), [penGeom, w, h, gridColor, scaleFont]);
 
     return (
         <Box
@@ -524,62 +648,32 @@ function StripChart({ strip, samples, indexMode, indexDomain, accentColor, gridC
             onPointerLeave={handleLeave}
             sx={{ position: 'relative', width: '100%', height: '100%' }}
         >
-            <svg width="100%" height="100%" viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" style={{ display: 'block' }}>
-                {/* horizontal index gridlines */}
-                {hLines.map((f, i) => (
-                    <line key={`h${i}`} x1={0} x2={w} y1={f * h} y2={f * h} stroke={gridColor} strokeWidth={0.5} />
-                ))}
-                {/* vertical scale gridlines */}
-                {vLines.map((x, i) => (
-                    <line key={`v${i}`} x1={x} x2={x} y1={0} y2={h} stroke={gridColor} strokeWidth={0.5} />
-                ))}
-                {/* pens */}
-                {enabledPens.map((pen, i) => (
-                    <path
-                        key={`p${i}`}
-                        d={buildPath(pen)}
-                        fill="none"
-                        stroke={pen.color}
-                        strokeWidth={1.6}
-                        strokeLinejoin="round"
-                        strokeLinecap="round"
-                        vectorEffect="non-scaling-stroke"
-                    />
-                ))}
-                {/* thin current-value markers */}
-                {enabledPens.map((pen, i) => {
-                    const mx = markerFor(pen);
-                    if (mx == null) return null;
-                    return (
-                        <line
-                            key={`m${i}`}
-                            x1={mx}
-                            x2={mx}
-                            y1={0}
-                            y2={h}
-                            stroke={pen.color}
-                            strokeWidth={0.75}
-                            strokeDasharray="2 3"
-                            opacity={0.5}
-                            vectorEffect="non-scaling-stroke"
-                        />
-                    );
-                })}
-                {/* hover crosshair (thin horizontal cursor line at the hovered index) */}
-                {cursorFrac != null && (
-                    <line
-                        x1={0}
-                        x2={w}
-                        y1={cursorFrac * h}
-                        y2={cursorFrac * h}
-                        stroke={accentColor}
-                        strokeWidth={1}
-                        opacity={0.85}
-                        pointerEvents="none"
-                        vectorEffect="non-scaling-stroke"
-                    />
-                )}
-            </svg>
+            {svgEl}
+            {/* "data begins" marker — subtle line + label at the start of the buffer */}
+            {dataStartMarker && (
+                <Box sx={{ position: 'absolute', left: 0, right: 0, top: `${dataStartMarker.frac * 100}%`, pointerEvents: 'none', zIndex: 2 }}>
+                    <Box sx={{ borderTop: `1px dashed ${subText}`, opacity: 0.55 }} />
+                    <Typography sx={{ color: subText, fontSize: '0.56rem', fontWeight: 700, opacity: 0.85, px: 0.5, whiteSpace: 'nowrap' }}>
+                        data begins at {dataStartMarker.label}
+                    </Typography>
+                </Box>
+            )}
+            {/* hover crosshair — absolutely-positioned overlay (thin horizontal
+                cursor line) so hover never re-renders the memoized SVG */}
+            {cursorFrac != null && (
+                <Box
+                    sx={{
+                        position: 'absolute',
+                        left: 0,
+                        right: 0,
+                        top: `${cursorFrac * 100}%`,
+                        borderTop: `1px solid ${accentColor}`,
+                        opacity: 0.85,
+                        pointerEvents: 'none',
+                        zIndex: 4
+                    }}
+                />
+            )}
             {/* hover tooltip — index value + per-pen color/name/value at nearest sample */}
             {showTooltip && (
                 <Box
@@ -604,6 +698,11 @@ function StripChart({ strip, samples, indexMode, indexDomain, accentColor, gridC
                     <Typography sx={{ color: subText, fontSize: '0.6rem', fontWeight: 800, letterSpacing: 0.3, mb: 0.35, whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>
                         {fmtIndex(cursorIndex)}
                     </Typography>
+                    {cursorInGap && (
+                        <Typography sx={{ color: subText, fontSize: '0.62rem', fontStyle: 'italic', whiteSpace: 'nowrap' }}>
+                            no data here
+                        </Typography>
+                    )}
                     {tipRows.map((r, i) => (
                         <Box key={i} sx={{ display: 'flex', alignItems: 'center', gap: 0.5, lineHeight: 1.25 }}>
                             <Box sx={{ width: 8, height: 8, borderRadius: '2px', bgcolor: r.color, flex: '0 0 auto' }} />
@@ -669,9 +768,13 @@ function StripVariables({ strip, latest, compact, surface, border, subText }) {
             ) : enabledPens.map((pen, i) => {
                 const unit = channelUnit(pen.channelId);
                 const value = latest?.[pen.channelId];
+                // Current value outside the pen's [min,max] — the trace is clamped
+                // to the rail, so flag the readout as off-scale.
+                const num = Number(value);
+                const offScale = Number.isFinite(num) && (num < pen.min || num > pen.max);
                 // Full-detail tooltip so a compacted row (unit-only / value-only) is
                 // still identifiable on hover: Name (unit) · min…max · current value.
-                const tipTitle = `${channelLabel(pen.channelId)}${unit ? ` (${unit})` : ''} · ${fmtScale(pen.min)}…${fmtScale(pen.max)} · ${fmtValue(value, channelPrecision(pen.channelId))}${unit ? ` ${unit}` : ''}`;
+                const tipTitle = `${channelLabel(pen.channelId)}${unit ? ` (${unit})` : ''} · ${fmtScale(pen.min)}…${fmtScale(pen.max)} · ${fmtValue(value, channelPrecision(pen.channelId))}${unit ? ` ${unit}` : ''}${offScale ? ' · OFF-SCALE (trace clamped)' : ''}`;
                 return (
                     <MuiTooltip key={i} title={tipTitle} placement="top" arrow>
                     <Box
@@ -725,6 +828,12 @@ function StripVariables({ strip, latest, compact, surface, border, subText }) {
                             {/* compaction (4): when name+unit are dropped from the meta line, keep unit beside the value */}
                             {!showName && unit ? (
                                 <Box component="span" sx={{ fontSize: '0.6em', ml: 0.3, color: subText, fontWeight: 700 }}>{unit}</Box>
+                            ) : null}
+                            {/* off-scale flag: current value is beyond the pen range (trace clamped) */}
+                            {offScale ? (
+                                <Box component="span" sx={{ fontSize: '0.5em', ml: 0.4, px: 0.35, py: 0.1, borderRadius: 0.5, border: '1px solid #f59e0b', color: '#f59e0b', fontWeight: 800, letterSpacing: 0.4, verticalAlign: 'middle', whiteSpace: 'nowrap' }}>
+                                    OFF-SCALE
+                                </Box>
                             ) : null}
                         </Typography>
                     </Box>
@@ -908,6 +1017,21 @@ export default function EdrView({
     const [data, setData] = useState([]); // [{ timestamp, depth, values:{channelId:value} }]
     const dragRef = useRef(null);
 
+    // History-seed request state (UI-13). Non-blocking: overlays only, so live
+    // ingestion keeps painting while the seed is in flight or has failed.
+    const [histLoading, setHistLoading] = useState(false);
+    const [histError, setHistError] = useState(null);
+    const [histEmpty, setHistEmpty] = useState(false);
+
+    // Wall-clock tick (1s). Anchors the live window's bottom edge to NOW (so a
+    // visible gap opens when ingestion stops) and drives the freshness badge.
+    const [nowMs, setNowMs] = useState(() => Date.now());
+    useEffect(() => {
+        if (offline) return undefined;
+        const id = setInterval(() => setNowMs(Date.now()), 1000);
+        return () => clearInterval(id);
+    }, [offline]);
+
     // Persist strip config + index mode + readout selection (same storageKey).
     useEffect(() => {
         if (!storageKey) return;
@@ -945,6 +1069,8 @@ export default function EdrView({
     const fetchHistory = useCallback(async () => {
         if (!rigId) return;
         const reqId = ++historyReq.current;
+        setHistLoading(true);
+        setHistError(null);
         try {
             // Central history is per-rig + bucketed; rows are [{ t:epochms, "<metric>":v }].
             // OFFLINE: seed from the FIXED [fromMs,toMs] range (range mode); LIVE: rolling minutes.
@@ -952,10 +1078,16 @@ export default function EdrView({
                 ? await api.rigHistoryRange(rigId, neededChannels, winFromMs, winToMs)
                 : await api.rigHistoryMulti(rigId, neededChannels, Math.max(1, Math.round(timeWindowMs / 60000)));
             if (reqId !== historyReq.current) return;
-            setData(rowsToSamples(res?.rows));
+            // Re-seed is the ONLY place we sort — live ingest relies on this order.
+            const seeded = rowsToSamples(res?.rows).sort((a, b) => a.timestamp - b.timestamp);
+            setData(seeded);
+            setHistLoading(false);
+            setHistEmpty(seeded.length === 0);
         } catch (err) {
             if (reqId !== historyReq.current) return;
             console.error('EdrView: failed to load history', err);
+            setHistLoading(false);
+            setHistError(err?.message || 'Failed to load recorded data');
         }
     }, [rowsToSamples, neededChannels, timeWindowMs, rigId, offline, winFromMs, winToMs]);
 
@@ -973,20 +1105,37 @@ export default function EdrView({
             }
         });
         const depth = Number(values[DEPTH_INDEX_METRIC] ?? values['drilling.bit_depth']);
+        // Cap the retained buffer to the SELECTED window + headroom for scrollback;
+        // widening the window triggers a history re-seed, so nothing is lost.
+        const cutoff = ts - (timeWindowMs * 2 + 60 * 1000);
         setData(prev => {
             const point = { timestamp: ts, depth, values };
-            const merged = [...prev, point];
+            const last = prev.length ? prev[prev.length - 1] : null;
+            if (!last || ts >= last.timestamp) {
+                // FAST PATH (the normal case — timestamps arrive in order):
+                // append, or replace the tail when it lands in the same second,
+                // then front-prune expired points. No Map rebuild, no full sort.
+                let next;
+                if (last && Math.floor(ts / 1000) === Math.floor(last.timestamp / 1000)) {
+                    next = prev.slice(0, -1);
+                    next.push(point);
+                } else {
+                    next = prev.concat(point);
+                }
+                let firstKeep = 0;
+                while (firstKeep < next.length && (next[firstKeep].timestamp || 0) < cutoff) firstKeep += 1;
+                return firstKeep ? next.slice(firstKeep) : next;
+            }
+            // SLOW PATH (rare out-of-order point): dedupe-by-second + full sort.
             const bySecond = new Map();
-            merged.forEach(p => {
-                const key = Math.floor((p.timestamp || 0) / 1000);
-                bySecond.set(key, p); // keep latest within a second
+            prev.concat(point).forEach(p => {
+                bySecond.set(Math.floor((p.timestamp || 0) / 1000), p); // keep latest within a second
             });
-            const sorted = Array.from(bySecond.values()).sort((a, b) => a.timestamp - b.timestamp);
-            // Cap buffer to the largest time window + headroom for scrolling.
-            const cutoff = ts - (TIME_WINDOWS[TIME_WINDOWS.length - 1].ms * 1.5);
-            return sorted.filter(p => (p.timestamp || 0) >= cutoff);
+            return Array.from(bySecond.values())
+                .sort((a, b) => a.timestamp - b.timestamp)
+                .filter(p => (p.timestamp || 0) >= cutoff);
         });
-    }, []);
+    }, [timeWindowMs]);
 
     // History seed whenever the metric set / time window changes.
     useEffect(() => { fetchHistory(); }, [fetchHistory]);
@@ -1029,9 +1178,10 @@ export default function EdrView({
         // Time mode: newest at the BOTTOM.
         // OFFLINE replay anchors the bottom of the visible window to the recorded end
         // (toMs) so scrollOffset walks back inside the FIXED [fromMs,toMs] range; clamp
-        // so the window can't run past the recorded start. LIVE anchors to the newest
-        // ingested sample (or now) as before.
-        const anchor = offline ? winToMs : (sorted.length ? sorted[sorted.length - 1].timestamp : Date.now());
+        // so the window can't run past the recorded start. LIVE anchors to the WALL
+        // CLOCK (nowMs, ticking every second) — NOT the last sample — so a visible
+        // gap opens at the bottom edge when ingestion stops instead of the axis freezing.
+        const anchor = offline ? winToMs : nowMs;
         let bottom = anchor - scrollOffset;
         if (offline) {
             // Don't scroll the top edge before the recorded start.
@@ -1041,21 +1191,52 @@ export default function EdrView({
         }
         const top = bottom - timeWindowMs;
         return { indexDomain: [top, bottom], samples: sorted };
-    }, [indexMode, sorted, depthSpanIdx, maxDepth, scrollOffset, timeWindowMs, offline, winFromMs, winToMs]);
+    }, [indexMode, sorted, depthSpanIdx, maxDepth, scrollOffset, timeWindowMs, offline, winFromMs, winToMs, nowMs]);
 
     const latestValues = useMemo(() => (sorted.length ? sorted[sorted.length - 1].values : {}), [sorted]);
+
+    // ---- Data freshness (drives the LIVE / STALE / OFFLINE badge + stale overlay) ----
+    // Newest of: the live payload's own _meta.ts and the newest buffered sample.
+    const lastDataTs = useMemo(() => {
+        const metaTs = liveData?._meta?.ts ? new Date(liveData._meta.ts).getTime() : NaN;
+        const sampleTs = sorted.length ? sorted[sorted.length - 1].timestamp : NaN;
+        const best = Math.max(
+            Number.isFinite(metaTs) ? metaTs : -Infinity,
+            Number.isFinite(sampleTs) ? sampleTs : -Infinity
+        );
+        return Number.isFinite(best) && best > 0 ? best : null;
+    }, [liveData, sorted]);
+    const dataAgeMs = lastDataTs == null ? null : Math.max(0, nowMs - lastDataTs);
+    const freshness = offline
+        ? 'replay'
+        : (dataAgeMs == null || dataAgeMs >= OFFLINE_AFTER_MS)
+            ? 'offline'
+            : dataAgeMs >= STALE_AFTER_MS ? 'stale' : 'live';
+    const freshColor = freshness === 'live' ? '#22c55e' : freshness === 'stale' ? '#f59e0b' : '#ef4444';
+    const freshLabel = freshness === 'live'
+        ? 'LIVE'
+        : freshness === 'stale' ? `STALE · ${fmtAge(dataAgeMs)}` : 'OFFLINE';
+    const showStaleOverlay = !offline && freshness !== 'live' && lastDataTs != null;
 
     // ---- Index axis ticks ----
     const axisTicks = useMemo(() => {
         const [a, b] = indexDomain;
         const count = 6;
+        // When the visible window crosses midnight, HH:MM:SS alone is ambiguous —
+        // add a small date line to each tick.
+        const crossesMidnight = indexMode !== 'depth'
+            && new Date(a).toDateString() !== new Date(b).toDateString();
         return Array.from({ length: count + 1 }, (_, i) => {
             const frac = i / count;
             const v = a + frac * (b - a);
-            const label = indexMode === 'depth'
-                ? `${Math.round(v)}`
-                : new Date(v).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
-            return { frac, label };
+            if (indexMode === 'depth') return { frac, label: `${Math.round(v)}`, dateLabel: null };
+            return {
+                frac,
+                label: new Date(v).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }),
+                dateLabel: crossesMidnight
+                    ? new Date(v).toLocaleDateString([], { month: 'short', day: 'numeric' })
+                    : null
+            };
         });
     }, [indexDomain, indexMode]);
 
@@ -1259,12 +1440,16 @@ export default function EdrView({
                         </Box>
                     </MuiTooltip>
                 ) : (
-                    /* LIVE indicator + jump-to-live affordance. Scrolling lives on the side rails. */
+                    /* Freshness badge (LIVE / STALE + age / OFFLINE) + jump-to-live affordance. */
                     liveAtBottom ? (
-                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.6 }}>
-                            <Radio size={13} color="#22c55e" />
-                            <Typography sx={{ color: '#22c55e', fontSize: '0.72rem', fontWeight: 900, letterSpacing: 0.5 }}>LIVE</Typography>
-                        </Box>
+                        <MuiTooltip title={lastDataTs ? `Last data ${fmtClock(lastDataTs)}` : 'No data received yet'}>
+                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.6 }}>
+                                <Radio size={13} color={freshColor} />
+                                <Typography sx={{ color: freshColor, fontSize: '0.72rem', fontWeight: 900, letterSpacing: 0.5, fontVariantNumeric: 'tabular-nums' }}>
+                                    {freshLabel}
+                                </Typography>
+                            </Box>
+                        </MuiTooltip>
                     ) : (
                         <MuiTooltip title="Jump to live">
                             <Button
@@ -1426,6 +1611,11 @@ export default function EdrView({
                     </Typography>
                     {axisTicks.map((t, i) => (
                         <Box key={i} sx={{ position: 'absolute', left: 0, right: 0, top: `${t.frac * 100}%`, transform: 'translateY(-50%)', px: 0.25 }}>
+                            {t.dateLabel && (
+                                <Typography sx={{ fontSize: isCompact ? '0.48rem' : '0.52rem', color: subText, textAlign: 'center', opacity: 0.85, whiteSpace: 'nowrap', lineHeight: 1.1 }}>
+                                    {t.dateLabel}
+                                </Typography>
+                            )}
                             <Typography sx={{ fontSize: isCompact ? '0.55rem' : '0.62rem', color: subText, textAlign: 'center', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
                                 {t.label}
                             </Typography>
@@ -1434,7 +1624,7 @@ export default function EdrView({
                 </Box>
 
                 {/* Strips */}
-                <Box sx={{ flex: 1, minWidth: 0, display: 'flex', gap: 0.75 }}>
+                <Box sx={{ flex: 1, minWidth: 0, display: 'flex', gap: 0.75, position: 'relative' }}>
                     {strips.map((strip, si) => (
                         <Box key={si} sx={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
                             {/* header */}
@@ -1473,6 +1663,97 @@ export default function EdrView({
                             />
                         </Box>
                     ))}
+
+                    {/* Stale-data overlay (UI-02): ingestion stopped — say since WHEN,
+                        pinned near the live (bottom) edge where the gap opens. */}
+                    {showStaleOverlay && (
+                        <Box
+                            sx={{
+                                position: 'absolute',
+                                left: 0,
+                                right: 0,
+                                bottom: `${railBottom + 10}px`,
+                                display: 'flex',
+                                justifyContent: 'center',
+                                pointerEvents: 'none',
+                                zIndex: 6
+                            }}
+                        >
+                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.6, px: 1.25, py: 0.4, borderRadius: 1, bgcolor: panelBg, border: `1px solid ${freshColor}`, boxShadow: 3 }}>
+                                <Radio size={13} color={freshColor} />
+                                <Typography sx={{ color: freshColor, fontSize: '0.7rem', fontWeight: 800, letterSpacing: 0.3, fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
+                                    no data since {fmtClock(lastDataTs)}
+                                </Typography>
+                            </Box>
+                        </Box>
+                    )}
+
+                    {/* History-seed states (UI-13) — non-blocking overlays over the chart
+                        area only, so live ingestion keeps painting underneath. */}
+                    {histLoading && (
+                        <Box
+                            sx={{
+                                position: 'absolute',
+                                left: 0,
+                                right: 0,
+                                top: `${railTop + 8}px`,
+                                display: 'flex',
+                                justifyContent: 'center',
+                                pointerEvents: 'none',
+                                zIndex: 6
+                            }}
+                        >
+                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, px: 1.25, py: 0.4, borderRadius: 1, bgcolor: panelBg, border: `1px solid ${border}`, boxShadow: 2 }}>
+                                <CircularProgress size={13} thickness={5} sx={{ color: accent }} />
+                                <Typography sx={{ color: subText, fontSize: '0.68rem', fontWeight: 700, whiteSpace: 'nowrap' }}>
+                                    Loading recorded data…
+                                </Typography>
+                            </Box>
+                        </Box>
+                    )}
+                    {!histLoading && histError && (
+                        <Box
+                            sx={{
+                                position: 'absolute',
+                                left: 0,
+                                right: 0,
+                                top: `${railTop + 8}px`,
+                                display: 'flex',
+                                justifyContent: 'center',
+                                pointerEvents: 'none',
+                                zIndex: 6
+                            }}
+                        >
+                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 1.25, py: 0.4, borderRadius: 1, bgcolor: panelBg, border: '1px solid #ef4444', boxShadow: 2, pointerEvents: 'auto' }}>
+                                <Typography sx={{ color: '#ef4444', fontSize: '0.68rem', fontWeight: 700, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 320 }}>
+                                    History failed: {histError}
+                                </Typography>
+                                <Button
+                                    size="small"
+                                    onClick={fetchHistory}
+                                    sx={{ textTransform: 'none', fontWeight: 800, py: 0, px: 1, minWidth: 0, color: text, border: `1px solid ${border}` }}
+                                >
+                                    Retry
+                                </Button>
+                            </Box>
+                        </Box>
+                    )}
+                    {!histLoading && !histError && histEmpty && sorted.length === 0 && (
+                        <Box
+                            sx={{
+                                position: 'absolute',
+                                inset: 0,
+                                display: 'grid',
+                                placeItems: 'center',
+                                pointerEvents: 'none',
+                                zIndex: 6
+                            }}
+                        >
+                            <Typography sx={{ color: subText, fontSize: '0.74rem', fontWeight: 700, opacity: 0.8 }}>
+                                No recorded data in this window
+                            </Typography>
+                        </Box>
+                    )}
                 </Box>
 
                 {/* RIGHT scroll rail (mirror of the left) — full mode only; compact keeps a single control. */}

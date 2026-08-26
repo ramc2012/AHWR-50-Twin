@@ -1,32 +1,79 @@
 import React from 'react';
 import { Chip, Paper, Box, Typography } from '@mui/material';
-import { STATUS_COLOR } from '../theme';
+import { STATUS_COLOR, WELL_STATUS_COLOR } from '../theme';
 
-export const fmtNum = (v, d = 1) => (v == null || Number.isNaN(Number(v)) ? '—' : Number(v).toLocaleString(undefined, { maximumFractionDigits: d }));
+// ---- Shared formatters (UI-29 / UI-30) ------------------------------------
 
-export function fmtAgo(ts) {
-    if (!ts) return 'never';
-    const s = Math.max(0, Math.round((Date.now() - new Date(ts).getTime()) / 1000));
+// '' counts as missing too (mirrors the old rig/hmi `num`), so a blank field
+// never renders as "0".
+export const fmtNum = (v, d = 1) => (v == null || v === '' || Number.isNaN(Number(v)) ? '—' : Number(v).toLocaleString(undefined, { maximumFractionDigits: d }));
+
+// Relative "x ago". `nullLabel` covers both call-site conventions:
+// 'never' (default) for liveness columns, '—' for optional record timestamps.
+export function fmtAgo(ts, nullLabel = 'never') {
+    if (ts == null || ts === '') return nullLabel;
+    const ms = typeof ts === 'number' ? ts : new Date(ts).getTime();
+    if (!Number.isFinite(ms)) return nullLabel;
+    const s = Math.max(0, Math.round((Date.now() - ms) / 1000));
     if (s < 60) return `${s}s ago`;
     if (s < 3600) return `${Math.round(s / 60)}m ago`;
     if (s < 86400) return `${Math.round(s / 3600)}h ago`;
     return `${Math.round(s / 86400)}d ago`;
 }
 
-export function StatusChip({ status, size = 'small' }) {
-    const color = STATUS_COLOR[status] || '#64748b';
-    const label = (status || 'unknown').toUpperCase();
+// 24-hour date/time formatters: fmtDate -> "DD Mmm YYYY",
+// fmtDateTime -> "DD Mmm HH:mm" (UI-30 — locale-independent, never 12-hour).
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const pad2 = (n) => String(n).padStart(2, '0');
+
+export function fmtDate(v) {
+    if (!v) return '—';
+    const d = new Date(v);
+    return Number.isNaN(d.getTime()) ? '—' : `${pad2(d.getDate())} ${MONTHS[d.getMonth()]} ${d.getFullYear()}`;
+}
+
+export function fmtDateTime(v) {
+    if (!v) return '—';
+    const d = new Date(v);
+    return Number.isNaN(d.getTime()) ? '—' : `${pad2(d.getDate())} ${MONTHS[d.getMonth()]} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+}
+
+export function fmtDuration(sec) {
+    if (sec == null || Number.isNaN(Number(sec))) return '—';
+    const s = Math.max(0, Math.round(Number(sec)));
+    const d = Math.floor(s / 86400);
+    const h = Math.floor((s % 86400) / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    if (d > 0) return `${d}d ${h}h`;
+    if (h > 0) return `${h}h ${m}m`;
+    if (m > 0) return `${m}m`;
+    return `${s}s`;
+}
+
+// ---- Tinted chip primitive (UI-41) ----------------------------------------
+// The shared bgcolor c+'22' / border c+'55' recipe every coloured chip uses.
+export function TintChip({ label, color, size = 'small', sx }) {
     return (
         <Chip size={size} label={label}
-            sx={{ bgcolor: color + '22', color, border: `1px solid ${color}55`, fontWeight: 700, letterSpacing: 0.4 }} />
+            sx={{ bgcolor: color + '22', color, border: `1px solid ${color}55`, fontWeight: 700, ...sx }} />
     );
+}
+
+export function StatusChip({ status, size = 'small' }) {
+    const color = STATUS_COLOR[status] || '#64748b';
+    return <TintChip size={size} label={(status || 'unknown').toUpperCase()} color={color} sx={{ letterSpacing: 0.4 }} />;
 }
 
 export function PriorityChip({ priority }) {
     if (!priority) return <Chip size="small" label="—" variant="outlined" />;
     const map = { P1: '#ef4444', P2: '#f59e0b', P3: '#38bdf8' };
-    const c = map[priority] || '#64748b';
-    return <Chip size="small" label={priority} sx={{ bgcolor: c + '22', color: c, border: `1px solid ${c}55`, fontWeight: 700 }} />;
+    return <TintChip label={priority} color={map[priority] || '#64748b'} />;
+}
+
+// Well lifecycle chip (colours from theme WELL_STATUS_COLOR, not rig liveness).
+export function WellStatusChip({ status, size = 'small' }) {
+    const c = WELL_STATUS_COLOR[status] || '#64748b';
+    return <TintChip size={size} label={(status || 'unknown').toUpperCase()} color={c} sx={{ letterSpacing: 0.4 }} />;
 }
 
 export function KpiCard({ label, value, sub, color, icon }) {

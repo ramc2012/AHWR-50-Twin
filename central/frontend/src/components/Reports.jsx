@@ -1,12 +1,36 @@
 import React, { useEffect, useState, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import {
     Box, Paper, Typography, Grid, Table, TableBody, TableCell, TableHead, TableRow, TableContainer,
-    Button, Stack, Chip, ToggleButton, ToggleButtonGroup, Alert,
+    TableSortLabel, Button, Stack, Chip, ToggleButton, ToggleButtonGroup, Alert,
 } from '@mui/material';
 import { Download } from '@mui/icons-material';
 import { api } from '../api';
 import { KpiCard, StatusChip, fmtAgo } from './common';
+
+// Small table-sort helper (duplicated per file for now — a later pass consolidates).
+function useTableSort(initialKey, initialDir = 'desc') {
+    const [key, setKey] = useState(initialKey);
+    const [dir, setDir] = useState(initialDir);
+    const onSort = (k) => {
+        if (k === key) setDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+        else { setKey(k); setDir('desc'); }
+    };
+    const sorted = (rows, getters) => {
+        const g = key && getters[key];
+        if (!g) return rows;
+        return [...rows].sort((x, y) => {
+            const a = g(x), b = g(y);
+            if (a == null && b == null) return 0;
+            if (a == null) return 1;
+            if (b == null) return -1;
+            const c = (typeof a === 'number' && typeof b === 'number') ? a - b : String(a).localeCompare(String(b));
+            return dir === 'desc' ? -c : c;
+        });
+    };
+    return { key, dir, onSort, sorted };
+}
 
 // Reporting periods (audit #29): snapshot is the live current-state view; the others
 // aggregate over the trailing window on the backend.
@@ -18,7 +42,9 @@ const PERIODS = [
 ];
 
 export default function Reports() {
+    const nav = useNavigate();
     const [period, setPeriod] = useState('snapshot');
+    const { key: sortKey, dir: sortDir, onSort, sorted } = useTableSort(null);
     const [rows, setRows] = useState([]);
     const [windowInterval, setWindowInterval] = useState('');
     const [err, setErr] = useState('');
@@ -59,6 +85,13 @@ export default function Reports() {
     const alarms = rows.reduce((s, r) => s + (r.alarm_active ?? r.alarm_events ?? 0), 0);
     const live = rows.filter((r) => r.gate === 'live').length;
 
+    const view = sorted(rows, {
+        adoption: (r) => r.adoption_pct ?? 0,
+        alarms: (r) => r.alarm_active ?? r.alarm_events ?? 0,
+    });
+
+    const openRig = (rigId) => nav(`/rigs/${rigId}`);
+
     return (
         <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
             <Stack direction="row" alignItems="center" mb={2} spacing={2} flexWrap="wrap" useFlexGap>
@@ -96,13 +129,21 @@ export default function Reports() {
                         <TableHead><TableRow>
                             <TableCell>Rig</TableCell><TableCell>Status</TableCell><TableCell>Activity</TableCell>
                             <TableCell align="right">Health</TableCell><TableCell align="right">Tags</TableCell>
-                            <TableCell align="right">Alarms (P1)</TableCell><TableCell>Stage-gate</TableCell>
-                            <TableCell align="right">Adoption</TableCell><TableCell align="right">Last data</TableCell>
+                            <TableCell align="right" sortDirection={sortKey === 'alarms' ? sortDir : false}>
+                                <TableSortLabel active={sortKey === 'alarms'} direction={sortKey === 'alarms' ? sortDir : 'desc'} onClick={() => onSort('alarms')}>Alarms (P1)</TableSortLabel>
+                            </TableCell><TableCell>Stage-gate</TableCell>
+                            <TableCell align="right" sortDirection={sortKey === 'adoption' ? sortDir : false}>
+                                <TableSortLabel active={sortKey === 'adoption'} direction={sortKey === 'adoption' ? sortDir : 'desc'} onClick={() => onSort('adoption')}>Adoption</TableSortLabel>
+                            </TableCell><TableCell align="right">Last data</TableCell>
                         </TableRow></TableHead>
                         <TableBody>
-                            {rows.map((r) => (
-                                <TableRow key={r.rig_id} hover>
-                                    <TableCell><Typography variant="body2" fontWeight={700}>{r.name}</Typography></TableCell>
+                            {view.map((r) => (
+                                <TableRow key={r.rig_id} hover role="button" tabIndex={0}
+                                    aria-label={`Open ${r.name || r.rig_id}`}
+                                    onClick={() => openRig(r.rig_id)}
+                                    onKeyDown={(e) => { if ((e.key === 'Enter' || e.key === ' ') && e.target === e.currentTarget) { e.preventDefault(); openRig(r.rig_id); } }}
+                                    sx={{ cursor: 'pointer', '&:focus-visible': { outline: '2px solid', outlineColor: 'primary.main', outlineOffset: -2 } }}>
+                                    <TableCell><Typography variant="body2" fontWeight={700} sx={{ color: 'primary.main', '&:hover': { textDecoration: 'underline' } }}>{r.name}</Typography></TableCell>
                                     <TableCell><StatusChip status={r.status} /></TableCell>
                                     <TableCell><Typography variant="caption">{r.active_activity || '—'}</Typography></TableCell>
                                     <TableCell align="right">{r.health_score ?? 0}</TableCell>

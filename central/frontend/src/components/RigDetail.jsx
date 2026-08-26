@@ -1,24 +1,28 @@
-import React, { useEffect, useState, useCallback } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import React, { useEffect, useState, useCallback, Suspense } from 'react';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import {
     Box, Grid, Paper, Typography, Stack, Button, Link as MLink, Alert,
-    Tabs, Tab,
+    Tabs, Tab, Chip,
 } from '@mui/material';
 import { ArrowBack, ExpandMore, ExpandLess } from '@mui/icons-material';
 import { api, phaseColor } from '../api';
 import { socket } from '../socket';
-import { StatusChip, HealthBar, PriorityChip, fmtAgo, fmtNum } from './common';
+import { StatusChip, HealthBar, PriorityChip, fmtAgo, fmtNum, fmtDuration } from './common';
 import { RigDataProvider, useRigData } from '../context/RigDataContext';
-import EdrView from './rig/EdrView';
+import { ENUM } from './rig/hmi';
 import ErrorBoundary from './ErrorBoundary';
-import DashboardPanel from './rig/panels/DashboardPanel';
-import EquipmentPanel from './rig/panels/EquipmentPanel';
-import WellControlPanel from './rig/panels/WellControlPanel';
-import TrendsPanel from './rig/panels/TrendsPanel';
-import WorkoverPanel from './rig/panels/WorkoverPanel';
-import RigAlarmsPanel from './rig/panels/RigAlarmsPanel';
-import RigReportPanel from './rig/panels/RigReportPanel';
-import RigMaintenancePanel from './rig/panels/RigMaintenancePanel';
+
+// HMI mirror panels are lazy (UI-15): EdrView/recharts stay out of this chunk
+// until the matching tab is opened (the compact Overview EDR loads on demand too).
+const EdrView = React.lazy(() => import('./rig/EdrView'));
+const DashboardPanel = React.lazy(() => import('./rig/panels/DashboardPanel'));
+const EquipmentPanel = React.lazy(() => import('./rig/panels/EquipmentPanel'));
+const WellControlPanel = React.lazy(() => import('./rig/panels/WellControlPanel'));
+const TrendsPanel = React.lazy(() => import('./rig/panels/TrendsPanel'));
+const WorkoverPanel = React.lazy(() => import('./rig/panels/WorkoverPanel'));
+const RigAlarmsPanel = React.lazy(() => import('./rig/panels/RigAlarmsPanel'));
+const RigReportPanel = React.lazy(() => import('./rig/panels/RigReportPanel'));
+const RigMaintenancePanel = React.lazy(() => import('./rig/panels/RigMaintenancePanel'));
 
 // Per-rig remote-HMI tabs (proposal §6.1: rig drill-down mirrors the edge dashboard).
 const HMI_TABS = [
@@ -32,17 +36,60 @@ const HMI_TABS = [
     { key: 'maintenance', label: 'Maintenance', el: RigMaintenancePanel },
 ];
 
+// Map raw header enum strings coming through active_activity (e.g. "OP.MODE 0"
+// or a bare code) onto the shared edge opMode enum; unmapped codes render as
+// "#<n>" so a raw number is never mistaken for a label.
+function fmtActivity(v) {
+    if (v == null || v === '') return null;
+    const s = String(v).trim();
+    const m = s.match(/^OP[._ ]?\s*MODE\s*[:#]?\s*(-?\d+)$/i);
+    const code = m ? Number(m[1]) : (/^-?\d+$/.test(s) ? Number(s) : null);
+    if (code == null) return s;
+    const hit = ENUM.opMode[String(code)];
+    return hit ? hit[0] : `#${code}`;
+}
+
+// ESD / lockout flags from the rig payload: prefer flat fields if the backend
+// provides them, else scan the grouped latest-value tag lists.
+function safetyFlags(rig) {
+    const vals = {};
+    for (const list of Object.values(rig?.groups || {})) {
+        for (const t of (Array.isArray(list) ? list : [])) vals[t.metric] = t.value;
+    }
+    return {
+        esd: Number(rig?.esd_active ?? vals['safety.esd_active']) > 0,
+        lockout: Number(rig?.lockout_active ?? vals['safety.lockout_active']) > 0,
+    };
+}
+
 export default function RigDetail() {
     const { id } = useParams();
     const nav = useNavigate();
     const [rig, setRig] = useState(null);
     const [err, setErr] = useState('');
     const [metric, setMetric] = useState('drawworks.hook_load');  // KPI-strip highlight selection
-    const [tab, setTab] = useState(0);   // 0 = Overview, 1+ = HMI mirror tabs
     const [kpiOpen, setKpiOpen] = useState(false);  // KPI strip on HMI tabs (default hidden)
 
+    // URL-addressable tabs (UI-07): ?tab=<HMI_TABS key>; absent/unknown -> Overview.
+    const [searchParams, setSearchParams] = useSearchParams();
+    const tabKey = searchParams.get('tab');
+    const tabIdx = HMI_TABS.findIndex((t) => t.key === tabKey);
+    const tab = tabIdx >= 0 ? tabIdx + 1 : 0;   // 0 = Overview, 1+ = HMI mirror tabs
+    const setTab = useCallback((v) => {
+        setSearchParams((prev) => {
+            const next = new URLSearchParams(prev);
+            if (v > 0) next.set('tab', HMI_TABS[v - 1].key); else next.delete('tab');
+            return next;
+        }, { replace: true });
+    }, [setSearchParams]);
+
     const load = useCallback(() => {
-        api.rig(id).then(setRig).catch((e) => setErr(e?.response?.data?.error || 'failed to load rig'));
+        api.rig(id)
+            .then((r) => { setRig(r); setErr(''); })   // clear stale error on a good poll
+            .catch((e) => {
+                if (e?.response?.status === 401) return;   // auth redirect handled globally
+                setErr(e?.response?.data?.error || 'failed to load rig');
+            });
     }, [id]);
 
     useEffect(() => { load(); const t = setInterval(load, 5000); return () => clearInterval(t); }, [load]);
@@ -54,8 +101,17 @@ export default function RigDetail() {
         return () => socket.off('fleet_update', onUpdate);
     }, [id]);
 
-    if (err) return <Alert severity="error">{err} — <MLink sx={{ cursor: 'pointer' }} onClick={() => nav('/')}>back to fleet</MLink></Alert>;
+    // Full-page error only when we have nothing to show; otherwise keep the last
+    // good view and surface a small retrying banner (UI-05).
+    if (err && !rig) return <Alert severity="error">{err} — <MLink sx={{ cursor: 'pointer' }} onClick={() => nav('/')}>back to fleet</MLink></Alert>;
     if (!rig) return <Typography color="text.secondary">Loading {id}…</Typography>;
+
+    const safety = safetyFlags(rig);
+    const safetyLabel = [safety.esd && 'ESD ACTIVE', safety.lockout && 'LOCKOUT ACTIVE'].filter(Boolean).join(' + ');
+    // Active well (UI-33): tolerate object ({wellId|well_id, name}) or bare id; absent -> no chip.
+    const aw = rig.activeWell;
+    const activeWellId = aw == null ? null
+        : (typeof aw === 'object' ? (aw.wellId ?? aw.well_id ?? aw.id ?? null) : String(aw));
 
     // The Overview tab renders its own KPI row, so the shared collapsible strip is only
     // for the HMI tabs (toggled via the "KPIs" button); never auto-shown on Overview.
@@ -65,18 +121,36 @@ export default function RigDetail() {
             {/* Header chrome — non-growing, single compact line so the tab content fills
                 the rest of the viewport (esp. the EDR). */}
             <Box sx={{ flex: '0 0 auto' }}>
+                {/* ESD / lockout — persistent read-only alarm banner on every tab (UI-01).
+                    Monitoring only: never any control affordance from the central facility. */}
+                {safetyLabel && (
+                    <Alert severity="error" icon={false}
+                        sx={{ mb: 1, py: 0.25, fontWeight: 800, letterSpacing: 0.5, justifyContent: 'center' }}>
+                        {safetyLabel} — read-only monitoring
+                    </Alert>
+                )}
+                {/* Poll failing but last good snapshot still on screen (UI-05). */}
+                {err && (
+                    <Alert severity="warning" sx={{ mb: 1, py: 0 }}>refresh failing — retrying</Alert>
+                )}
                 <Paper sx={{ px: 1.25, py: 0.75, mb: 1 }}>
                     <Stack direction="row" spacing={1.5} alignItems="center" flexWrap="wrap" useFlexGap>
-                        <Button startIcon={<ArrowBack />} onClick={() => nav('/')} size="small" variant="outlined">Fleet</Button>
+                        <Button startIcon={<ArrowBack />} size="small" variant="outlined"
+                            onClick={() => (window.history.length > 1 ? nav(-1) : nav('/'))}>Back</Button>
                         <Box>
                             <Typography variant="subtitle1" fontWeight={800} lineHeight={1.1}>{rig.name}</Typography>
                             <Typography variant="caption" color="text.secondary">{rig.rigId} · {rig.field}</Typography>
                         </Box>
                         <StatusChip status={rig.status} size="small" />
                         {rig.alarm?.highest && <PriorityChip priority={rig.alarm.highest} />}
+                        {activeWellId && (
+                            <Chip size="small" clickable variant="outlined" color="info"
+                                label={`Well ${aw?.name || activeWellId}`}
+                                onClick={() => nav(`/wells/${encodeURIComponent(activeWellId)}`)} />
+                        )}
                         <Box sx={{ flexGrow: 1 }} />
                         <Typography variant="caption" color="text.secondary" sx={{ display: { xs: 'none', md: 'block' } }}>
-                            {rig.activeActivity || '—'} · {rig.activeJob || 'no job'}
+                            {fmtActivity(rig.activeActivity) || '—'} · {rig.activeJob || 'no job'}
                         </Typography>
                         <Box sx={{ width: 90, display: { xs: 'none', sm: 'block' } }}><HealthBar value={rig.healthScore} /></Box>
                         <Typography variant="caption" color="text.secondary" sx={{ display: { xs: 'none', lg: 'block' } }}>
@@ -121,15 +195,17 @@ export default function RigDetail() {
                 and the HMI mirror panels. */}
             <Box sx={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
             <RigDataProvider rigId={id}>
-                {tab === 0 ? (
-                    <ErrorBoundary key="overview" label="Overview">
-                        <OverviewTab rigId={id} rig={rig} />
-                    </ErrorBoundary>
-                ) : (
-                    <ErrorBoundary key={HMI_TABS[tab - 1].key} label="This panel">
-                        {React.createElement(HMI_TABS[tab - 1].el, { rigId: id, rig })}
-                    </ErrorBoundary>
-                )}
+                <Suspense fallback={<Typography variant="caption" color="text.secondary">Loading panel…</Typography>}>
+                    {tab === 0 ? (
+                        <ErrorBoundary key="overview" label="Overview">
+                            <OverviewTab rigId={id} rig={rig} />
+                        </ErrorBoundary>
+                    ) : (
+                        <ErrorBoundary key={HMI_TABS[tab - 1].key} label="This panel">
+                            {React.createElement(HMI_TABS[tab - 1].el, { rigId: id, rig })}
+                        </ErrorBoundary>
+                    )}
+                </Suspense>
             </RigDataProvider>
             </Box>
         </Box>
@@ -140,13 +216,6 @@ export default function RigDetail() {
 // Overview — operator dashboard mirror of the edge app.
 // ---------------------------------------------------------------------------
 
-const fmtDur = (sec) => {
-    const s = Math.max(0, Math.round(Number(sec) || 0));
-    const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
-    if (h > 0) return `${h}h ${m}m`;
-    if (m > 0) return `${m}m`;
-    return `${s}s`;
-};
 const fmtMins = (sec) => `${Math.round((Number(sec) || 0) / 60)}m`;
 
 // Map an equipment status code to a coarse chip ({label, color}) for the
@@ -244,9 +313,9 @@ function OverviewTab({ rigId, rig }) {
                         <Typography variant="caption" color="text.secondary">
                             Current well activity:&nbsp;
                             <Box component="span" sx={{ color: phaseColor(cur?.phase), fontWeight: 800 }}>
-                                {cur?.phase || cur?.code || '—'}
+                                {fmtActivity(cur?.phase ?? cur?.code) || '—'}
                             </Box>
-                            {cur?.job ? ` · ${cur.job}` : ''}{cur?.sinceSec != null ? ` · for ${fmtDur(cur.sinceSec)}` : ''}
+                            {cur?.job ? ` · ${cur.job}` : ''}{cur?.sinceSec != null ? ` · for ${fmtDuration(cur.sinceSec)}` : ''}
                         </Typography>
                     </Stack>
 
@@ -265,7 +334,7 @@ function OverviewTab({ rigId, rig }) {
                             <Stack key={p.phase || i} direction="row" spacing={0.5} alignItems="center">
                                 <Box sx={{ width: 10, height: 10, borderRadius: '2px', bgcolor: phaseColor(p.phase) }} />
                                 <Typography variant="caption" fontWeight={600}>{p.phase}</Typography>
-                                <Typography variant="caption" color="text.secondary">{fmtDur(p.durationSec)}</Typography>
+                                <Typography variant="caption" color="text.secondary">{fmtDuration(p.durationSec)}</Typography>
                             </Stack>
                         ))}
                         {!byPhase.length && <Typography variant="caption" color="text.secondary">No activity recorded in the window.</Typography>}
@@ -343,8 +412,10 @@ function OverviewTab({ rigId, rig }) {
                 <Paper sx={{ p: 1.25 }}>
                     <Typography variant="subtitle2" color="text.secondary" gutterBottom>RECORDER (EDR)</Typography>
                     <Box sx={{ height: 260 }}>
-                        <EdrView mode="compact" rigId={rigId} storageKey={`crmf-edr-ov-${rigId}`}
-                            defaultStrips={EDR_STRIPS} channels={EDR_CHANNELS} />
+                        <Suspense fallback={<Typography variant="caption" color="text.secondary">Loading recorder…</Typography>}>
+                            <EdrView mode="compact" rigId={rigId} storageKey={`crmf-edr-ov-${rigId}`}
+                                defaultStrips={EDR_STRIPS} channels={EDR_CHANNELS} />
+                        </Suspense>
                     </Box>
                 </Paper>
             </Grid>

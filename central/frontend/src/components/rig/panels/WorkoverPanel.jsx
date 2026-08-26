@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
 import {
     Box, Paper, Grid, Stack, Typography, Chip, Alert, Skeleton,
     Table, TableBody, TableCell, TableHead, TableRow, TableContainer,
@@ -6,7 +6,8 @@ import {
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
 import { useRigData } from '../../../context/RigDataContext';
 import { api } from '../../../api';
-import { ValueTile, StatusChip, PanelHead, num, freshness } from '../hmi';
+import { ValueTile, EnumChip, PanelHead, num, freshness, ENUM } from '../hmi';
+import { fmtAgo, TintChip } from '../../common';
 import EdrView from '../EdrView';
 
 // Compact EDR strip config — workover-relevant pens (Hoisting + Pumps), mirrors the edge.
@@ -36,19 +37,16 @@ const EDR_CHANNELS = ['drawworks.hook_load', 'drawworks.block_position', 'mudpum
 
 const MAKEUP_METRIC = 'pct.makeup_torque';
 
-// Relative "x ago" formatter for connection timestamps.
-function ago(ts) {
-    if (ts == null) return '—';
-    const ms = typeof ts === 'number' ? ts : Date.parse(ts);
-    if (!Number.isFinite(ms)) return '—';
-    const s = Math.round((Date.now() - ms) / 1000);
-    if (s < 0) return 'now';
-    if (s < 60) return `${s}s ago`;
-    const m = Math.round(s / 60);
-    if (m < 60) return `${m}m ago`;
-    const h = Math.round(m / 60);
-    if (h < 24) return `${h}h ago`;
-    return `${Math.round(h / 24)}d ago`;
+// Map raw activity enum strings ("OP.MODE 0" or a bare code) onto the shared
+// edge opMode enum; unmapped codes render as "#<n>" (matches the RigDetail header).
+function fmtActivity(v) {
+    if (v == null || v === '') return null;
+    const s = String(v).trim();
+    const m = s.match(/^OP[._ ]?\s*MODE\s*[:#]?\s*(-?\d+)$/i);
+    const code = m ? Number(m[1]) : (/^-?\d+$/.test(s) ? Number(s) : null);
+    if (code == null) return s;
+    const hit = ENUM.opMode[String(code)];
+    return hit ? hit[0] : `#${code}`;
 }
 
 // PASS / FAIL coloured chip for a connection result.
@@ -58,7 +56,7 @@ function ResultChip({ value }) {
     const pass = v === 'PASS' || v === 'OK' || v === 'GOOD' || v === '1';
     const fail = v === 'FAIL' || v === 'BAD' || v === 'NG' || v === '0';
     const color = pass ? '#22c55e' : fail ? '#ef4444' : '#64748b';
-    return <Chip size="small" label={pass ? 'PASS' : fail ? 'FAIL' : v} sx={{ bgcolor: color + '22', color, border: `1px solid ${color}55`, fontWeight: 700 }} />;
+    return <TintChip label={pass ? 'PASS' : fail ? 'FAIL' : v} color={color} />;
 }
 
 export default function WorkoverPanel({ rigId, rig }) {
@@ -66,33 +64,32 @@ export default function WorkoverPanel({ rigId, rig }) {
 
     const [series, setSeries] = useState([]);
     const [seriesErr, setSeriesErr] = useState('');
-    const [conns, setConns] = useState([]);
-    const [connsErr, setConnsErr] = useState('');
 
     // Torque-turn make-up trend (30 min window), refreshed on the slow loop.
+    // Null samples are kept so real gaps stay gaps on the chart (connectNulls off).
     const loadSeries = useCallback(() => {
         if (!rigId) return;
         api.rigHistoryMulti(rigId, [MAKEUP_METRIC], 30)
             .then((d) => {
                 const rows = (d?.rows || [])
-                    .map((r) => ({ t: r.t, v: r[MAKEUP_METRIC] }))
-                    .filter((r) => r.t != null && r.v != null);
+                    .map((r) => ({ t: r.t, v: r[MAKEUP_METRIC] ?? null }))
+                    .filter((r) => r.t != null);
                 setSeries(rows);
                 setSeriesErr('');
             })
             .catch((e) => { if (e?.response?.status !== 401) setSeriesErr(e?.response?.data?.error || 'torque-turn history unavailable'); });
     }, [rigId]);
 
-    // Connection records — poll api.rig every 8s.
-    const loadConns = useCallback(() => {
-        if (!rigId) return;
-        api.rig(rigId)
-            .then((d) => { setConns(Array.isArray(d?.recentConnections) ? d.recentConnections : []); setConnsErr(''); })
-            .catch((e) => { if (e?.response?.status !== 401) setConnsErr(e?.response?.data?.error || 'connection records unavailable'); });
-    }, [rigId]);
-
     useEffect(() => { loadSeries(); const t = setInterval(loadSeries, 30000); return () => clearInterval(t); }, [loadSeries]);
-    useEffect(() => { loadConns(); const t = setInterval(loadConns, 8000); return () => clearInterval(t); }, [loadConns]);
+
+    // Connection records (UI-28): the parent RigDetail 5s poll already carries
+    // recentConnections in the rig prop, so no duplicate api.rig() poll here.
+    // Keep the last non-empty list so a transient payload without the field
+    // (e.g. a socket delta merge) never blanks the table.
+    const lastConnsRef = useRef([]);
+    const incoming = Array.isArray(rig?.recentConnections) ? rig.recentConnections : null;
+    if (incoming && incoming.length) lastConnsRef.current = incoming;
+    const conns = (incoming && incoming.length) ? incoming : lastConnsRef.current;
 
     const fr = freshness(data?._meta);
     const act = data?._activity || {};
@@ -131,7 +128,7 @@ export default function WorkoverPanel({ rigId, rig }) {
                             <Skeleton width={220} height={32} />
                         ) : (
                             <Typography variant="h6" fontWeight={800} sx={{ lineHeight: 1.2 }}>
-                                {act.label || '—'}
+                                {fmtActivity(act.label) || '—'}
                                 {act.code != null && act.code !== '' && (
                                     <Typography component="span" variant="caption" color="text.secondary" sx={{ ml: 1 }}>#{act.code}</Typography>
                                 )}
@@ -141,7 +138,7 @@ export default function WorkoverPanel({ rigId, rig }) {
                     </Box>
                     <Stack direction="row" spacing={1} alignItems="center">
                         <Typography variant="caption" color="text.secondary" sx={{ textTransform: 'uppercase', letterSpacing: 0.5 }}>Op mode</Typography>
-                        <StatusChip value={opMode} map="opMode" />
+                        <EnumChip value={opMode} map="opMode" />
                     </Stack>
                 </Stack>
             </Paper>
@@ -165,13 +162,15 @@ export default function WorkoverPanel({ rigId, rig }) {
                                     <LineChart data={series} margin={{ top: 8, right: 12, bottom: 0, left: -8 }}>
                                         <CartesianGrid stroke="rgba(255,255,255,0.06)" />
                                         <XAxis dataKey="t" type="number" domain={['dataMin', 'dataMax']} scale="time"
-                                            tickFormatter={(t) => new Date(t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                            tickFormatter={(t) => new Date(t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })}
                                             stroke="#64748b" fontSize={11} />
-                                        <YAxis stroke="#64748b" fontSize={11} width={56} />
-                                        <Tooltip labelFormatter={(t) => new Date(t).toLocaleTimeString()}
+                                        <YAxis stroke="#64748b" fontSize={11} width={64}
+                                            label={{ value: ttUnit, angle: -90, position: 'insideLeft', fill: '#64748b', fontSize: 11 }} />
+                                        <Tooltip labelFormatter={(t) => new Date(t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })}
                                             formatter={(v) => [`${num(v, 0)} ${ttUnit}`, 'Make-up']}
                                             contentStyle={{ background: '#0d1526', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 8 }} />
-                                        <Line type="monotone" dataKey="v" stroke="#3ea6ff" dot={false} strokeWidth={2} isAnimationActive={false} />
+                                        <Line type="monotone" dataKey="v" stroke="#3ea6ff" dot={false} strokeWidth={2}
+                                            isAnimationActive={false} connectNulls={false} />
                                     </LineChart>
                                 </ResponsiveContainer>
                             )}
@@ -200,7 +199,7 @@ export default function WorkoverPanel({ rigId, rig }) {
                                 </Stack>
                                 <Stack direction="row" justifyContent="space-between" sx={{ px: 0.5 }}>
                                     <Typography variant="body2" color="text.secondary">When</Typography>
-                                    <Typography variant="body2" fontWeight={700}>{ago(tt.at)}</Typography>
+                                    <Typography variant="body2" fontWeight={700}>{fmtAgo(tt.at, '—')}</Typography>
                                 </Stack>
                             </Grid>
                         </Grid>
@@ -210,8 +209,7 @@ export default function WorkoverPanel({ rigId, rig }) {
                 {/* ---- Connection records table ---- */}
                 <Grid item xs={12} md={8}>
                     <Paper>
-                        <Box sx={{ p: 2, pb: 1 }}><PanelHead title="Connection records" right={<Typography variant="caption" color="text.secondary">refresh 8s</Typography>} /></Box>
-                        {connsErr && <Alert severity="warning" variant="outlined" sx={{ mx: 2, mb: 1 }}>{connsErr}</Alert>}
+                        <Box sx={{ p: 2, pb: 1 }}><PanelHead title="Connection records" right={<Typography variant="caption" color="text.secondary">from rig snapshot · 5s</Typography>} /></Box>
                         <TableContainer sx={{ maxHeight: 320 }}>
                             <Table size="small" stickyHeader>
                                 <TableHead>
@@ -228,12 +226,12 @@ export default function WorkoverPanel({ rigId, rig }) {
                                             <TableCell><Typography variant="body2" fontWeight={700}>{c.joint ?? '—'}</Typography></TableCell>
                                             <TableCell align="right">{num(c.peak_torque, 0)} {ttUnit}</TableCell>
                                             <TableCell><ResultChip value={c.result} /></TableCell>
-                                            <TableCell align="right"><Typography variant="caption" color="text.secondary">{ago(c.ts)}</Typography></TableCell>
+                                            <TableCell align="right"><Typography variant="caption" color="text.secondary">{fmtAgo(c.ts, '—')}</Typography></TableCell>
                                         </TableRow>
                                     ))}
                                     {conns.length === 0 && (
                                         <TableRow><TableCell colSpan={4} align="center" sx={{ py: 4, color: 'text.secondary' }}>
-                                            {connsErr ? 'No records' : 'No recent connection records.'}
+                                            No recent connection records.
                                         </TableCell></TableRow>
                                     )}
                                 </TableBody>
@@ -249,7 +247,7 @@ export default function WorkoverPanel({ rigId, rig }) {
                         <Stack spacing={1}>
                             <Stack direction="row" justifyContent="space-between" alignItems="center">
                                 <Typography variant="body2" color="text.secondary">Phase</Typography>
-                                <Chip size="small" variant="outlined" label={act.label || 'activity'} />
+                                <Chip size="small" variant="outlined" label={fmtActivity(act.label) || 'activity'} />
                             </Stack>
                             <Stack direction="row" justifyContent="space-between" alignItems="center">
                                 <Typography variant="body2" color="text.secondary">Job</Typography>
@@ -257,7 +255,7 @@ export default function WorkoverPanel({ rigId, rig }) {
                             </Stack>
                             <Stack direction="row" justifyContent="space-between" alignItems="center">
                                 <Typography variant="body2" color="text.secondary">Op mode</Typography>
-                                <StatusChip value={opMode} map="opMode" />
+                                <EnumChip value={opMode} map="opMode" />
                             </Stack>
                             <Typography variant="caption" color="text.secondary" sx={{ mt: 1 }}>
                                 Mirrored from the rig-edge operator dashboard. Connection results and torque-turn

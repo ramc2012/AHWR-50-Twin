@@ -71,7 +71,10 @@ export default function Users() {
                 Local accounts and RBAC for the CRMF portal. Roles: <b>admin</b> (full + user management),
                 <b> operator</b> (governance / maintenance edits), <b>viewer</b> (read-only). Monitoring-only — no rig control.
             </Alert>
-            {err && <Alert severity="error" sx={{ mb: 2 }} onClose={() => setErr('')}>{err}</Alert>}
+            {err && (
+                <Alert severity="error" sx={{ mb: 2 }} onClose={() => setErr('')}
+                    action={<Button color="inherit" size="small" onClick={() => { setLoading(true); load(); }}>Retry</Button>}>{err}</Alert>
+            )}
 
             <Paper sx={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
                 <TableContainer sx={{ flex: 1, minHeight: 0, overflow: 'auto' }}>

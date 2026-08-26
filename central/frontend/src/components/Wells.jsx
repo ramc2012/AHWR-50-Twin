@@ -8,30 +8,11 @@ import {
 import { Search, Add, DeleteOutline } from '@mui/icons-material';
 import { api } from '../api';
 import { useAuth } from '../context/AuthContext';
-import { KpiCard, fmtNum } from './common';
+import { KpiCard, fmtNum, WellStatusChip } from './common';
+import { WELL_STATUS_COLOR } from '../theme';
 
-// Well lifecycle status palette (StatusChip's STATUS_COLOR is rig-liveness oriented and
-// doesn't fit well-status, so we keep a small local map keyed by lifecycle stage).
-const WELL_STATUS_COLOR = {
-    planned: '#64748b',
-    drilling: '#38bdf8',
-    completed: '#22d3ee',
-    producing: '#22c55e',
-    workover: '#f59e0b',
-    suspended: '#f97316',
-    abandoned: '#ef4444',
-};
 const WELL_STATUSES = ['planned', 'drilling', 'completed', 'producing', 'workover', 'suspended', 'abandoned'];
 const WELL_TYPES = ['production', 'injection', 'exploration', 'appraisal', 'workover'];
-
-function WellStatusChip({ status, size = 'small' }) {
-    const c = WELL_STATUS_COLOR[status] || '#64748b';
-    const label = (status || 'unknown').toUpperCase();
-    return (
-        <Chip size={size} label={label}
-            sx={{ bgcolor: c + '22', color: c, border: `1px solid ${c}55`, fontWeight: 700, letterSpacing: 0.4 }} />
-    );
-}
 
 // Compact clickable well tile. Top line carries name + UWI; a row of meta chips sits below
 // (type, status coloured by lifecycle, asset unit, total depth, current rig). Admin gets a
@@ -198,7 +179,10 @@ export default function Wells() {
                 <KpiCard label="Abandoned" value={counts.abandoned} color={WELL_STATUS_COLOR.abandoned} />
             </Stack>
 
-            {err && <Alert severity="error" sx={{ mb: 2 }} onClose={() => setErr('')}>{err}</Alert>}
+            {err && (
+                <Alert severity="error" sx={{ mb: 2 }} onClose={() => setErr('')}
+                    action={<Button color="inherit" size="small" onClick={() => { setLoading(true); load(); }}>Retry</Button>}>{err}</Alert>
+            )}
 
             <Paper sx={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
                 {/* Filter controls. */}

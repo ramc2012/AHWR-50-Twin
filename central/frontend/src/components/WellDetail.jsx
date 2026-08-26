@@ -7,52 +7,9 @@ import {
 } from '@mui/material';
 import { ArrowBack } from '@mui/icons-material';
 import { api } from '../api';
-import { fmtNum } from './common';
+import { fmtNum, fmtDate, fmtDateTime, fmtDuration, WellStatusChip, TintChip } from './common';
 import EdrView from './rig/EdrView';
 import ErrorBoundary from './ErrorBoundary';
-
-// Well lifecycle status palette (local — STATUS_COLOR is rig-liveness oriented).
-const WELL_STATUS_COLOR = {
-    planned: '#64748b',
-    drilling: '#38bdf8',
-    completed: '#22d3ee',
-    producing: '#22c55e',
-    workover: '#f59e0b',
-    suspended: '#f97316',
-    abandoned: '#ef4444',
-};
-
-function WellStatusChip({ status }) {
-    const c = WELL_STATUS_COLOR[status] || '#64748b';
-    return (
-        <Chip size="small" label={(status || 'unknown').toUpperCase()}
-            sx={{ bgcolor: c + '22', color: c, border: `1px solid ${c}55`, fontWeight: 700, letterSpacing: 0.4 }} />
-    );
-}
-
-const fmtDate = (v) => {
-    if (!v) return '—';
-    const d = new Date(v);
-    return Number.isNaN(d.getTime()) ? '—' : d.toLocaleString(undefined, { year: 'numeric', month: 'short', day: '2-digit', hour: '2-digit', minute: '2-digit' });
-};
-
-const fmtDateOnly = (v) => {
-    if (!v) return '—';
-    const d = new Date(v);
-    return Number.isNaN(d.getTime()) ? '—' : d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: '2-digit' });
-};
-
-const fmtDuration = (sec) => {
-    if (sec == null || Number.isNaN(Number(sec))) return '—';
-    const s = Math.max(0, Math.round(Number(sec)));
-    const d = Math.floor(s / 86400);
-    const h = Math.floor((s % 86400) / 3600);
-    const m = Math.floor((s % 3600) / 60);
-    if (d > 0) return `${d}d ${h}h`;
-    if (h > 0) return `${h}h ${m}m`;
-    if (m > 0) return `${m}m`;
-    return `${s}s`;
-};
 
 function HeaderField({ label, value, mono, onClick }) {
     return (
@@ -95,7 +52,13 @@ export default function WellDetail() {
 
     const selectedRun = useMemo(() => runs.find((r) => String(r.id) === String(selectedRunId)) || null, [runs, selectedRunId]);
 
-    if (err) return <Alert severity="error">{err} — <MLink sx={{ cursor: 'pointer' }} onClick={() => nav('/wells')}>back to wells</MLink></Alert>;
+    if (err) {
+        return (
+            <Alert severity="error" action={<Button color="inherit" size="small" onClick={load}>Retry</Button>}>
+                {err} — <MLink sx={{ cursor: 'pointer' }} onClick={() => nav('/wells')}>back to wells</MLink>
+            </Alert>
+        );
+    }
     if (!well) return <Typography color="text.secondary">Loading {id}…</Typography>;
 
     const stats = well.stats || {};
@@ -121,8 +84,8 @@ export default function WellDetail() {
                     <Grid item xs={6} sm={4} md={3}><HeaderField label="Asset unit" value={well.assetUnit || '—'} /></Grid>
                     <Grid item xs={6} sm={4} md={3}><HeaderField label="Operator" value={well.operator || '—'} /></Grid>
                     <Grid item xs={6} sm={4} md={3}><HeaderField label="Block / lease" value={well.blockLease || '—'} /></Grid>
-                    <Grid item xs={6} sm={4} md={3}><HeaderField label="Spud date" value={fmtDateOnly(well.spudDate)} /></Grid>
-                    <Grid item xs={6} sm={4} md={3}><HeaderField label="TD date" value={fmtDateOnly(well.tdDate)} /></Grid>
+                    <Grid item xs={6} sm={4} md={3}><HeaderField label="Spud date" value={fmtDate(well.spudDate)} /></Grid>
+                    <Grid item xs={6} sm={4} md={3}><HeaderField label="TD date" value={fmtDate(well.tdDate)} /></Grid>
                     <Grid item xs={6} sm={4} md={3}><HeaderField label="Total depth" value={well.totalDepth != null ? `${fmtNum(well.totalDepth, 0)} m` : '—'} /></Grid>
                     <Grid item xs={6} sm={4} md={3}>
                         <HeaderField label="Current rig" value={well.currentRigId || '—'} mono
@@ -170,12 +133,12 @@ export default function WellDetail() {
                                         <MLink component="button" type="button" onClick={() => nav('/rigs/' + r.rigId)} sx={{ fontFamily: 'monospace', fontWeight: 700, cursor: 'pointer' }}>{r.rigId}</MLink>
                                     </TableCell>
                                     <TableCell sx={{ fontFamily: 'monospace' }}>{r.jobNo || '—'}</TableCell>
-                                    <TableCell>{fmtDate(r.startedAt)}</TableCell>
-                                    <TableCell>{r.active ? '—' : fmtDate(r.endedAt)}</TableCell>
+                                    <TableCell>{fmtDateTime(r.startedAt)}</TableCell>
+                                    <TableCell>{r.active ? '—' : fmtDateTime(r.endedAt)}</TableCell>
                                     <TableCell align="right">{fmtDuration(r.durationSec)}</TableCell>
                                     <TableCell align="center">
                                         {r.active
-                                            ? <Chip size="small" label="ACTIVE" sx={{ bgcolor: '#22c55e22', color: '#22c55e', border: '1px solid #22c55e55', fontWeight: 700 }} />
+                                            ? <TintChip label="ACTIVE" color="#22c55e" />
                                             : <Chip size="small" variant="outlined" label="ended" />}
                                     </TableCell>
                                 </TableRow>
@@ -198,7 +161,7 @@ export default function WellDetail() {
                             <Select labelId="run-select-label" label="Run" value={selectedRunId} onChange={(e) => setSelectedRunId(e.target.value)}>
                                 {runs.map((r) => (
                                     <MenuItem key={r.id} value={String(r.id)}>
-                                        {`${r.rigId} · ${r.jobNo || '—'} · ${fmtDate(r.startedAt)}→${r.active ? 'now' : fmtDate(r.endedAt)}`}
+                                        {`${r.rigId} · ${r.jobNo || '—'} · ${fmtDateTime(r.startedAt)}→${r.active ? 'now' : fmtDateTime(r.endedAt)}`}
                                     </MenuItem>
                                 ))}
                             </Select>

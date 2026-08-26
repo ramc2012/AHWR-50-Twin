@@ -1,9 +1,11 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import {
     Box, Paper, Typography, Grid, Table, TableBody, TableCell, TableHead, TableRow, TableContainer,
-    Tabs, Tab, Chip, Alert,
+    Tabs, Tab, Chip, Alert, Button, TextField, InputAdornment,
 } from '@mui/material';
+import { Search } from '@mui/icons-material';
 import { api } from '../api';
+import { fmtDate } from './common';
 
 export default function ConfigRegistry() {
     const [tab, setTab] = useState(0);
@@ -11,8 +13,9 @@ export default function ConfigRegistry() {
     const [rigs, setRigs] = useState([]);
     const [err, setErr] = useState('');
     const [loading, setLoading] = useState(true);
+    const [q, setQ] = useState('');
 
-    useEffect(() => {
+    const load = useCallback(() => {
         setErr(''); setLoading(true);
         const fail = (e) => { if (e?.response?.status !== 401) setErr(e?.response?.data?.error || 'Failed to load configuration registry'); };
         Promise.all([
@@ -21,13 +24,25 @@ export default function ConfigRegistry() {
         ]).finally(() => setLoading(false));
     }, []);
 
+    useEffect(() => { load(); }, [load]);
+
+    // Text filter over the tag dictionary (label / metric / group / unit).
+    const filteredTags = useMemo(() => {
+        const needle = q.trim().toLowerCase();
+        if (!needle) return tags;
+        return tags.filter((t) => `${t.label || ''} ${t.metric || ''} ${t.group || ''} ${t.unit || ''}`.toLowerCase().includes(needle));
+    }, [tags, q]);
+
     // Group tags by equipment group for the dictionary view.
-    const groups = tags.reduce((acc, t) => { (acc[t.group] = acc[t.group] || []).push(t); return acc; }, {});
+    const groups = filteredTags.reduce((acc, t) => { (acc[t.group] = acc[t.group] || []).push(t); return acc; }, {});
 
     return (
         <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
             <Typography variant="h5" fontWeight={800} mb={2}>Configuration Registry</Typography>
-            {err && <Alert severity="error" sx={{ mb: 2 }} onClose={() => setErr('')}>{err}</Alert>}
+            {err && (
+                <Alert severity="error" sx={{ mb: 2 }} onClose={() => setErr('')}
+                    action={<Button color="inherit" size="small" onClick={load}>Retry</Button>}>{err}</Alert>
+            )}
             <Paper sx={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
                 <Tabs value={tab} onChange={(_e, v) => setTab(v)} sx={{ borderBottom: '1px solid rgba(255,255,255,0.06)', flex: '0 0 auto' }}>
                     <Tab label={`Standard tag dictionary (${tags.length})`} />
@@ -39,9 +54,22 @@ export default function ConfigRegistry() {
                         <Typography variant="caption" color="text.secondary">
                             Single source of truth for the 100-channel standard tag set (proposal §4.4, §6.1). Expected tags count toward each rig's data-completeness score.
                         </Typography>
+                        <TextField
+                            size="small" fullWidth sx={{ mt: 1.5 }} placeholder="Filter tags — name, metric, group or unit"
+                            value={q} onChange={(e) => setQ(e.target.value)}
+                            InputProps={{ startAdornment: <InputAdornment position="start"><Search fontSize="small" /></InputAdornment> }}
+                        />
+                        {q && (
+                            <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5, display: 'block' }}>
+                                {filteredTags.length} of {tags.length} tag{tags.length !== 1 ? 's' : ''} match
+                            </Typography>
+                        )}
                         <Grid container spacing={2} mt={0.5}>
                             {!tags.length && (
                                 <Grid item xs={12}><Typography color="text.secondary" sx={{ py: 3 }} align="center">{loading ? 'Loading tag dictionary…' : 'No tags configured.'}</Typography></Grid>
+                            )}
+                            {!!tags.length && !filteredTags.length && (
+                                <Grid item xs={12}><Typography color="text.secondary" sx={{ py: 3 }} align="center">No tags match "{q}".</Typography></Grid>
                             )}
                             {Object.entries(groups).map(([group, items]) => (
                                 <Grid item xs={12} md={6} key={group}>
@@ -86,7 +114,7 @@ export default function ConfigRegistry() {
                                         <TableCell align="right">{r.latitude?.toFixed?.(4) ?? '—'}</TableCell>
                                         <TableCell align="right">{r.longitude?.toFixed?.(4) ?? '—'}</TableCell>
                                         <TableCell>{r.schema_version || '—'}</TableCell>
-                                        <TableCell>{r.commissioned_at ? new Date(r.commissioned_at).toLocaleDateString() : '—'}</TableCell>
+                                        <TableCell>{fmtDate(r.commissioned_at)}</TableCell>
                                     </TableRow>
                                 ))}
                                 {!rigs.length && (

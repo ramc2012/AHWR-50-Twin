@@ -8,6 +8,7 @@ import { Add, DeleteOutline, Save, FiberManualRecord, VpnKey, Autorenew, Content
 import { api } from '../api';
 import { useAuth } from '../context/AuthContext';
 import { fmtAgo } from './common';
+import NotificationsPanel from './NotificationsPanel';
 
 // Pan-ONGC asset units — suggestions for the "Add rig" form (free text still allowed).
 const ASSET_UNITS = [
@@ -282,7 +283,22 @@ export default function Settings() {
                         {!settings && <Typography variant="caption" color="text.secondary" sx={{ mt: 1.5 }}>Loading settings…</Typography>}
                     </Paper>
 
-                    {/* 3) USER LIVENESS ----------------------------------------------------- */}
+                    {/* 3) NOTIFICATIONS ----------------------------------------------------- */}
+                    {/* Channel CRUD moved here from the Alarm Command Centre (UI-18); the ACC
+                        keeps only the compact recent-notifications log. Admin-gated inside the
+                        panel like the other sections (read-only view for non-admins). */}
+                    <Paper sx={{ p: 2, display: 'flex', flexDirection: 'column' }}>
+                        <Box mb={1}>
+                            <Typography variant="h6">Notifications</Typography>
+                            <Typography variant="caption" color="text.secondary">
+                                Outbound alert channels (webhook / email) for P1+ alarm escalations. Monitoring-only —
+                                alerts describe received data; nothing is ever sent to a rig. Audit-logged.
+                            </Typography>
+                        </Box>
+                        <NotificationsPanel section="channels" />
+                    </Paper>
+
+                    {/* 4) USER LIVENESS ----------------------------------------------------- */}
                     <Paper sx={{ p: 2, display: 'flex', flexDirection: 'column' }}>
                         <Box mb={1}>
                             <Typography variant="h6">Signed-in users</Typography>

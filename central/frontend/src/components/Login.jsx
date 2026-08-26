@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { useNavigate, Navigate } from 'react-router-dom';
+import { useNavigate, Navigate, useSearchParams } from 'react-router-dom';
 import {
     Box, Paper, TextField, Button, Typography, Alert, Stack, Chip,
 } from '@mui/material';
@@ -9,6 +9,8 @@ import { api } from '../api';
 export default function Login() {
     const { user, login } = useAuth();
     const nav = useNavigate();
+    const [params] = useSearchParams();
+    const expired = params.get('expired') === '1';
     const [username, setU] = useState('');
     const [password, setP] = useState('');
     const [err, setErr] = useState('');
@@ -29,7 +31,14 @@ export default function Login() {
         e.preventDefault();
         setErr(''); setBusy(true);
         try { await login(username, password); nav('/'); }
-        catch { setErr('Invalid credentials'); }
+        catch (ex) {
+            const status = ex?.response?.status;
+            if (ex?.isTimeout) setErr(ex.friendlyMessage || 'CRMF server not responding — request timed out');
+            else if (!ex?.response) setErr('Cannot reach the CRMF server');
+            else if (status === 401 || status === 403) setErr('Invalid user ID or password');
+            else if (status === 429) setErr('Too many attempts — wait a minute');
+            else setErr(ex.response?.data?.error || `Sign-in failed (HTTP ${status})`);
+        }
         finally { setBusy(false); }
     };
 
@@ -58,6 +67,9 @@ export default function Login() {
                         </Typography>
                     </Stack>
                 )}
+                {expired && !err && (
+                    <Alert severity="warning" sx={{ mb: 2 }}>Your session expired — sign in again</Alert>
+                )}
                 {err && <Alert severity="error" sx={{ mb: 2 }}>{err}</Alert>}
                 <TextField fullWidth label="Username" value={username} onChange={(e) => setU(e.target.value)}
                     margin="normal" autoFocus autoComplete="username" />
@@ -66,7 +78,9 @@ export default function Login() {
                 <Button type="submit" fullWidth variant="contained" size="large" sx={{ mt: 2 }} disabled={busy}>
                     {busy ? 'Signing in…' : 'Sign in'}
                 </Button>
-                {showLocal && (
+                {/* Default-credentials hint: demo builds only (explicit VITE_DEMO flag),
+                    never merely because local auth mode is enabled. */}
+                {showLocal && import.meta.env.VITE_DEMO === 'true' && (
                     <Stack direction="row" spacing={1} mt={2} justifyContent="center" flexWrap="wrap" useFlexGap>
                         <Chip size="small" variant="outlined" label="admin / admin123" />
                         <Chip size="small" variant="outlined" label="viewer / viewer123" />

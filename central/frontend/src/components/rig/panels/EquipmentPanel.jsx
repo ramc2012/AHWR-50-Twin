@@ -1,23 +1,31 @@
 import React, { useState } from 'react';
 import { Box, Grid, Paper, Typography, Stack, Chip, Tabs, Tab, Alert, Divider } from '@mui/material';
 import { useRigData } from '../../../context/RigDataContext';
-import { ValueTile, StatusRow, PanelHead, freshness } from '../hmi';
+import {
+    ValueTile, StatusRow, PanelHead, freshness,
+    FreshProvider, tileProps, gaugeProps, metricInfo, tankGainLossWarn,
+} from '../hmi';
 import EdrView from '../EdrView';
 
 // Compact EDR strip config — equipment-relevant pens (HPU/HTD + Engine), mirrors the edge.
+// Pen ranges come from the edrMetrics.json catalog (single source of truth).
+const pen = (channelId, color) => {
+    const m = metricInfo(channelId);
+    return { channelId, color, min: m.min ?? 0, max: m.max ?? 100, enabled: true };
+};
 const EDR_STRIPS = [
     {
         title: 'HPU/HTD',
         pens: [
-            { channelId: 'hpu.discharge_pressure', color: '#38bdf8', min: 0, max: 300, enabled: true },
-            { channelId: 'htd.torque', color: '#fbbf24', min: 0, max: 20000, enabled: true },
+            pen('hpu.discharge_pressure', '#38bdf8'),
+            pen('htd.torque', '#fbbf24'),
         ],
     },
     {
         title: 'Engine',
         pens: [
-            { channelId: 'cat_engine.load', color: '#4ade80', min: 0, max: 100, enabled: true },
-            { channelId: 'cat_engine.rpm', color: '#f472b6', min: 0, max: 2000, enabled: true },
+            pen('cat_engine.load', '#4ade80'),
+            pen('cat_engine.rpm', '#f472b6'),
         ],
     },
 ];
@@ -59,14 +67,14 @@ function CatEngineTab({ g = {} }) {
             </Grid>
             <SubHead title="Readings" />
             <Grid container spacing={1}>
-                <Cell><ValueTile label="RPM" value={g.rpm} unit="rpm" d={0} /></Cell>
-                <Cell><ValueTile label="Load" value={g.load} unit="%" d={0} min={0} max={100} warn={(n) => n > 95} /></Cell>
-                <Cell><ValueTile label="Coolant Temp" value={g.coolant_temp} unit="°C" d={0} warn={(n) => n > 100} /></Cell>
-                <Cell><ValueTile label="Oil Pressure" value={g.oil_pressure} unit="psi" d={0} warn={(n) => n < 20} /></Cell>
-                <Cell><ValueTile label="Fuel Pressure" value={g.fuel_pressure} unit="bar" d={1} /></Cell>
-                <Cell><ValueTile label="Fuel Rate" value={g.fuel_rate} unit="l/h" d={1} /></Cell>
+                <Cell><ValueTile label="RPM" value={g.rpm} {...tileProps('cat_engine.rpm')} /></Cell>
+                <Cell><ValueTile label="Load" value={g.load} {...gaugeProps('cat_engine.load')} warn={(n) => n > 95} /></Cell>
+                <Cell><ValueTile label="Coolant Temp" value={g.coolant_temp} {...tileProps('cat_engine.coolant_temp')} warn={(n) => n > 100} /></Cell>
+                <Cell><ValueTile label="Oil Pressure" value={g.oil_pressure} {...tileProps('cat_engine.oil_pressure')} warn={(n) => n < 2} /></Cell>
+                <Cell><ValueTile label="Fuel Pressure" value={g.fuel_pressure} {...tileProps('cat_engine.fuel_pressure')} /></Cell>
+                <Cell><ValueTile label="Fuel Rate" value={g.fuel_rate} {...tileProps('cat_engine.fuel_rate')} /></Cell>
                 <Cell><ValueTile label="Fuel Temp" value={g.fuel_temp} unit="°C" d={0} /></Cell>
-                <Cell><ValueTile label="Battery" value={g.battery_voltage} unit="V" d={1} warn={(n) => n < 22} /></Cell>
+                <Cell><ValueTile label="Battery" value={g.battery_voltage} {...tileProps('cat_engine.battery_voltage')} warn={(n) => n < 22} /></Cell>
                 <Cell><ValueTile label="Run Hours" value={g.run_hours} unit="h" d={0} /></Cell>
                 <Cell><ValueTile label="Total Hours" value={g.total_hours} unit="h" d={0} /></Cell>
             </Grid>
@@ -86,10 +94,10 @@ function HpuTab({ g = {} }) {
             </Grid>
             <SubHead title="Hydraulics" />
             <Grid container spacing={1}>
-                <Cell><ValueTile label="Discharge Press" value={g.discharge_pressure} unit="bar" d={1} /></Cell>
-                <Cell><ValueTile label="Aux Pressure" value={g.aux_pressure} unit="bar" d={1} /></Cell>
-                <Cell><ValueTile label="Oil Temp" value={g.oil_temp} unit="°C" d={0} warn={(n) => n > 70} /></Cell>
-                <Cell><ValueTile label="Oil Level" value={g.oil_level} unit="%" d={0} min={0} max={100} warn={(n) => n < 20} /></Cell>
+                <Cell><ValueTile label="Discharge Press" value={g.discharge_pressure} {...tileProps('hpu.discharge_pressure')} /></Cell>
+                <Cell><ValueTile label="Aux Pressure" value={g.aux_pressure} {...tileProps('hpu.aux_pressure')} /></Cell>
+                <Cell><ValueTile label="Oil Temp" value={g.oil_temp} {...tileProps('hpu.oil_temp')} warn={(n) => n > 70} /></Cell>
+                <Cell><ValueTile label="Oil Level" value={g.oil_level} {...gaugeProps('hpu.oil_level')} warn={(n) => n < 20} /></Cell>
                 <Cell><ValueTile label="Pilot Pressure" value={g.pilot_pressure} unit="bar" d={1} /></Cell>
             </Grid>
 
@@ -145,10 +153,10 @@ function HtdTab({ g = {} }) {
     return (
         <Box>
             <Grid container spacing={1}>
-                <Cell><ValueTile label="RPM" value={g.rpm} unit="rpm" d={0} /></Cell>
-                <Cell><ValueTile label="Torque" value={g.torque} unit="Nm" d={0} /></Cell>
-                <Cell><ValueTile label="Torque Cmd" value={g.torque_command} unit="Nm" d={0} /></Cell>
-                <Cell><ValueTile label="Vertical Speed" value={g.vertical_speed} unit="m/s" d={2} /></Cell>
+                <Cell><ValueTile label="RPM" value={g.rpm} {...tileProps('htd.rpm')} /></Cell>
+                <Cell><ValueTile label="Torque" value={g.torque} {...tileProps('htd.torque')} /></Cell>
+                <Cell><ValueTile label="Torque Cmd" value={g.torque_command} unit={metricInfo('htd.torque').unit} d={0} /></Cell>
+                <Cell><ValueTile label="Vertical Speed" value={g.vertical_speed} {...tileProps('htd.vertical_speed')} /></Cell>
             </Grid>
             <SubHead title="Status" />
             <Grid container spacing={1}>
@@ -176,11 +184,11 @@ function PctTab({ g = {} }) {
     return (
         <Box>
             <Grid container spacing={1}>
-                <Cell><ValueTile label="Makeup Torque" value={g.makeup_torque} unit="Nm" d={0} /></Cell>
-                <Cell><ValueTile label="Last Makeup Tq" value={g.last_makeup_torque} unit="Nm" d={0} /></Cell>
-                <Cell><ValueTile label="Spinner Makeup Tq" value={g.spinner_makeup_torque} unit="Nm" d={0} /></Cell>
+                <Cell><ValueTile label="Makeup Torque" value={g.makeup_torque} {...tileProps('pct.makeup_torque')} /></Cell>
+                <Cell><ValueTile label="Last Makeup Tq" value={g.last_makeup_torque} {...tileProps('pct.last_makeup_torque')} /></Cell>
+                <Cell><ValueTile label="Spinner Makeup Tq" value={g.spinner_makeup_torque} unit={metricInfo('pct.makeup_torque').unit} d={0} /></Cell>
                 <Cell><ValueTile label="Rotation Makeup Press" value={g.rotation_makeup_pressure} unit="bar" d={1} /></Cell>
-                <Cell><ValueTile label="Clamp-up Press" value={g.clamp_up_pressure} unit="bar" d={1} /></Cell>
+                <Cell><ValueTile label="Clamp-up Press" value={g.clamp_up_pressure} {...tileProps('pct.clamp_up_pressure')} /></Cell>
             </Grid>
             <SubHead title="Status" />
             <Grid container spacing={1}>
@@ -237,8 +245,8 @@ function CwkTab({ g = {} }) {
             </Grid>
             <SubHead title="Clamp" />
             <Grid container spacing={1}>
-                <Cell><ValueTile label="Clamp Pressure" value={g.clamp_pressure} unit="bar" d={1} /></Cell>
-                <Cell><ValueTile label="Clamp Force" value={g.clamp_force} unit="kN" d={0} /></Cell>
+                <Cell><ValueTile label="Clamp Pressure" value={g.clamp_pressure} {...tileProps('cwk.clamp_pressure')} /></Cell>
+                <Cell><ValueTile label="Clamp Force" value={g.clamp_force} {...tileProps('cwk.clamp_force')} /></Cell>
             </Grid>
         </Box>
     );
@@ -249,15 +257,15 @@ function MudPumpTab({ mp = {}, fl = {} }) {
         <Box>
             <SubHead title="Mud Pump" />
             <Grid container spacing={1}>
-                <Cell><ValueTile label="Pressure" value={mp.pressure} unit="bar" d={1} /></Cell>
-                <Cell><ValueTile label="SPM" value={mp.spm} unit="spm" d={0} /></Cell>
-                <Cell><ValueTile label="Flow In" value={mp.flow_in} unit="lpm" d={0} /></Cell>
+                <Cell><ValueTile label="Pressure" value={mp.pressure} {...tileProps('mudpump.pressure')} /></Cell>
+                <Cell><ValueTile label="SPM" value={mp.spm} {...tileProps('mudpump.spm')} /></Cell>
+                <Cell><ValueTile label="Flow In" value={mp.flow_in} {...tileProps('mudpump.flow_in')} /></Cell>
             </Grid>
             <SubHead title="Fluid / Tanks" />
             <Grid container spacing={1}>
-                <Cell><ValueTile label="Total Tank Vol" value={fl.total_tank_volume} unit="m³" d={1} /></Cell>
-                <Cell><ValueTile label="Trip Tank" value={fl.trip_tank} unit="m³" d={2} /></Cell>
-                <Cell><ValueTile label="Tank Gain/Loss" value={fl.tank_gain_loss} unit="m³" d={2} warn={(n) => Math.abs(n) > 1} /></Cell>
+                <Cell><ValueTile label="Total Tank Vol" value={fl.total_tank_volume} {...tileProps('fluid.total_tank_volume')} /></Cell>
+                <Cell><ValueTile label="Trip Tank" value={fl.trip_tank} {...tileProps('fluid.trip_tank')} /></Cell>
+                <Cell><ValueTile label="Tank Gain/Loss" value={fl.tank_gain_loss} {...tileProps('fluid.tank_gain_loss')} warn={tankGainLossWarn} /></Cell>
             </Grid>
         </Box>
     );
@@ -320,7 +328,9 @@ export default function EquipmentPanel({ rigId, rig }) {
                 </Tabs>
 
                 <Box sx={{ pt: 1 }}>
-                    {TABS[sub]?.render(safe)}
+                    <FreshProvider value={fr}>
+                        {TABS[sub]?.render(safe)}
+                    </FreshProvider>
                 </Box>
             </Paper>
         </Box>

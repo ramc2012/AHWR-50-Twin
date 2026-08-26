@@ -2,7 +2,7 @@ import React, { useEffect, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
     Box, Paper, Typography, Grid, Table, TableBody, TableCell, TableHead, TableRow, TableContainer,
-    Stack, Chip, Select, MenuItem, TextField, Button, Divider, IconButton, Tooltip, Alert,
+    TableSortLabel, Stack, Chip, Select, MenuItem, TextField, Button, Divider, IconButton, Tooltip, Alert,
 } from '@mui/material';
 import { Add, CheckCircle } from '@mui/icons-material';
 import { api } from '../api';
@@ -10,6 +10,29 @@ import { useAuth } from '../context/AuthContext';
 import { KpiCard, fmtAgo, fmtNum } from './common';
 
 const SEV_COLOR = { high: 'error', medium: 'warning', low: 'info' };
+
+// Small table-sort helper (duplicated per file for now — a later pass consolidates).
+function useTableSort(initialKey, initialDir = 'desc') {
+    const [key, setKey] = useState(initialKey);
+    const [dir, setDir] = useState(initialDir);
+    const onSort = (k) => {
+        if (k === key) setDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+        else { setKey(k); setDir('desc'); }
+    };
+    const sorted = (rows, getters) => {
+        const g = key && getters[key];
+        if (!g) return rows;
+        return [...rows].sort((x, y) => {
+            const a = g(x), b = g(y);
+            if (a == null && b == null) return 0;
+            if (a == null) return 1;
+            if (b == null) return -1;
+            const c = (typeof a === 'number' && typeof b === 'number') ? a - b : String(a).localeCompare(String(b));
+            return dir === 'desc' ? -c : c;
+        });
+    };
+    return { key, dir, onSort, sorted };
+}
 
 export default function Governance() {
     const nav = useNavigate();
@@ -19,6 +42,7 @@ export default function Governance() {
     const [err, setErr] = useState('');
     const [esc, setEsc] = useState({ rigId: '', title: '', severity: 'medium', owner: '' });
     const [dec, setDec] = useState({ title: '', detail: '' });
+    const { key: sortKey, dir: sortDir, onSort, sorted } = useTableSort(null);
 
     const load = useCallback(() => {
         api.governance()
@@ -122,16 +146,26 @@ export default function Governance() {
                                 <TableHead><TableRow>
                                     <TableCell>Rig</TableCell><TableCell>Stage-gate</TableCell><TableCell>Commissioning</TableCell>
                                     <TableCell align="center">Site ready</TableCell><TableCell align="center">Security</TableCell>
-                                    <TableCell align="right">Adoption</TableCell><TableCell align="right">Wave</TableCell><TableCell>Edge ver.</TableCell>
+                                    <TableCell align="right" sortDirection={sortKey === 'adoption' ? sortDir : false}>
+                                        <TableSortLabel active={sortKey === 'adoption'} direction={sortKey === 'adoption' ? sortDir : 'desc'} onClick={() => onSort('adoption')}>Adoption</TableSortLabel>
+                                    </TableCell>
+                                    <TableCell align="right" sortDirection={sortKey === 'wave' ? sortDir : false}>
+                                        <TableSortLabel active={sortKey === 'wave'} direction={sortKey === 'wave' ? sortDir : 'desc'} onClick={() => onSort('wave')}>Wave</TableSortLabel>
+                                    </TableCell><TableCell>Edge ver.</TableCell>
                                 </TableRow></TableHead>
                                 <TableBody>
-                                    {g.rigs.map((r) => (
-                                        <TableRow key={r.rig_id} hover>
-                                            <TableCell onClick={() => nav(`/rigs/${r.rig_id}`)} sx={{ cursor: 'pointer' }}>
-                                                <Typography variant="body2" fontWeight={700}>{r.name}</Typography>
+                                    {sorted(g.rigs, { adoption: (r) => r.adoption_pct ?? 0, wave: (r) => r.wave }).map((r) => (
+                                        <TableRow key={r.rig_id} hover role="button" tabIndex={0}
+                                            aria-label={`Open ${r.name || r.rig_id}`}
+                                            onClick={() => nav(`/rigs/${r.rig_id}`)}
+                                            onKeyDown={(e) => { if ((e.key === 'Enter' || e.key === ' ') && e.target === e.currentTarget) { e.preventDefault(); nav(`/rigs/${r.rig_id}`); } }}
+                                            sx={{ cursor: 'pointer', '&:focus-visible': { outline: '2px solid', outlineColor: 'primary.main', outlineOffset: -2 } }}>
+                                            <TableCell>
+                                                <Typography variant="body2" fontWeight={700} sx={{ color: 'primary.main', '&:hover': { textDecoration: 'underline' } }}>{r.name}</Typography>
                                                 <Typography variant="caption" color="text.secondary">{r.rig_id}</Typography>
                                             </TableCell>
-                                            <TableCell>
+                                            {/* Action cell: the gate selector must not trigger row navigation. */}
+                                            <TableCell onClick={(e) => { if (editable) e.stopPropagation(); }} sx={editable ? { cursor: 'default' } : undefined}>
                                                 {editable ? (
                                                     <Select size="small" variant="standard" value={r.gate || 'gate0'} onChange={(e) => setGate(r.rig_id, e.target.value)}>
                                                         {g.gates.map((gg) => <MenuItem key={gg.value} value={gg.value}>{gg.label}</MenuItem>)}
