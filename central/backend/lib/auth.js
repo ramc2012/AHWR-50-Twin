@@ -19,7 +19,9 @@ if (!JWT_SECRET || JWT_SECRET === 'change-me-in-production') {
 }
 const TOKEN_TTL = process.env.TOKEN_TTL || '12h';
 const OIDC_ENABLED = process.env.OIDC_ENABLED === 'true';
-const AUTH_MODE = (process.env.AUTH_MODE || 'local').toLowerCase();   // local | ldap | both
+// local | ldap | both — read fresh on every login, not frozen at boot: an admin
+// can flip this from Settings > Authentication (lib/authSettings.js -> ldap.reload())
+// and it takes effect on the next login attempt, no restart.
 const ROLE_RANK = { viewer: 1, operator: 2, admin: 3 };
 const MCP_BACKEND_TOKEN = process.env.MCP_BACKEND_TOKEN || '';
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
@@ -71,13 +73,14 @@ async function loginLdap(username, password) {
 //   both  -> try local first (break-glass admin), then the directory
 async function login(username, password) {
     if (!username || !password) return null;
+    const mode = ldap.currentMode();
 
-    if (AUTH_MODE === 'local' || AUTH_MODE === 'both') {
+    if (mode === 'local' || mode === 'both') {
         const local = await loginLocal(username, password);
         if (local) return local;
-        if (AUTH_MODE === 'local') return null;
+        if (mode === 'local') return null;
     }
-    if (AUTH_MODE === 'ldap' || AUTH_MODE === 'both') {
+    if (mode === 'ldap' || mode === 'both') {
         return loginLdap(username, password);
     }
     return null;

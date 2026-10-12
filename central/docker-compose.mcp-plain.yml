@@ -1,0 +1,9 @@
+# Optional override: serve the read-only MCP endpoint over plain HTTP on loopback.
+# Use only for local AI clients that cannot be made to trust central/certs/mcp.crt.
+#   docker compose -f docker-compose.yml -f docker-compose.mcp-plain.yml up -d crmf-mcp
+# Endpoint becomes http://127.0.0.1:8766/mcp (auth + host/origin checks unchanged).
+services:
+  crmf-mcp:
+    environment:
+      - TLS_CERT_FILE=
+      - TLS_KEY_FILE=

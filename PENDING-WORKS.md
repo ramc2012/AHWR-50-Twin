@@ -30,6 +30,8 @@ WITSML). ✅ done · 🟡 partial · 🔴 pending.
 The central platform (`central/`) is built, security-hardened and audited (see
 `central/AUDIT.md`: Critical+High+Medium gaps #1–#30 fixed & verified). Remaining:
 
+- 🔴 **Report export formats** — the DGC proposal lists CMF fleet reports in CSV, PDF, XLSX and PNG;
+  `Reports.jsx` / `/reports/fleet.csv` export CSV only. Port the edge's PDF/XLSX/PNG export to the CMF.
 - 🟡 **Alarm notifications** — webhook + email dispatch on P1/escalation is now implemented
   (`central/backend/lib/notify.js`); SMS is via a webhook→gateway, no direct SMS provider.
 - ✅ **Per-rig remote HMI mirror** — the central rig drill-down now mirrors the full edge operator

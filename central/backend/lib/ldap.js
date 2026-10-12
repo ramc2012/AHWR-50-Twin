@@ -11,26 +11,60 @@
 let Client;
 try { ({ Client } = require('ldapts')); } catch { Client = null; }
 
+const MODES = ['local', 'ldap', 'both'];
 const bool = (v, def = false) => (v === undefined ? def : /^(1|true|yes)$/i.test(String(v)));
 const list = (s) => (s || '').split(',').map((x) => x.trim().toLowerCase()).filter(Boolean);
 
-const cfg = {
-    mode: (process.env.AUTH_MODE || 'local').toLowerCase(),       // local | ldap | both
-    url: process.env.LDAP_URL || '',                              // ldap://dc:389 or ldaps://dc:636
-    bindDN: process.env.LDAP_BIND_DN || '',
-    bindPassword: process.env.LDAP_BIND_PASSWORD || '',
-    searchBase: process.env.LDAP_SEARCH_BASE || '',
-    searchFilter: process.env.LDAP_SEARCH_FILTER || '(|(sAMAccountName={username})(userPrincipalName={username}))',
-    domain: process.env.LDAP_DOMAIN || '',                        // e.g. corp.example.com (used to build UPN)
-    defaultRole: (process.env.LDAP_DEFAULT_ROLE || 'viewer').toLowerCase(),
-    groupAdmin: list(process.env.LDAP_ROLE_ADMIN),
-    groupOperator: list(process.env.LDAP_ROLE_OPERATOR),
-    groupViewer: list(process.env.LDAP_ROLE_VIEWER),
+// Builds the working config from either process.env shape (boot-time) or the
+// admin-editable Settings-page shape (lib/authSettings.js) — see reload() below.
+// Both sources use the same field names except role groups, which the env side
+// carries as LDAP_ROLE_* and the settings side as roleAdmin/roleOperator/roleViewer.
+function buildCfg(o) {
+    return {
+        mode: MODES.includes(String(o.mode || '').toLowerCase()) ? String(o.mode).toLowerCase() : 'local',
+        url: o.url || '',                                            // ldap://dc:389 or ldaps://dc:636
+        bindDN: o.bindDN || '',
+        bindPassword: o.bindPassword || '',
+        searchBase: o.searchBase || '',
+        searchFilter: o.searchFilter || '(|(sAMAccountName={username})(userPrincipalName={username}))',
+        domain: o.domain || '',                                      // e.g. corp.example.com (used to build UPN)
+        defaultRole: (o.defaultRole || 'viewer').toLowerCase(),
+        groupAdmin: list(o.roleAdmin),
+        groupOperator: list(o.roleOperator),
+        groupViewer: list(o.roleViewer),
+        startTLS: !!o.startTLS,
+        // TLS cert validation: ON by default; false only for self-signed lab DCs.
+        rejectUnauthorized: o.tlsRejectUnauthorized !== false,
+        timeout: Number(o.timeoutMs || process.env.LDAP_TIMEOUT_MS || 8000),
+    };
+}
+
+// Boot-time default, straight from process.env (unchanged behaviour if nothing
+// ever calls reload() — e.g. the DB isn't reachable yet, or the Settings-page
+// row hasn't been seeded). `let`, not `const`: reload() swaps it in place so
+// every function below (closures over this binding) sees the new config on
+// their very next call — no restart needed.
+let cfg = buildCfg({
+    mode: process.env.AUTH_MODE,
+    url: process.env.LDAP_URL,
+    bindDN: process.env.LDAP_BIND_DN,
+    bindPassword: process.env.LDAP_BIND_PASSWORD,
+    searchBase: process.env.LDAP_SEARCH_BASE,
+    searchFilter: process.env.LDAP_SEARCH_FILTER,
+    domain: process.env.LDAP_DOMAIN,
+    defaultRole: process.env.LDAP_DEFAULT_ROLE,
+    roleAdmin: process.env.LDAP_ROLE_ADMIN,
+    roleOperator: process.env.LDAP_ROLE_OPERATOR,
+    roleViewer: process.env.LDAP_ROLE_VIEWER,
     startTLS: bool(process.env.LDAP_STARTTLS),
-    // TLS cert validation: ON by default; set LDAP_TLS_REJECT_UNAUTHORIZED=false only for self-signed lab DCs.
-    rejectUnauthorized: !/^(0|false|no)$/i.test(process.env.LDAP_TLS_REJECT_UNAUTHORIZED || ''),
-    timeout: Number(process.env.LDAP_TIMEOUT_MS || 8000),
-};
+    tlsRejectUnauthorized: !/^(0|false|no)$/i.test(process.env.LDAP_TLS_REJECT_UNAUTHORIZED || ''),
+});
+
+// Called by lib/authSettings.js right after an admin saves Settings > Authentication,
+// and once at boot when that settings row is seeded — takes effect on the very next
+// login attempt.
+function reload(settingsObj) { cfg = buildCfg(settingsObj || {}); }
+function currentMode() { return cfg.mode; }
 
 const ldapEnabled = () => (cfg.mode === 'ldap' || cfg.mode === 'both') && !!cfg.url && !!Client;
 
@@ -122,4 +156,4 @@ async function authenticate(rawUsername, password) {
     return { username, displayName, role, groups };
 }
 
-module.exports = { ldapEnabled, info, authenticate, parseUsername, _cfg: cfg };
+module.exports = { ldapEnabled, info, authenticate, parseUsername, reload, currentMode };

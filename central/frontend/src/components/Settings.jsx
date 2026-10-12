@@ -3,6 +3,7 @@ import {
     Box, Paper, Typography, Stack, Grid, Table, TableBody, TableCell, TableHead, TableRow,
     TableContainer, TextField, Button, Dialog, DialogTitle, DialogContent, DialogActions,
     IconButton, Tooltip, Alert, Autocomplete, InputAdornment, Divider, Chip,
+    MenuItem, FormControl, InputLabel, Select, Switch, FormControlLabel,
 } from '@mui/material';
 import { Add, DeleteOutline, Save, FiberManualRecord, VpnKey, Autorenew, ContentCopy } from '@mui/icons-material';
 import { api } from '../api';
@@ -29,6 +30,26 @@ const SETTING_FIELDS = [
     { key: 'central_latency_target', label: 'Central latency target', adorn: 'sec', help: 'Target end-to-end edge→central ingest latency used for SLA health.' },
 ];
 
+// Authentication (AD/LDAP) field metadata — mirrors DC info-request sheet D8-D17.
+const AUTH_MODE_OPTIONS = [
+    { value: 'local', label: 'Local accounts only' },
+    { value: 'ldap', label: 'Active Directory only' },
+    { value: 'both', label: 'Local + Active Directory' },
+];
+const AUTH_TEXT_FIELDS = [
+    { key: 'url', label: 'LDAP URL', help: 'ldaps://dc.ongc.co.in:636 (sheet D8)' },
+    { key: 'bindDN', label: 'Bind account (DN)', help: 'Read-only service account distinguished name (sheet D9)' },
+    { key: 'searchBase', label: 'User search base', help: 'e.g. OU=Users,DC=ongc,DC=co,DC=in (sheet D11)' },
+    { key: 'searchFilter', label: 'User search filter', help: 'Blank uses the standard filter (sheet D12)' },
+    { key: 'domain', label: 'AD domain', help: 'e.g. ongc.co.in — used to build user@domain' },
+];
+const AUTH_ROLE_FIELDS = [
+    { key: 'roleAdmin', label: 'AD group → Administrator', help: 'Comma-separated group names (sheet D13)' },
+    { key: 'roleOperator', label: 'AD group → Operator', help: 'Comma-separated group names (sheet D14)' },
+    { key: 'roleViewer', label: 'AD group → Viewer', help: 'Comma-separated group names (sheet D15)' },
+];
+const AUTH_DEFAULT_ROLE_OPTIONS = ['viewer', 'operator', 'admin'];
+
 export default function Settings() {
     const { can } = useAuth();
     const isAdmin = can('admin');
@@ -54,6 +75,12 @@ export default function Settings() {
     const [savingSettings, setSavingSettings] = useState(false);
     const [settingsMsg, setSettingsMsg] = useState('');
 
+    // ---- Authentication (AD/LDAP) settings — DC info-request sheet D8-D17 -------
+    const [authSettings, setAuthSettingsState] = useState(null);
+    const [authDraft, setAuthDraft] = useState({});
+    const [savingAuth, setSavingAuth] = useState(false);
+    const [authMsg, setAuthMsg] = useState('');
+
     // ---- Presence ---------------------------------------------------------------
     const [presence, setPresence] = useState([]);
 
@@ -72,13 +99,22 @@ export default function Settings() {
             .catch((e) => { if (e?.response?.status !== 401) setErr(e?.response?.data?.error || 'Failed to load settings'); });
     }, []);
 
+    // Admin-only on the backend — a non-admin's 403 is expected and silent here
+    // (the panel below only renders its form for isAdmin anyway).
+    const loadAuthSettings = useCallback(() => {
+        if (!isAdmin) return;
+        api.authSettings()
+            .then((s) => { setAuthSettingsState(s); setAuthDraft({ ...s, bindPassword: '' }); })
+            .catch((e) => { if (![401, 403].includes(e?.response?.status)) setErr(e?.response?.data?.error || 'Failed to load authentication settings'); });
+    }, [isAdmin]);
+
     const loadPresence = useCallback(() => {
         api.presence()
             .then((p) => setPresence(Array.isArray(p) ? p : []))
             .catch((e) => { if (e?.response?.status !== 401) setErr(e?.response?.data?.error || 'Failed to load presence'); });
     }, []);
 
-    useEffect(() => { loadRigs(); loadSettings(); }, [loadRigs, loadSettings]);
+    useEffect(() => { loadRigs(); loadSettings(); loadAuthSettings(); }, [loadRigs, loadSettings, loadAuthSettings]);
 
     // Presence: ping our own liveness, then poll the roster every ~10s.
     const presenceRef = useRef(loadPresence);
@@ -174,6 +210,25 @@ export default function Settings() {
             if (e?.response?.status !== 401) setErr(e?.response?.data?.error || 'Failed to save settings');
         } finally {
             setSavingSettings(false);
+        }
+    };
+
+    // AD/LDAP settings — takes effect live (ldap.reload() on the backend), no
+    // restart, no redeploy. bindPassword is write-only: only sent if the admin
+    // typed a new value, so leaving it blank keeps whatever is already stored.
+    const saveAuthSettings = async () => {
+        setSavingAuth(true); setErr(''); setAuthMsg('');
+        try {
+            const patch = { ...authDraft };
+            if (!patch.bindPassword) delete patch.bindPassword;
+            delete patch.bindPasswordSet;
+            const updated = await api.setAuthSettings(patch);
+            setAuthSettingsState(updated); setAuthDraft({ ...updated, bindPassword: '' });
+            setAuthMsg('Authentication settings saved — applies immediately, no restart needed.');
+        } catch (e) {
+            if (e?.response?.status !== 401) setErr(e?.response?.data?.error || 'Failed to save authentication settings');
+        } finally {
+            setSavingAuth(false);
         }
     };
 
@@ -283,7 +338,104 @@ export default function Settings() {
                         {!settings && <Typography variant="caption" color="text.secondary" sx={{ mt: 1.5 }}>Loading settings…</Typography>}
                     </Paper>
 
-                    {/* 3) NOTIFICATIONS ----------------------------------------------------- */}
+                    {/* 3) AUTHENTICATION (AD/LDAP) ------------------------------------------ */}
+                    {/* DC info-request sheet D8-D17: "needed at commissioning, not at
+                        installation." Local accounts work out of the box; an admin turns AD
+                        on here whenever it is ready — no VM access, no redeploy, no restart.
+                        The bind password is write-only: it never comes back from the server,
+                        so the field shows "configured" rather than the actual secret. */}
+                    {isAdmin && (
+                        <Paper sx={{ p: 2, display: 'flex', flexDirection: 'column' }}>
+                            <Stack direction="row" alignItems="center" spacing={2} mb={1}>
+                                <Box sx={{ flexGrow: 1 }}>
+                                    <Typography variant="h6">Authentication (Active Directory)</Typography>
+                                    <Typography variant="caption" color="text.secondary">
+                                        Windows-domain login and role mapping. Local accounts always keep working —
+                                        switch to "Local + Active Directory" for a safe trial, or "Active Directory
+                                        only" once AD is verified. Applies immediately; no restart. Audit-logged.
+                                    </Typography>
+                                </Box>
+                                <Button variant="contained" startIcon={<Save />} onClick={saveAuthSettings}
+                                    disabled={savingAuth || !authSettings}>{savingAuth ? 'Saving…' : 'Save'}</Button>
+                            </Stack>
+                            {authMsg && <Alert severity="success" sx={{ mb: 1.5 }} onClose={() => setAuthMsg('')}>{authMsg}</Alert>}
+                            {!authSettings ? (
+                                <Typography variant="caption" color="text.secondary">Loading authentication settings…</Typography>
+                            ) : (
+                                <Grid container spacing={2}>
+                                    <Grid item xs={12} sm={6} md={4}>
+                                        <FormControl size="small" fullWidth>
+                                            <InputLabel id="auth-mode-label">Sign-in mode</InputLabel>
+                                            <Select
+                                                labelId="auth-mode-label" label="Sign-in mode"
+                                                value={authDraft.mode || 'local'}
+                                                onChange={(e) => setAuthDraft({ ...authDraft, mode: e.target.value })}
+                                            >
+                                                {AUTH_MODE_OPTIONS.map((o) => <MenuItem key={o.value} value={o.value}>{o.label}</MenuItem>)}
+                                            </Select>
+                                        </FormControl>
+                                    </Grid>
+                                    <Grid item xs={12} sm={6} md={4}>
+                                        <FormControl size="small" fullWidth>
+                                            <InputLabel id="auth-default-role-label">Default role (unmapped AD users)</InputLabel>
+                                            <Select
+                                                labelId="auth-default-role-label" label="Default role (unmapped AD users)"
+                                                value={authDraft.defaultRole || 'viewer'}
+                                                onChange={(e) => setAuthDraft({ ...authDraft, defaultRole: e.target.value })}
+                                            >
+                                                {AUTH_DEFAULT_ROLE_OPTIONS.map((r) => <MenuItem key={r} value={r}>{r}</MenuItem>)}
+                                            </Select>
+                                        </FormControl>
+                                    </Grid>
+                                    <Grid item xs={12} sm={6} md={4}>
+                                        <TextField
+                                            size="small" fullWidth type="password" label="Bind account password"
+                                            value={authDraft.bindPassword || ''}
+                                            onChange={(e) => setAuthDraft({ ...authDraft, bindPassword: e.target.value })}
+                                            placeholder={authSettings.bindPasswordSet ? 'Configured — leave blank to keep it' : 'Not set (sheet D10)'}
+                                            helperText="Write-only — never shown once saved"
+                                        />
+                                    </Grid>
+                                    {AUTH_TEXT_FIELDS.map((f) => (
+                                        <Grid item xs={12} sm={6} md={4} key={f.key}>
+                                            <TextField
+                                                size="small" fullWidth label={f.label}
+                                                value={authDraft[f.key] ?? ''}
+                                                onChange={(e) => setAuthDraft({ ...authDraft, [f.key]: e.target.value })}
+                                                helperText={f.help}
+                                            />
+                                        </Grid>
+                                    ))}
+                                    {AUTH_ROLE_FIELDS.map((f) => (
+                                        <Grid item xs={12} sm={6} md={4} key={f.key}>
+                                            <TextField
+                                                size="small" fullWidth label={f.label}
+                                                value={authDraft[f.key] ?? ''}
+                                                onChange={(e) => setAuthDraft({ ...authDraft, [f.key]: e.target.value })}
+                                                helperText={f.help}
+                                            />
+                                        </Grid>
+                                    ))}
+                                    <Grid item xs={12}>
+                                        <Stack direction="row" spacing={3}>
+                                            <FormControlLabel
+                                                control={<Switch size="small" checked={!!authDraft.startTLS}
+                                                    onChange={(e) => setAuthDraft({ ...authDraft, startTLS: e.target.checked })} />}
+                                                label="Upgrade ldap:// with StartTLS"
+                                            />
+                                            <FormControlLabel
+                                                control={<Switch size="small" checked={authDraft.tlsRejectUnauthorized !== false}
+                                                    onChange={(e) => setAuthDraft({ ...authDraft, tlsRejectUnauthorized: e.target.checked })} />}
+                                                label="Verify TLS certificate (leave on unless the DC uses a self-signed cert)"
+                                            />
+                                        </Stack>
+                                    </Grid>
+                                </Grid>
+                            )}
+                        </Paper>
+                    )}
+
+                    {/* 4) NOTIFICATIONS ----------------------------------------------------- */}
                     {/* Channel CRUD moved here from the Alarm Command Centre (UI-18); the ACC
                         keeps only the compact recent-notifications log. Admin-gated inside the
                         panel like the other sections (read-only view for non-admins). */}
@@ -298,7 +450,7 @@ export default function Settings() {
                         <NotificationsPanel section="channels" />
                     </Paper>
 
-                    {/* 4) USER LIVENESS ----------------------------------------------------- */}
+                    {/* 5) USER LIVENESS ----------------------------------------------------- */}
                     <Paper sx={{ p: 2, display: 'flex', flexDirection: 'column' }}>
                         <Box mb={1}>
                             <Typography variant="h6">Signed-in users</Typography>

@@ -110,6 +110,11 @@ export const api = {
     settings: () => axios.get('/api/settings').then((r) => r.data),
     setSettings: (patch) => axios.patch('/api/settings', patch).then((r) => r.data),
 
+    // Authentication settings (AD/LDAP) — admin-only on the backend, both GET and PATCH.
+    // Applies live (no restart); bindPassword is write-only and never comes back in GET.
+    authSettings: () => axios.get('/api/settings/auth').then((r) => r.data),
+    setAuthSettings: (patch) => axios.patch('/api/settings/auth', patch).then((r) => r.data),
+
     // Rig registry mutations — admin-only on the backend (monitoring-only: no write path to the rig PLC).
     // addRig returns the created rig plus a one-time `device_token` (the per-rig edge sync credential,
     // generated server-side if the admin left it blank). rotateRigToken issues a fresh token (shown once).

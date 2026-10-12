@@ -40,6 +40,7 @@ const rigview = require('./lib/rigview');
 const wells = require('./lib/wells');
 const activity = require('./lib/activity');
 const settings = require('./lib/settings');
+const authSettings = require('./lib/authSettings');
 const presence = require('./lib/presence');
 
 const PORT = Number(process.env.PORT || 6000);
@@ -482,6 +483,15 @@ function buildApiRouter() {
     r.patch('/settings', requireRoleAudited('admin'),
         wrap((req) => settings.setSettings(req.body, req.user.username)));
 
+    // ----- Authentication settings (AD/LDAP, DC info-request sheet D8-D17) -----
+    // Admin-only for read too (bind DN / search base / group mapping describe the
+    // customer's AD structure) — requireRoleAudited so an unauthorized probe of
+    // this endpoint lands in the audit log same as a denied write. Applies live
+    // via ldap.reload() — no restart.
+    r.get('/settings/auth', requireRoleAudited('admin'), wrap(() => authSettings.getAuthSettings()));
+    r.patch('/settings/auth', requireRoleAudited('admin'),
+        wrap((req) => authSettings.setAuthSettings(req.body, req.user.username)));
+
     // ----- User presence / liveness (proposal §6.5) -----
     r.get('/presence', wrap(() => presence.list()));
     r.post('/presence/ping', wrap(async (req) => { await presence.touch(req.user, req.ip); return { ok: true }; }));
@@ -580,6 +590,9 @@ async function main() {
     // Seed platform settings defaults (retention/update-rate/offline/latency) and
     // sync the live offline threshold from whatever is persisted (proposal §6.5).
     await settings.seedDefaults();
+    // Seed AD/LDAP settings (sheet D8-D17) and point ldap.js at whatever is
+    // persisted — a prior install's saved settings, or the env-seeded default.
+    await authSettings.seedDefaults();
 
     // Offline sweeper: flip rigs to offline once their data ages out, push deltas.
     sweepTimer = setInterval(async () => {
