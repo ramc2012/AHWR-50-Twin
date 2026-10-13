@@ -58,7 +58,7 @@ secrets plane.
         │   │ MinIO (S3)  buckets: crmf-reports · crmf-backups · crmf-mlflow      │ │   │
         │   └───────┬──────────────────────────────┬─────────────────────────────┘ │   │
         │           ▼                              ▼                                │   │
-        │   MLflow (Phase 1)              ETP 2.0 + WITSML 1.4.1 (read-only)        │   │
+        │   MLflow (Phase 1)              ETP v1.2 + WITSML 2.1                     │   │
         │   KServe (Phase 2 note)         host etp.ongc.local                       │   │
         │                                                                            │   │
         │   Secrets:   Vault ──(External Secrets Operator)──▶ crmf-secrets           │   │
@@ -95,7 +95,7 @@ ships the *consuming CR*; the controller itself is installed from an upstream ch
 | **MQTT → Kafka bridge** | `k8s/platform/mqtt/01-mqtt-kafka-bridge.yaml` (Option A: EMQX rule-engine bridge, no pod; Option B: standalone Deployment, `replicas: 0`, placeholder image) | Scaffolded |
 | **Apache Kafka** | `k8s/platform/kafka/00-kafka.yaml` (`Kafka crmf-kafka`, 3-broker KRaft via `KafkaNodePool`), `01-topics.yaml` (5 `KafkaTopic`), `02-users.yaml` (2 `KafkaUser` SCRAM+ACL), `04-metrics-configmap.yaml` | Via upstream operator (Strimzi) |
 | **Kafka Streams (derived channels)** | `k8s/platform/kafka/03-stream-processor.yaml` (`crmf-stream` Deployment, `replicas: 0`, image `crmf/crmf-stream:scaffold`) | Scaffolded |
-| **ETP 2.0 server + WITSML store** | `k8s/platform/standards/01-etp-witsml.yaml` (`crmf-etp-witsml` Deploy/Svc, ports 8080 WITSML SOAP / 8443 ETP ws, `READ_ONLY=true`), `00-etp-witsml-note.md` | Scaffolded (in-house image `crmf/crmf-etp-witsml:0.1.0` built separately) |
+| **ETP v1.2 server + WITSML 2.1 store** | `k8s/platform/standards/01-etp-witsml.yaml` (`crmf-etp-witsml` Deploy/Svc, 8443 ETP wss + capabilities, 8080 HTTP), `00-etp-witsml-note.md`; schema Job `timescaledb/06-migrations.yaml` | Implemented (`central/etp-witsml`, image `crmf/crmf-etp-witsml:1.0.0`) |
 | **TimescaleDB HA (Patroni-equivalent)** | `k8s/platform/timescaledb/00-cluster.yaml` (`Cluster crmf-timescaledb`, 3 inst = 1 primary + 2 replicas, 1 synchronous), `01-schema-configmap.yaml`, `02-backup.yaml`, `03-dr-replica-cluster.yaml`, `04-pooler.yaml`, `05-restore-test.yaml` (weekly restore-verification) | Via upstream operator (CloudNativePG; auto-failover replaces Patroni) |
 | **PostgreSQL** | TimescaleDB cluster above (PG16 + timescaledb ext); plus dedicated `crmf-keycloak-db` (`keycloak/01-keycloak-db.yaml`); MLflow `mlflow` DB on `crmf-timescaledb` | Via upstream operator (CNPG) |
 | **MinIO (object store)** | `k8s/platform/minio/00-minio-tenant.yaml` (StatefulSet + `minio` Svc + bucket-init Job: `crmf-reports`, `crmf-backups`, `crmf-mlflow`) | Implemented (single-node; Operator `Tenant` HA path documented in `minio/README.md`) |
@@ -403,8 +403,9 @@ Alert rules (`observability/00-prometheusrule.yaml`, `crmf-alerts`): `CRMFBacken
   placeholder image `crmf/crmf-stream:scaffold`; app code owned by another workstream.
 - **MQTT→Kafka bridge** (`mqtt/01-mqtt-kafka-bridge.yaml`) — `replicas: 0`; prefer the EMQX
   rule-engine bridge (Option A, no pod) in production.
-- **ETP 2.0 + WITSML server** (`standards/01-etp-witsml.yaml`) — manifest real, but the in-house
-  image `crmf/crmf-etp-witsml:0.1.0` is built separately; point at the real tag at rollout.
+- **ETP v1.2 + WITSML 2.1 server** (`standards/01-etp-witsml.yaml`) — build the image from
+  `central/etp-witsml` and push `crmf/crmf-etp-witsml:1.0.0`; the Ingress for its dedicated host
+  is still to be added (see the standards note).
 - **KServe model serving** (`ml/01-kserve-note.md`) — Phase 2 design note only.
 - **Vault** (`vault/`) — the ESO `SecretStore`/`ExternalSecret` are real, but they require an
   external Vault and one-time `vault` CLI setup; until then `crmf-secrets` can be created manually.
@@ -439,7 +440,7 @@ deploy/
 │   ├── keycloak/                     # Keycloak, backing DB, ongc realm + AD federation
 │   ├── minio/                        # MinIO StatefulSet + buckets
 │   ├── ml/                           # MLflow (Phase 1) + KServe note (Phase 2)
-│   ├── standards/                    # ETP 2.0 + WITSML server (scaffold) + note
+│   ├── standards/                    # ETP v1.2 + WITSML 2.1 server + note
 │   ├── vault/                        # ESO SecretStore/ExternalSecret + Vault note
 │   └── observability/                # PrometheusRule, Grafana dashboard, MQTT monitor, Loki note
 └── ansible/                          # RKE2 bootstrap → operators → platform CRs + app chart

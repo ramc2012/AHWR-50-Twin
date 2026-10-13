@@ -61,7 +61,7 @@ spec:
         - protocol: TCP
           port: 5432
     # Application clients in this namespace that connect on 5432:
-    # backend, mlflow, the ETP/WITSML historian, and the pgbouncer pooler.
+    # backend, mlflow, the ETP/WITSML server, the schema-migration Job, and the pgbouncer pooler.
     - from:
         - podSelector:
             matchLabels:
@@ -73,6 +73,9 @@ spec:
         - podSelector:
             matchLabels:
               app.kubernetes.io/name: etp-witsml
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: crmf-db-migrate
         - podSelector:
             matchLabels:
               cnpg.io/poolerName: crmf-timescaledb-pooler-rw

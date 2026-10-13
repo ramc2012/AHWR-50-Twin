@@ -43,3 +43,8 @@ _preinstall_backups/
 
 # self-signed MCP TLS certs (local)
 certs/
+
+# Local working folders (reference checkouts, generated output, scratch)
+/external/
+/output/
+/tmp/

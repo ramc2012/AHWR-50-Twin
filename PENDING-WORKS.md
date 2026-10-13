@@ -36,9 +36,12 @@ The central platform (`central/`) is built, security-hardened and audited (see
   HMI (read-only tabs: Dashboard, Equipment, Well Control/BOP, Trends/EDR, Workover, Alarms, Daily
   Report, Maintenance) fed by `GET /api/rigs/:id/live` which reconstructs the edge `rig_data` shape
   from central telemetry. Left nav is collapsible. Remaining: historical **scrub-back replay** UI.
-- 🔴 **Scaffold-only platform services** (ship at `replicas: 0` / placeholder image): in-house
-  **ETP 2.0 server + WITSML 1.4.1 store**, **ML inference** (HPU condition / hookload anomaly /
-  NPT classifier — MLflow/KServe), **Kafka derived-channels stream processor**, **MQTT→Kafka bridge**.
+- ✅ **ETP v1.2 + WITSML 2.1 server** (`central/etp-witsml`): Discovery, Store, ChannelSubscribe,
+  ChannelDataFrame for readers; Store + ChannelDataLoad for rig edges (lossless resume). Checked
+  with the independent Geosiris etpproto client; objects validated against the official XSDs.
+- 🔴 **Scaffold-only platform services** (ship at `replicas: 0` / placeholder image): **ML inference**
+  (HPU condition / hookload anomaly / NPT classifier — MLflow/KServe), **Kafka derived-channels
+  stream processor**, **MQTT→Kafka bridge**.
 - 🔴 **Historical scrub-back replay** UI (TimescaleDB history exists; no replay scrubber).
 - 🟡 **K8s never `kubectl apply`'d** — the deploy layer is `helm`/`kubeconform`-validated only.
 - ⚪ Deferred low audit items #31–#35 (frontend a11y/code-split, lexical-ts compare, metrics

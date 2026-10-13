@@ -45,6 +45,24 @@ services:
     # ports:
     #   - "127.0.0.1:5432:5432"
 
+  # Schema upgrades for existing databases: applies db/migrations/*.sql (each
+  # idempotent) as the schema owner on every start, after init.sql.
+  crmf-db-migrate:
+    image: ${TIMESCALE_IMAGE:-timescale/timescaledb:latest-pg15}
+    container_name: crmf_db_migrate
+    command: ["sh", "/db/migrate.sh"]
+    environment:
+      - PGHOST=timescaledb
+      - PGUSER=${PGUSER:-crmf}
+      - PGPASSWORD=${PGPASSWORD:?set PGPASSWORD in .env}
+      - PGDATABASE=${PGDATABASE:-crmf}
+    volumes:
+      - ./db:/db:ro
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+    restart: "no"
+
   # Ingestion + fleet portal API + live updates.
   crmf-backend:
     build:
@@ -128,6 +146,8 @@ services:
     depends_on:
       timescaledb:
         condition: service_healthy
+      crmf-db-migrate:
+        condition: service_completed_successfully
       # Demo: wait for the bundled test directory so the first AD/LDAP login succeeds.
       # Resolves to a no-op outside the demo profile (openldap then isn't created).
       openldap:
@@ -148,6 +168,35 @@ services:
       timeout: 5s
       retries: 5
       start_period: 25s
+
+  # ETP v1.2 / WITSML 2.1 server over the historian (etp-witsml/). Partners and
+  # tools read the fleet's Energistics objects and channel data (Discovery, Store,
+  # ChannelSubscribe, ChannelDataFrame) with a portal token; rig edges in ETP
+  # store mode load their own rig (Store + ChannelDataLoad) with their device token.
+  # The capabilities document is at /.well-known/etp-server-capabilities.
+  # Loopback by default; publish through the TLS front end (wss://) for real use.
+  crmf-etp-witsml:
+    build:
+      context: ./etp-witsml
+    container_name: crmf_etp_witsml
+    restart: unless-stopped
+    cpus: 1.0
+    mem_limit: 512m
+    environment:
+      - NODE_ENV=production
+      - ETP_PORT=8443
+      - HTTP_PORT=8080
+      - PGHOST=timescaledb
+      - PGPORT=5432
+      - PGUSER=crmf_app
+      - PGPASSWORD=${PGPASSWORD:?set PGPASSWORD in .env}
+      - PGDATABASE=${PGDATABASE:-crmf}
+      - JWT_SECRET=${JWT_SECRET:?set JWT_SECRET in .env}
+    ports:
+      - "${ETP_BIND:-127.0.0.1}:${ETP_PORT:-8443}:8443"
+    depends_on:
+      crmf-db-migrate:
+        condition: service_completed_successfully
 
   # Read-only MCP server: exposes fleet status / rig drill-down / alarms /
   # governance / reports to AI systems over MCP (streamable HTTP at /mcp).
