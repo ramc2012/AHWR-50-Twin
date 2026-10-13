@@ -126,17 +126,19 @@ layer is the separate CRMF, so the **Fleet page has been removed** from the edge
   stub (`sync-sink`, demo profile) stands in for the CRMF so the loop is demonstrable.
 - **Edge health / data-quality agent**: per-rig health score from data freshness
   (stale/missing sources), collector/PLC link, and sync lag — shown on the Edge Sync page.
-- **WITSML 1.4.1 agent (export)**: standards-compliant `<wells>` and date-time `<logs>` XML
-  download for interoperability with the central WITSML store / office systems.
-- **ETP 2.0 publisher** (`lib/etp.js`, shown on the Edge Sync page): connects to an ETP
-  server over WebSocket (subprotocol `etp12.energistics.org`), performs the Session
-  handshake (RequestSession → OpenSession), advertises ChannelMetadata, then streams
-  ChannelData frames — **JSON-encoded subset** (`application/x-etp-message+json`). Outbound
-  only. A demo `etp-sink` stands in for the central ETP server. (Full Avro binary encoding +
-  complete capability set is the documented next step.)
+- **WITSML export**: 1.4.1.1 `<wells>`, `<wellbores>` and date-time `<logs>` (schema-valid,
+  Energistics units) and WITSML 2.1 objects (`/api/witsml21/*`: Well, Wellbore, Rig,
+  RigUtilization, Log, ChannelSet, Channel with PWLS property kinds; `lib/witsml21.js`).
+- **ETP v1.2 client** (`lib/etp.js`, shared with AHWR-150-EDGE; Edge Sync page): binary Avro
+  with the official v1.2 schemas (`lib/etp12`). Store mode puts the rig's WITSML 2.1 objects
+  (Store, Protocol 4) and loads its channels (ChannelDataLoad, Protocol 22); producer mode is
+  the ChannelStreaming (Protocol 1) simple streamer. This twin reads channel data from the sync
+  agent's in-memory window, so store mode resumes at most that far back (AHWR-150-EDGE resumes
+  from its TimescaleDB historian). The demo `etp-sink` is an in-memory ETP v1.2 endpoint; the
+  CRMF store is `central/etp-witsml`. Outbound only.
 
 Config via env (compose, with defaults): `CENTRAL_URL`, `DEVICE_ID`, `DEVICE_TOKEN`,
-`SYNC_ENABLED`, `SYNC_BATCH_SECONDS`, `SYNC_BUFFER_DAYS`, `ETP_ENABLED`, `ETP_URL`, `ETP_STREAM_SECONDS`.
+`SYNC_ENABLED`, `SYNC_BATCH_SECONDS`, `SYNC_BUFFER_DAYS`, `ETP_ENABLED`, `ETP_URL`, `ETP_MODE`, `ETP_AUTH`, `ETP_STREAM_SECONDS`.
 
 ## 10. Multi-protocol sources, OPC UA devices & editable variable mapping
 - **Map any variable to any source** — the variables registry (`/variables`) is protocol-aware:
@@ -157,7 +159,7 @@ Config via env (compose, with defaults): `CENTRAL_URL`, `DEVICE_ID`, `DEVICE_TOK
   wired in `backend/server.js` (FIELD_MAP now lives in `fieldmap.js`, shared by the
   variables registry).
 - Mock cycle (+ read-only ESD/lockout status): `mock/mock-data.js`. Demo stubs: `sync-sink/`
-  (CRMF HTTP ingest), `etp-sink/` (ETP 2.0 WebSocket server). OPC UA: `telegraf/opcua.conf` +
+  (CRMF HTTP ingest), `etp-sink/` (in-memory ETP v1.2 endpoint). OPC UA: `telegraf/opcua.conf` +
   `opc-plc` simulator.
 - Frontend: `frontend/src/components/{Activity,Alarms,Workover,Reports,Maintenance,Variables,Sync}/*`,
   the global `Alarms/AlarmStrip.jsx`, `Layout/ThemeSwitcher.jsx`, `context/ThemeModeContext.jsx`,
@@ -167,7 +169,7 @@ Config via env (compose, with defaults): `CENTRAL_URL`, `DEVICE_ID`, `DEVICE_TOK
   the sync buffer lives in `/data/sync_buffer`.
 
 ## Not yet (future increments — central CRMF / out of edge scope)
-ETP 2.0 **Avro binary** encoding (the JSON subset is implemented), historian replay + min/max envelopes,
+Historian replay + min/max envelopes,
 per-tag (vs per-source) data-quality flags. Fleet/remote multi-rig, SMS/email alerting and
 cloud sync are the **central CRMF**'s responsibility, not the edge app.
 (All read-only — per the monitoring-only principle, no control write-back is ever added.)

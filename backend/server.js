@@ -21,6 +21,8 @@ const sync = require('./lib/sync');
 const health = require('./lib/health');
 const witsml = require('./lib/witsml');
 const etp = require('./lib/etp');
+const energistics = require('./lib/energistics');
+const witsml21 = require('./lib/witsml21');
 const efficiency = require('./lib/efficiency');
 const cmms = require('./lib/cmms');
 const instruments = require('./lib/instruments');
@@ -99,9 +101,15 @@ io.on('connection', (socket) => {
     socket.emit('etp_status', etp.getStatus());
 });
 
-// Start the store-and-forward sync agent + ETP 2.0 publisher (outbound only).
-sync.start(io);
-etp.start(io);
+// Start the store-and-forward sync agent + ETP v1.2 client (outbound only). The
+// Energistics view (lib/energistics.js) is configured below, once FIELD_MAP exists.
+sync.start(io, { getChannels: () => energistics.getDictionary() });
+etp.start(io, {
+    getChannels: () => energistics.getDictionary(),
+    readTelemetry: async (afterMs, uptoMs, limit) => energistics.readTelemetry(afterMs, uptoMs, limit),
+    listObjects: () => energistics.listObjects(),
+    applicationName: 'AHWR-50 Digital Twin',
+});
 
 // InfluxDB Query Client
 const queryApi = new InfluxDB({
@@ -346,6 +354,14 @@ const applyS7Scale = (fieldName, value, scaleMap) => {
 // Map Modbus fields to application categories
 // Map S7 field names to application categories
 const { FIELD_MAP } = require('./lib/fieldmap');
+energistics.configure({
+    getRigId: () => (sync.getStatus() && sync.getStatus().deviceId) || process.env.DEVICE_ID || 'AHWR-50-EDGE',
+    getWells: () => wells.getWells(),
+    getRecent: (n) => sync.getRecent(n),
+    getPlcConfig: () => getModbusConfig(),
+    catalog: edrCatalog,
+    fieldMap: FIELD_MAP,
+});
 
 // Measurements polled for the live view (S7comm writes under "AHWR";
 // app-level measurements support mock/Modbus sources). Shared with /api/history.
@@ -1516,7 +1532,7 @@ app.post('/api/sync/flush', auth.requireAuth, auth.requireRole('admin'), async (
 // --- Edge health / data quality ---
 app.get('/api/health/edge', auth.requireAuth, (req, res) => res.json(health.getEdgeHealth(latestRigData, sync.getStatus())));
 
-// --- ETP 2.0 publisher (outbound only) ---
+// --- ETP v1.2 client (outbound only) ---
 app.get('/api/etp/status', auth.requireAuth, (req, res) => res.json(etp.getStatus()));
 app.put('/api/etp/config', auth.requireAuth, auth.requireRole('admin'), async (req, res) => {
     try { res.json({ success: true, status: await etp.setConfig(req.body || {}) }); }
@@ -1531,13 +1547,76 @@ app.put('/api/efficiency/config', auth.requireAuth, auth.requireRole('admin'), a
     catch (e) { res.status(e.status || 400).json({ error: e.message }); }
 });
 
-// --- WITSML 1.4.1 export (interoperability, export only) ---
+// --- WITSML export (interoperability, export only) ---
+// The well: ?well=<id or name>, else the active well, else the workover header.
+const exportWell = (req) => {
+    const id = req.query.well ? String(req.query.well) : null;
+    const w = id ? wells.getWells().find((x) => x.id === id || x.name === id) : wells.getActiveWell();
+    if (w) return w;
+    const h = workover.getHeader() || {};
+    return { name: h.well || 'WELL', field: h.field, operator: h.operator, jobNo: h.jobNo, status: 'unknown' };
+};
+const liveDepths = () => ({ holeDepthM: latestRigData?.drilling?.hole_depth, bitDepthM: latestRigData?.drilling?.bit_depth });
+// WITSML 1.4.1.1 (lib/witsml.js; schema-valid, Energistics units).
 app.get('/api/witsml/well', auth.requireAuth, (req, res) => {
-    res.type('application/xml').send(witsml.wells(wells.getHeader() || workover.getHeader()));
+    res.type('application/xml').send(witsml.wells(exportWell(req)));
+});
+app.get('/api/witsml/wellbore', auth.requireAuth, (req, res) => {
+    const w = exportWell(req);
+    res.type('application/xml').send(witsml.wellbores(w, w.status === 'active' ? liveDepths() : {}));
 });
 app.get('/api/witsml/log', auth.requireAuth, (req, res) => {
     const minutes = Math.min(60, Math.max(1, Number(req.query.minutes) || 2));
-    res.type('application/xml').send(witsml.logs(wells.getHeader() || workover.getHeader(), sync.getRecent(minutes * 60)));
+    const dict = energistics.getDictionary();
+    const channels = witsml.DEFAULT_LOG_METRICS.filter((m) => dict.has(m))
+        .map((m) => ({ metric: m, unit: dict.get(m).storedUnit || dict.get(m).uom, label: dict.get(m).label }));
+    const rows = sync.getRecent(minutes * 60).map((s) => ({ time: s.ts, ...s.values }));
+    res.type('application/xml').send(witsml.logs(exportWell(req), channels, rows, { name: 'Edge time log', intervalLabel: `last ${minutes} min` }));
+});
+// WITSML 2.1 (lib/witsml21.js) from the in-memory window; the CMF holds the history.
+app.get('/api/channels', auth.requireAuth, (req, res) => {
+    const list = [...energistics.getDictionary().values()].filter((c) => !req.query.unitSource || c.unitSource === req.query.unitSource);
+    res.json({ count: list.length, channels: list });
+});
+app.get('/api/witsml21/objects', auth.requireAuth, async (req, res) => {
+    res.json((await energistics.listObjects()).map(({ type, uuid, title, metric }) => ({ type, uuid, title, metric })));
+});
+app.get('/api/witsml21/object/:uuid', auth.requireAuth, async (req, res) => {
+    const o = (await energistics.listObjects()).find((x) => x.uuid === String(req.params.uuid).toLowerCase());
+    if (!o) return res.status(404).json({ error: 'unknown object' });
+    return res.type('application/xml').send(await o.xml());
+});
+const w21Run = (req) => {
+    const w = exportWell(req);
+    const run = energistics.runs().filter((r) => r.wellId === w.name).pop();
+    if (!run) throw Object.assign(new Error('the well has no run on this rig'), { status: 404 });
+    return run;
+};
+const ids = require('./lib/ids');
+for (const [kind, uuidOf] of Object.entries({
+    well: (r) => ids.well(r.wellId), wellbore: (r) => ids.wellbore(r.wellId),
+    rigutilization: (r) => ids.rigUtilization(energistics.rigId(), r.wellId, r.startedAt),
+    log: (r) => ids.log(energistics.rigId(), r.wellId, r.startedAt),
+})) {
+    app.get(`/api/witsml21/${kind}`, auth.requireAuth, async (req, res) => {
+        try {
+            const uuid = uuidOf(w21Run(req));
+            const o = (await energistics.listObjects()).find((x) => x.uuid === uuid);
+            res.type('application/xml').send(await o.xml());
+        } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
+    });
+}
+app.get('/api/witsml21/rig', auth.requireAuth, (req, res) => res.type('application/xml').send(witsml21.rig(energistics.rigId(), {})));
+app.get('/api/witsml21/channelset', auth.requireAuth, (req, res) => {
+    try {
+        const r = w21Run(req);
+        const entries = energistics.channelEntries();
+        const rows = req.query.data === '1' ? energistics.recentRows(Number(process.env.WITSML_MAX_ROWS || 3600)) : undefined;
+        res.type('application/xml').send(witsml21.channelSet(r, entries, {
+            rigId: energistics.rigId(), loggingCompany: energistics.loggingCompany(),
+            ...energistics.runExtent(r, entries), rows,
+        }));
+    } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
 });
 
 // --- Variables mapping (protocol-aware sources) ---

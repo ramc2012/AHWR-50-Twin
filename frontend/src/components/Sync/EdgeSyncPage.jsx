@@ -281,7 +281,7 @@ export default function EdgeSyncPage() {
         }
     };
 
-    // ---- ETP 2.0 publisher (admin) ----
+    // ---- ETP v1.2 client (admin) ----
     const setEtpConfig = async (body, successMsg) => {
         if (!isAdmin) return;
         setEtpSaving(true);
@@ -330,6 +330,8 @@ export default function EdgeSyncPage() {
         downloadXml(`/api/witsml/log?minutes=${n}`, 'witsml-log.xml');
     };
     const downloadWell = () => downloadXml('/api/witsml/well', 'witsml-well.xml');
+    // WITSML 2.1 objects of the active well; the channel set carries the recent in-memory data.
+    const download21 = (kind) => downloadXml(`/api/witsml21/${kind}${kind === 'channelset' ? '?data=1' : ''}`, `witsml21-${kind}.xml`);
 
     const components = Array.isArray(health?.components) ? health.components : [];
     const missing = Array.isArray(health?.missing) ? health.missing : [];
@@ -484,12 +486,12 @@ export default function EdgeSyncPage() {
                 )}
             </Paper>
 
-            {/* ---- ETP 2.0 publisher panel ---- */}
+            {/* ---- ETP v1.2 panel ---- */}
             <Paper sx={{ p: 2, bgcolor: 'background.paper', border: '1px solid', borderColor: 'divider' }}>
                 <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 2, flexWrap: 'wrap', mb: 1 }}>
                     <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap' }}>
                         <Typography variant="subtitle1" sx={{ fontWeight: 'bold', color: '#38bdf8', display: 'flex', alignItems: 'center', gap: 1 }}>
-                            <Radio size={18} /> ETP 2.0 Publisher
+                            <Radio size={18} /> ETP v1.2
                         </Typography>
                         <EtpStateChip status={etp} />
                     </Box>
@@ -509,7 +511,7 @@ export default function EdgeSyncPage() {
                 </Box>
 
                 <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block', mb: 2 }}>
-                    ETP 2.0 (Energistics) outbound channel streaming — JSON-encoded subset; read-only publish to the central CRMF.
+                    ETP v1.2 (Energistics), binary Avro, official schemas. Store mode (ETP_MODE=store) puts the rig's WITSML 2.1 objects and loads its channels into a store (CRMF etp-witsml); producer mode streams them as a ChannelStreaming simple streamer. This twin resumes from its in-memory window only; outbound only.
                 </Typography>
 
                 {etp?.lastError && (
@@ -522,7 +524,10 @@ export default function EdgeSyncPage() {
                     <Grid item xs={12} sm={6} md={4}><StatTile label="URL" value={etp?.url || '--'} /></Grid>
                     <Grid item xs={6} sm={4} md={2}><StatTile label="Subprotocol" value={etp?.subprotocol || '--'} /></Grid>
                     <Grid item xs={6} sm={4} md={3}><StatTile label="Encoding" value={etp?.encoding || '--'} /></Grid>
+                    <Grid item xs={6} sm={4} md={3}><StatTile label="Mode" value={etp?.mode === 'producer' ? 'Producer (P1)' : 'Store (P4+P22)'} /></Grid>
                     <Grid item xs={6} sm={4} md={3}><StatTile label="Channels" value={fmtInt(etp?.channels)} /></Grid>
+                    <Grid item xs={6} sm={4} md={3}><StatTile label="Objects Put" value={fmtInt(etp?.objectsPut)} /></Grid>
+                    <Grid item xs={6} sm={4} md={3}><StatTile label="Data Sent Up To" value={etp?.lastDataTime ? timeAgo(etp.lastDataTime) : '--'} /></Grid>
                     <Grid item xs={6} sm={4} md={3}><StatTile label="Frames Sent" value={fmtInt(etp?.framesSent)} color="success.main" /></Grid>
                     <Grid item xs={6} sm={4} md={3}><StatTile label="Data Points Sent" value={fmtInt(etp?.dataPointsSent)} color="success.main" /></Grid>
                     <Grid item xs={6} sm={4} md={3}><StatTile label="Last Sent" value={timeAgo(etp?.lastSentAt)} /></Grid>
@@ -533,10 +538,10 @@ export default function EdgeSyncPage() {
             {/* ---- WITSML export panel ---- */}
             <Paper sx={{ p: 2, bgcolor: 'background.paper', border: '1px solid', borderColor: 'divider' }}>
                 <Typography variant="subtitle1" sx={{ fontWeight: 'bold', color: '#38bdf8', display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
-                    <Download size={18} /> WITSML 1.4.1 Export
+                    <Download size={18} /> WITSML Export
                 </Typography>
                 <Typography variant="body2" sx={{ color: 'text.secondary', mb: 2 }}>
-                    Download standards-compliant WITSML XML for the log (last N minutes) and the well header.
+                    WITSML 1.4.1.1: the log (last N minutes) and the well header.
                 </Typography>
                 <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', alignItems: 'center' }}>
                     <TextField
@@ -557,6 +562,17 @@ export default function EdgeSyncPage() {
                         sx={{ color: '#38bdf8', borderColor: 'divider', textTransform: 'none' }}>
                         Download Well XML
                     </Button>
+                </Box>
+                <Typography variant="body2" sx={{ color: 'text.secondary', mt: 2.5, mb: 1.5 }}>
+                    WITSML 2.1 (active well): objects with Energistics identifiers, units and PWLS property kinds.
+                </Typography>
+                <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap' }}>
+                    {[['well', 'Well'], ['wellbore', 'Wellbore'], ['rigutilization', 'Rig Utilization'], ['log', 'Log'], ['channelset', 'Channel Set + Data']].map(([kind, label]) => (
+                        <Button key={kind} variant="outlined" size="small" startIcon={<Download size={14} />} onClick={() => download21(kind)}
+                            sx={{ color: '#38bdf8', borderColor: 'divider', textTransform: 'none' }}>
+                            {label}
+                        </Button>
+                    ))}
                 </Box>
             </Paper>
 

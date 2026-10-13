@@ -112,10 +112,16 @@ services:
       - SYNC_ENABLED=${SYNC_ENABLED:-true}
       - SYNC_BATCH_SECONDS=${SYNC_BATCH_SECONDS:-10}
       - SYNC_BUFFER_DAYS=${SYNC_BUFFER_DAYS:-15}
-      # --- ETP 2.0 publisher (outbound only) ---
+      # --- ETP v1.2 client (outbound only) ---
+      # store: Store + ChannelDataLoad to a store (CRMF etp-witsml, or the demo
+      # etp-sink); producer: ChannelStreaming simple streamer. The demo sink is plain
+      # ws:// on this compose network, hence ALLOW_INSECURE_TRANSPORT; use wss:// and
+      # set it to false when ETP_URL points beyond this host.
       - ETP_ENABLED=${ETP_ENABLED:-true}
       - ETP_URL=${ETP_URL:-ws://etp-sink:9011}
+      - ETP_MODE=${ETP_MODE:-store}
       - ETP_STREAM_SECONDS=${ETP_STREAM_SECONDS:-5}
+      - ALLOW_INSECURE_TRANSPORT=${ALLOW_INSECURE_TRANSPORT:-true}
       # --- Windows domain / Active Directory login ---
       # Demo defaults target the bundled `openldap` test directory; in production
       # override these in .env to point at the real Domain Controller (AD over LDAPS).
@@ -275,7 +281,7 @@ services:
       - PORT=9009
       - INGEST_TOKEN=${DEVICE_TOKEN:-}
 
-  # Local-demo ETP 2.0 server stub (stands in for the CRMF ETP server). Demo profile only.
+  # Local-demo ETP v1.2 endpoint (stands in for the CRMF ETP/WITSML server). Demo profile only.
   etp-sink:
     build: ./etp-sink
     container_name: AHWR_etp_sink
