@@ -1,7 +1,9 @@
 ---
-# In-house ETP 2.0 + WITSML 1.4.1 server — exposes CRMF historian over Energistics
-# standards to external clients (read/monitoring-only; no writes back to rigs).
-# Placeholder image crmf/crmf-etp-witsml — point at the real Harbor tag at rollout.
+# CRMF ETP v1.2 + WITSML 2.1 server (repo/central/etp-witsml): the CMF historian
+# over Energistics standards. Consumers read (Discovery, Store, ChannelSubscribe,
+# ChannelDataFrame) with a portal token; rig edges load their own rig (Store +
+# ChannelDataLoad) with their device token. Nothing is written back to a rig/PLC.
+# Build: docker build -t harbor.ongc.local/crmf/crmf-etp-witsml:1.0.0 repo/central/etp-witsml
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -29,12 +31,12 @@ data:
   PGHOST: "crmf-timescaledb-rw"
   PGPORT: "5432"
   PGDATABASE: "crmf"
-  PGUSER: "crmf"
+  PGUSER: "crmf_app"         # least-privilege application role, as the backend
   HTTP_PORT: "8080"
   ETP_PORT: "8443"
-  WITSML_VERSION: "1.4.1.1"
-  ETP_VERSION: "2.0"
-  READ_ONLY: "true"          # disable WMLS_AddToStore/WMLS_DeleteFromStore
+  # Informational: the server implements ETP v1.2 and WITSML 2.1 (eml 2.3).
+  ETP_VERSION: "1.2"
+  WITSML_VERSION: "2.1"
 ---
 apiVersion: v1
 kind: Service
@@ -52,11 +54,11 @@ spec:
     app.kubernetes.io/name: etp-witsml
     app.kubernetes.io/component: standards
   ports:
-    - name: http              # WITSML 1.4.1 SOAP/WS endpoint
+    - name: http              # WITSML 2.1 objects over HTTP, health, capabilities
       port: 8080
       targetPort: 8080
       protocol: TCP
-    - name: etp               # ETP 2.0 websocket endpoint
+    - name: etp               # ETP v1.2 WebSocket (etp12.energistics.org) + capabilities
       port: 8443
       targetPort: 8443
       protocol: TCP
@@ -72,12 +74,7 @@ metadata:
     app.kubernetes.io/name: etp-witsml
     app.kubernetes.io/component: standards
 spec:
-  # PHASE-2 SCAFFOLD (#18): the image harbor.ongc.local/crmf/crmf-etp-witsml:0.1.0 is a
-  # PLACEHOLDER that does not exist in Harbor — running it at replicas>=1 would
-  # ImagePullBackOff on apply. Pinned to 0 to match the other honest scaffolds
-  # (kafka/03-stream-processor.yaml, mqtt/01-mqtt-kafka-bridge.yaml). Set to 1 only once a
-  # real ETP/WITSML server image is built and mirrored to Harbor.
-  replicas: 0
+  replicas: 1
   selector:
     matchLabels:
       app.kubernetes.io/name: etp-witsml
@@ -101,7 +98,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: etp-witsml
-          image: harbor.ongc.local/crmf/crmf-etp-witsml:0.1.0
+          image: harbor.ongc.local/crmf/crmf-etp-witsml:1.0.0
           envFrom:
             - configMapRef:
                 name: crmf-etp-witsml-config
@@ -111,6 +108,11 @@ spec:
                 secretKeyRef:
                   name: crmf-secrets
                   key: PGPASSWORD
+            - name: JWT_SECRET       # verifies portal tokens of ETP/WITSML readers
+              valueFrom:
+                secretKeyRef:
+                  name: crmf-secrets
+                  key: JWT_SECRET
           ports:
             - name: http
               containerPort: 8080

@@ -20,7 +20,7 @@ Keycloak — owned by other agents) depend on.
 | `minio/`                          | S3-compatible object store (reports, backups, ML artifacts).               |
 | `vault/`                          | Vault + External Secrets — materialises `crmf-secrets`.                    |
 | `ml/`                             | MLflow tracking (Phase 1) + KServe serving note (Phase 2).                 |
-| `standards/`                      | In-house ETP 2.0 + WITSML 1.4.1 server (Energistics interop).              |
+| `standards/`                      | ETP v1.2 + WITSML 2.1 server (`central/etp-witsml`, Energistics interop).  |
 
 ## Operator install order
 
