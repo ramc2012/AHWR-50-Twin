@@ -9,6 +9,7 @@
 // MONITORING-ONLY: nothing here is ever written back to a rig or PLC. Run
 // tracking is a passive side-effect of receiving ingest that carried a job.
 // =====================================================================
+const ids = require('./ids');
 const { query, pool } = require('./db');
 
 // Lifecycle enums (mirror db/init.sql column comments).
@@ -236,7 +237,16 @@ async function deleteWell(id, actor) {
 // and maintains the open well_run so PAST runs accrue for offline EDR replay.
 // Idempotent + NON-THROWING: failures here must never break ingest.
 // ---------------------------------------------------------------------
-async function trackRun(rigId, job, nowMs) {
+// startedAt: the edge's well start (ISO) when the sync batch carries it; the run
+// then starts there and gets the shared WITSML RigUtilization uuid (lib/ids.js).
+// WITSML 2.1 identity of a well: its uuid and its (single) wellbore.
+async function ensureIdentity(client, wellId) {
+    await client.query('UPDATE wells SET uuid = $2 WHERE well_id = $1 AND uuid IS NULL', [wellId, ids.well(wellId)]);
+    await client.query(`INSERT INTO wellbores (uuid, well_id, name, number) VALUES ($1, $2, $2, '1') ON CONFLICT (uuid) DO NOTHING`,
+        [ids.wellbore(wellId), wellId]);
+}
+
+async function trackRun(rigId, job, nowMs, { startedAt = null } = {}) {
     if (!rigId || !job) return;
     const jobName = String(job).trim();
     if (!jobName) return;
@@ -269,7 +279,12 @@ async function trackRun(rigId, job, nowMs) {
             [rigId])).rows[0];
 
         if (open && open.well_id === wellId && open.job_no === jobName) {
-            // Already tracking this well/job for this rig — nothing to do.
+            // Already tracking this well/job for this rig; adopt the edge's start and uuid.
+            if (startedAt) {
+                await client.query('UPDATE well_runs SET started_at = $2, uuid = $3 WHERE id = $1 AND uuid IS DISTINCT FROM $3',
+                    [open.id, startedAt, ids.rigUtilization(rigId, wellId, startedAt)]);
+            }
+            await ensureIdentity(client, wellId);
             await client.query('COMMIT');
             return;
         }
@@ -286,9 +301,11 @@ async function trackRun(rigId, job, nowMs) {
         }
 
         // Open a fresh run for the new well/job.
+        const start = startedAt || new Date(nowMs || Date.now()).toISOString();
         await client.query(
-            'INSERT INTO well_runs (well_id, rig_id, job_no, started_at) VALUES ($1,$2,$3,now())',
-            [wellId, rigId, jobName]);
+            'INSERT INTO well_runs (well_id, rig_id, job_no, started_at, uuid) VALUES ($1,$2,$3,$4,$5) ON CONFLICT (uuid) DO NOTHING',
+            [wellId, rigId, jobName, start, ids.rigUtilization(rigId, wellId, start)]);
+        await ensureIdentity(client, wellId);
         // Point the well at this rig.
         await client.query(
             'UPDATE wells SET current_rig_id = $2, updated_at = now() WHERE well_id = $1',

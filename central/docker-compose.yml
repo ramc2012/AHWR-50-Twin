@@ -45,6 +45,24 @@ services:
     # ports:
     #   - "127.0.0.1:5432:5432"
 
+  # Schema upgrades for existing databases: applies db/migrations/*.sql (each
+  # idempotent) as the schema owner on every start, after init.sql.
+  crmf-db-migrate:
+    image: ${TIMESCALE_IMAGE:-timescale/timescaledb:latest-pg15}
+    container_name: crmf_db_migrate
+    command: ["sh", "/db/migrate.sh"]
+    environment:
+      - PGHOST=timescaledb
+      - PGUSER=${PGUSER:-crmf}
+      - PGPASSWORD=${PGPASSWORD:?set PGPASSWORD in .env}
+      - PGDATABASE=${PGDATABASE:-crmf}
+    volumes:
+      - ./db:/db:ro
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+    restart: "no"
+
   # Ingestion + fleet portal API + live updates.
   crmf-backend:
     build:
@@ -128,6 +146,8 @@ services:
     depends_on:
       timescaledb:
         condition: service_healthy
+      crmf-db-migrate:
+        condition: service_completed_successfully
       # Demo: wait for the bundled test directory so the first AD/LDAP login succeeds.
       # Resolves to a no-op outside the demo profile (openldap then isn't created).
       openldap:

@@ -10,6 +10,7 @@
 // tables, refreshes the last-value cache, and recomputes the per-rig
 // data-quality health score. MONITORING-ONLY: nothing is ever sent back to a rig.
 const crypto = require('crypto');
+const ids = require('./ids');
 const { pool, query } = require('./db');
 const { EXPECTED_METRICS } = require('./tags');
 const { computeHealth } = require('./fleet');
@@ -169,6 +170,65 @@ async function insertTelemetry(client, rigId, channels) {
     return ts.length;
 }
 
+// ---- Energistics channel dictionary (WITSML 2.1 / ETP v1.2) -----------------
+// Edges send their channel dictionary (AHWR-150-EDGE lib/channels.js) in sync
+// batches. Identifiers are recomputed here (lib/ids.js), never taken from the
+// batch, so a rig can only describe its own channels.
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const str = (v, max) => (typeof v === 'string' && v.length <= max ? v : null);
+async function upsertDictionary(client, rigId, entries, loggingCompany) {
+    const rows = [];
+    for (const e of entries.slice(0, 5000)) {
+        const metric = str(e && e.metric, 200);
+        const mnemonic = str(e && e.mnemonic, 64);
+        const uom = str(e && e.uom, 64);
+        const pk = e && e.propertyKind;
+        if (!metric || !mnemonic || !uom || !pk || !UUID_RE.test(String(pk.uuid)) || !str(pk.title, 256)) continue;
+        const factor = Number(e.factor);
+        rows.push([metric, ids.channel(rigId, metric), mnemonic, str(e.label, 256), str(e.group, 128), str(e.storedUnit, 64), uom,
+            Number.isFinite(factor) && factor > 0 ? factor : 1, str(e.dataKind, 32) || 'double', pk.uuid, pk.title, str(e.unitSource, 32)]);
+    }
+    if (!rows.length) return 0;
+    const col = (i) => rows.map((r) => r[i]);
+    await client.query(
+        `INSERT INTO channels (rig_id, metric, uuid, mnemonic, label, group_name, stored_unit, uom, factor, data_kind,
+                               property_kind_uuid, property_kind, unit_source, logging_company)
+         SELECT $1, u.*, $14 FROM unnest($2::text[], $3::uuid[], $4::text[], $5::text[], $6::text[], $7::text[], $8::text[],
+                                         $9::float8[], $10::text[], $11::uuid[], $12::text[], $13::text[])
+           AS u(metric, uuid, mnemonic, label, group_name, stored_unit, uom, factor, data_kind, property_kind_uuid, property_kind, unit_source)
+         ON CONFLICT (rig_id, metric) DO UPDATE SET
+           uuid = EXCLUDED.uuid, mnemonic = EXCLUDED.mnemonic, label = EXCLUDED.label, group_name = EXCLUDED.group_name,
+           stored_unit = EXCLUDED.stored_unit, uom = EXCLUDED.uom, factor = EXCLUDED.factor, data_kind = EXCLUDED.data_kind,
+           property_kind_uuid = EXCLUDED.property_kind_uuid, property_kind = EXCLUDED.property_kind,
+           unit_source = EXCLUDED.unit_source, logging_company = EXCLUDED.logging_company, updated_at = now()`,
+        [rigId, ...[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].map(col), str(loggingCompany, 256) || rigId]);
+    return rows.length;
+}
+
+// first_ts / last_ts of each channel in this batch (WITSML 2.1 Channel intervals).
+async function updateChannelExtents(client, rigId, channels) {
+    const ext = new Map();
+    for (const snap of channels) {
+        if (!snap || !snap.values) continue;
+        const t = coerceTsIso(snap.ts);
+        if (!t) continue;
+        for (const [m, v] of Object.entries(snap.values)) {
+            if (!Number.isFinite(Number(v))) continue;
+            const e = ext.get(m) || { min: t, max: t };
+            if (t < e.min) e.min = t;
+            if (t > e.max) e.max = t;
+            ext.set(m, e);
+        }
+    }
+    if (!ext.size) return;
+    const ms = [...ext.keys()];
+    await client.query(
+        `UPDATE channels c SET first_ts = LEAST(COALESCE(c.first_ts, u.min), u.min), last_ts = GREATEST(COALESCE(c.last_ts, u.max), u.max)
+           FROM unnest($2::text[], $3::timestamptz[], $4::timestamptz[]) AS u(metric, min, max)
+          WHERE c.rig_id = $1 AND c.metric = u.metric`,
+        [rigId, ms, ms.map((m) => ext.get(m).min), ms.map((m) => ext.get(m).max)]);
+}
+
 // Latest snapshot wins; merge over the existing cache so a partial batch never
 // wipes previously-seen tags. Compares ts NUMERICALLY (audit #32).
 function latestSnapshot(channels) {
@@ -242,6 +302,7 @@ async function ingestBatch({ rigId, token, schemaVersion }, batch) {
     let registered = false;
     let alarmTransition = null;   // rising-edge info for the notification dispatcher
     let activeJob = null;         // job/well this batch is working (for well-run tracking)
+    let activeWell = null;        // the edge's active well { name, startedAt } when it sends it
     try {
         await client.query('BEGIN');
 
@@ -274,8 +335,16 @@ async function ingestBatch({ rigId, token, schemaVersion }, batch) {
         }
 
         points = await insertTelemetry(client, rigId, channels);
+        if (Array.isArray(batch.dictionary)) await upsertDictionary(client, rigId, batch.dictionary, batch.loggingCompany);
+        await updateChannelExtents(client, rigId, channels);
+        await client.query('UPDATE rigs SET uuid = $2 WHERE rig_id = $1 AND uuid IS NULL', [rigId, ids.rig(rigId)]);
 
         const snap = latestSnapshot(channels);
+        // The edge's active well (name and start) identifies the well run exactly.
+        const w = snap && snap.values && snap.values.well;
+        if (w && typeof w === 'object' && typeof (w.name || w.wellName) === 'string') {
+            activeWell = { name: String(w.name || w.wellName).slice(0, 200), startedAt: coerceTsIso(w.startedAt) };
+        }
         if (snap) {
             // Per-tag last-seen map (audit #22): stamp each metric with this
             // snapshot's ts under the reserved __ts key, merged into the cache.
@@ -350,6 +419,7 @@ async function ingestBatch({ rigId, token, schemaVersion }, batch) {
         }
         // Resolve the job for well-run tracking: the activity payload's job wins;
         // otherwise fall back to whatever active_job the rig already has on record.
+        if (activeWell) activeJob = activeWell.name;
         if (!activeJob) {
             activeJob = (rig && rig.active_job) ? String(rig.active_job) : null;
         }
@@ -367,7 +437,7 @@ async function ingestBatch({ rigId, token, schemaVersion }, batch) {
         client.release();
     }
 
-    return { ok: true, rigId, points, events: events.length, seq, alarmTransition, activeJob };
+    return { ok: true, rigId, points, events: events.length, seq, alarmTransition, activeJob, activeWell };
 }
 
 module.exports = { ingestBatch, preAuthorize, invalidateTokenCache, EXPECTED_METRICS };

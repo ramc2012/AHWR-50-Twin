@@ -196,7 +196,7 @@ app.post('/ingest', ingestLimiter, ingestPreAuth,
         // active_job. Non-blocking + swallow errors: well tracking must never affect
         // the ingest ack. MONITORING-ONLY: this only records which well a rig worked.
         if (result.activeJob) {
-            wells.trackRun(result.rigId, result.activeJob, Date.now()).catch(() => {});
+            wells.trackRun(result.rigId, result.activeJob, Date.now(), { startedAt: result.activeWell && result.activeWell.startedAt }).catch(() => {});
         }
 
         // Fan out to Kafka (no-op unless KAFKA_ENABLED; never throws into this path).
